@@ -1,0 +1,23 @@
+{
+  "name": "apia",
+  "version": "1.0.0",
+  "description": "Apia - Desktop AI Assistant",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron . --dev\"",
+    "build": "vite build",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.5.1",
+    "adm-zip": "^0.5.17",
+    "axios": "^1.13.6",
+    "three": "^0.164.1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^28.3.3",
+    "vite": "^5.4.21",
+    "wait-on": "^7.2.0"
+  }
+}

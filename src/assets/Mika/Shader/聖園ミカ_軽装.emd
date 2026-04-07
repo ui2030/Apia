@@ -1,0 +1,27 @@
+[Info]
+Version = 3
+
+[Effect]
+Obj = none
+Obj[3] = Face.fx
+Obj[4] = Face.fx
+Obj[5] = Face.fx
+Obj[6] = Face.fx
+Obj[7] = Hair.fx
+Obj[8] = Fuku+.fx
+Obj[9] = Fuku.fx
+Obj[10] = Fuku.fx
+Obj[10].show = false
+Obj[11] = Fuku.fx
+Obj[11].show = false
+Obj[12] = Fuku.fx
+Obj[12].show = false
+Obj[13] = Fuku.fx
+Obj[14] = Acc.fx
+Obj[15] = Acc.fx
+Obj[16] = Acc.fx
+Obj[17] = Skin.fx
+Obj[18] = Skin.fx
+Obj[19] = Skin.fx
+Obj[20] = Skin.fx
+

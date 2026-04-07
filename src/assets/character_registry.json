@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "activeCharacterId": "mari_idol_1_0",
+  "characters": [
+    {
+      "id": "mari_idol_1_0",
+      "displayName": "마리",
+      "customName": "우리집 마리",
+      "modelType": "pmx",
+      "importSource": "zip",
+      "basePath": "/assets/characters/mari_idol_1_0",
+      "modelManifestPath": "/assets/characters/mari_idol_1_0/model/model_manifest.json",
+      "profileGeneratedPath": "/assets/characters/mari_idol_1_0/profile.generated.json",
+      "profileUserPath": "/assets/characters/mari_idol_1_0/profile.user.json",
+      "interpretationsPath": "/assets/characters/mari_idol_1_0/interpretation_presets.json",
+      "documents": [
+        {
+          "name": "character_info.pdf",
+          "path": "/assets/characters/mari_idol_1_0/docs/character_info.pdf",
+          "type": "pdf"
+        }
+      ],
+      "summary": "차분하지만 다정한 아이돌풍 캐릭터",
+      "originalDescription": "원본 모델 설명 또는 사용자 입력 기반 설명",
+      "thumbnail": "/assets/characters/mari_idol_1_0/thumbnail.png",
+      "status": "ready",
+      "analysis": {
+        "modelFound": true,
+        "texturesResolved": true,
+        "missingTextures": [],
+        "hasSupportDocs": true
+      },
+      "createdAt": "2026-04-01T21:00:00+09:00",
+      "updatedAt": "2026-04-01T21:00:00+09:00"
+    }
+  ]
+}

@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Apia 설정</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family:'Pretendard','Noto Sans KR',sans-serif; background:#0f0c1e; color:rgba(255,255,255,0.88); user-select:none; }
+    .titlebar { -webkit-app-region:drag; height:36px; background:rgba(124,58,237,0.15); border-bottom:1px solid rgba(124,58,237,0.2); display:flex; align-items:center; padding:0 16px; justify-content:space-between; }
+    .titlebar-title { font-size:13px; font-weight:600; color:#a78bfa; }
+    .close-btn { -webkit-app-region:no-drag; width:24px; height:24px; border-radius:50%; background:rgba(239,68,68,0.3); border:none; cursor:pointer; color:rgba(255,255,255,0.7); font-size:14px; display:flex; align-items:center; justify-content:center; }
+    .close-btn:hover { background:rgba(239,68,68,0.6); }
+
+    .content {
+      padding:16px;
+      overflow-y:auto;
+      height:calc(100vh - 36px - 54px);
+    }
+
+    .section { margin-bottom:20px; }
+    .section-title { font-size:10px; font-weight:600; color:#a78bfa; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid rgba(124,58,237,0.2); }
+    .row { display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid rgba(255,255,255,0.05); gap:10px; }
+    .row-label { font-size:12px; color:rgba(255,255,255,0.75); }
+    .row-sub { font-size:10px; color:rgba(255,255,255,0.35); margin-top:1px; }
+
+    .btn { padding:5px 11px; border-radius:7px; font-size:11px; cursor:pointer; border:none; font-family:inherit; transition:all 0.15s; }
+    .btn:active { transform:scale(0.97); }
+    .btn-ghost { background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.12); color:rgba(255,255,255,0.7); }
+    .btn-ghost:hover { background:rgba(255,255,255,0.12); }
+    .btn-purple { background:rgba(124,58,237,0.5); border:1px solid rgba(124,58,237,0.6); color:white; }
+    .btn-purple:hover { background:rgba(124,58,237,0.7); }
+    .btn-red { background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.3); color:#fca5a5; padding:4px 8px; }
+    .btn-red:hover { background:rgba(239,68,68,0.35); }
+
+    .model-card {
+      background:rgba(124,58,237,0.1);
+      border:1px solid rgba(124,58,237,0.2);
+      border-radius:9px;
+      padding:10px 12px;
+      margin-bottom:8px;
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+
+    .model-card.active {
+      border-color:rgba(124,58,237,0.55);
+      background:rgba(124,58,237,0.18);
+    }
+
+    .model-icon {
+      width:32px;
+      height:32px;
+      border-radius:7px;
+      background:rgba(124,58,237,0.3);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size:16px;
+      flex-shrink:0;
+    }
+
+    .model-info { flex:1; min-width:0; }
+    .model-name { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .model-type { font-size:10px; color:rgba(255,255,255,0.4); margin-top:1px; }
+    .badge { font-size:9px; padding:2px 6px; border-radius:8px; background:rgba(124,58,237,0.4); color:#c4b5fd; flex-shrink:0; }
+
+    .dropzone {
+      border:1.5px dashed rgba(124,58,237,0.3);
+      border-radius:9px;
+      padding:16px;
+      text-align:center;
+      cursor:pointer;
+      transition:all 0.2s;
+      margin-top:6px;
+    }
+
+    .dropzone:hover, .dropzone.over {
+      border-color:rgba(124,58,237,0.65);
+      background:rgba(124,58,237,0.08);
+    }
+
+    .dropzone-text {
+      font-size:11px;
+      color:rgba(255,255,255,0.4);
+      line-height:1.7;
+      display:inline-block;
+      text-align:center;
+    }
+
+    .dropzone-text span { color:#a78bfa; }
+
+    .import-form {
+      margin-top:10px;
+      display:grid;
+      gap:8px;
+    }
+
+    .input,
+    .textarea,
+    select {
+      width:100%;
+      background:rgba(255,255,255,0.07);
+      border:1px solid rgba(255,255,255,0.12);
+      border-radius:7px;
+      color:rgba(255,255,255,0.85);
+      padding:8px 10px;
+      font-size:11px;
+      font-family:inherit;
+      outline:none;
+    }
+
+    .textarea {
+      resize:vertical;
+      min-height:64px;
+    }
+
+    .helper-text {
+      font-size:10px;
+      color:rgba(255,255,255,0.35);
+      line-height:1.5;
+      margin-top:2px;
+    }
+
+    .toggle { position:relative; width:34px; height:19px; flex-shrink:0; }
+    .toggle input { opacity:0; width:0; height:0; }
+    .t-track { position:absolute; inset:0; background:rgba(255,255,255,0.15); border-radius:10px; cursor:pointer; transition:background 0.2s; }
+    .toggle input:checked + .t-track { background:#7c3aed; }
+    .t-thumb { position:absolute; top:2px; left:2px; width:15px; height:15px; background:white; border-radius:50%; transition:transform 0.2s; pointer-events:none; }
+    .toggle input:checked ~ .t-thumb { transform:translateX(15px); }
+
+    input[type="range"] { accent-color:#7c3aed; width:90px; }
+    .range-val { font-size:11px; color:#a78bfa; min-width:30px; text-align:right; }
+
+    .footer {
+      position:sticky;
+      bottom:0;
+      background:#0f0c1e;
+      border-top:1px solid rgba(255,255,255,0.07);
+      padding:12px 16px;
+      display:flex;
+      gap:8px;
+      justify-content:flex-end;
+    }
+
+    .loading-overlay {
+      position:fixed;
+      inset:0;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      background:rgba(5, 4, 10, 0.55);
+      z-index:9999;
+    }
+
+    .loading-box {
+      min-width:220px;
+      border:1px solid rgba(124,58,237,0.35);
+      background:#151126;
+      border-radius:12px;
+      padding:18px 20px;
+      text-align:center;
+      box-shadow:0 12px 36px rgba(0,0,0,0.35);
+    }
+
+    .loading-title {
+      font-size:12px;
+      font-weight:600;
+      color:#ddd6fe;
+      margin-bottom:6px;
+    }
+
+    .loading-text {
+      font-size:11px;
+      color:rgba(255,255,255,0.58);
+      line-height:1.6;
+    }
+  </style>
+</head>
+<body>
+<div class="titlebar">
+  <div class="titlebar-title">⚙ Apia 설정</div>
+  <button class="close-btn" onclick="window.close()">✕</button>
+</div>
+
+<div class="content">
+  <div class="section">
+    <div class="section-title">캐릭터 모델</div>
+
+    <div id="model-list"></div>
+
+    <div class="dropzone" id="dropzone">
+      <div class="dropzone-text">
+        캐릭터 파일을 넣어주세요<br>
+        <span>VRM</span>, <span>PMX ZIP</span>, <span>모델 폴더</span>를 지원합니다<br>
+        이름과 설명은 아래에 적고, 클릭하거나 드래그해서 추가하세요
+      </div>
+    </div>
+
+    <input type="file" id="file-input" accept=".zip,.vrm,.pmx" style="display:none">
+
+    <div class="import-form">
+      <input class="input" id="import-display-name" type="text" placeholder="표시 이름 (예: 마리, 히나, 아루)">
+      <input class="input" id="import-custom-name" type="text" placeholder="내가 부를 이름 (선택)">
+      <input class="input" id="import-summary" type="text" placeholder="한 줄 설명 (선택)">
+      <textarea class="textarea" id="import-description" placeholder="원본 캐릭터 설명, 성격 설명, 참고 메모 등을 적어둘 수 있어요 (선택)"></textarea>
+      <div class="helper-text">
+        PMX는 ZIP 또는 폴더 형태가 가장 안정적입니다. 가능하면 텍스처가 함께 들어있는 패키지를 넣어주세요.
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">표시 설정</div>
+    <div class="row">
+      <div>
+        <div class="row-label">항상 위에 표시</div>
+        <div class="row-sub">다른 창 위에 항상 표시</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="always-on-top" checked>
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+
+    <div class="row">
+      <div class="row-label">캐릭터 크기</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="range" id="char-scale" min="50" max="200" value="100">
+        <span class="range-val" id="scale-val">100%</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">자율 행동</div>
+        <div class="row-sub">캐릭터가 스스로 움직임</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="auto-behavior" checked>
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">AI 설정</div>
+    <div class="row">
+      <div class="row-label">AI 모드</div>
+      <select id="ai-mode">
+        <option value="local">로컬 (Qwen2.5)</option>
+        <option value="groq">Groq API</option>
+        <option value="claude">Claude API</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">대화 기억</div>
+        <div class="row-sub">최근 몇 턴 기억</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="range" id="memory-turns" min="2" max="20" value="10">
+        <span class="range-val" id="memory-val">10턴</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">음성 설정</div>
+    <div class="row">
+      <div class="row-label">TTS 활성화</div>
+      <label class="toggle">
+        <input type="checkbox" id="tts-enabled" checked>
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+
+    <div class="row">
+      <div class="row-label">현재 목소리</div>
+      <select id="voice-select">
+        <option value="">기본 목소리</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <button class="btn btn-ghost" onclick="window.close()">취소</button>
+  <button class="btn btn-purple" onclick="save()">저장 및 적용</button>
+</div>
+
+<div class="loading-overlay" id="loading-overlay">
+  <div class="loading-box">
+    <div class="loading-title">캐릭터 가져오는 중</div>
+    <div class="loading-text" id="loading-text">파일을 분석하고 있습니다...</div>
+  </div>
+</div>
+
+<script>
+let settings = {}
+let models = []
+let importedCharacters = []
+
+async function init() {
+  if (!window.api) {
+    console.error('[Settings] window.api가 없습니다. preload.js를 확인하세요.')
+    return
+  }
+
+  settings = await window.api.getSettings()
+  models = settings.models || []
+
+  await loadCharacterRegistryIfAvailable()
+  renderModels()
+  applyToUI()
+  loadVoices()
+  bindImportEvents()
+}
+
+async function loadCharacterRegistryIfAvailable() {
+  if (typeof window.api.listCharacters !== 'function') {
+    importedCharacters = []
+    return
+  }
+
+  try {
+    const result = await window.api.listCharacters()
+    if (Array.isArray(result?.characters)) {
+      importedCharacters = result.characters
+    } else if (Array.isArray(result)) {
+      importedCharacters = result
+    } else {
+      importedCharacters = []
+    }
+  } catch (err) {
+    console.warn('[Settings] listCharacters 실패:', err)
+    importedCharacters = []
+  }
+}
+
+function renderModels() {
+  const list = document.getElementById('model-list')
+  list.innerHTML = ''
+
+  const activeId = getActiveModelId()
+
+  // 기본 캐릭터
+  list.appendChild(makeBuiltinCard(activeId === 'dummy'))
+
+  // 새 registry 기반 캐릭터
+  if (importedCharacters.length > 0) {
+    importedCharacters.forEach(character => {
+      list.appendChild(makeImportedCharacterCard(character, activeId === character.id))
+    })
+    return
+  }
+
+  // 구버전 settings.models fallback
+  models.forEach(m => list.appendChild(makeLegacyCard(m, activeId === m.id)))
+}
+
+function getActiveModelId() {
+  return settings.activeCharacter || settings.activeModel || 'dummy'
+}
+
+function makeBuiltinCard(active) {
+  const d = document.createElement('div')
+  d.className = 'model-card' + (active ? ' active' : '')
+  d.innerHTML = `
+    <div class="model-icon">🤖</div>
+    <div class="model-info">
+      <div class="model-name">기본 캐릭터</div>
+      <div class="model-type">BUILT-IN</div>
+    </div>
+    ${active
+      ? '<span class="badge">적용 중</span>'
+      : '<button class="btn btn-ghost" data-action="select-builtin">선택</button>'}
+  `
+
+  const btn = d.querySelector('[data-action="select-builtin"]')
+  if (btn) {
+    btn.addEventListener('click', () => selectBuiltin())
+  }
+
+  return d
+}
+
+function makeImportedCharacterCard(character, active) {
+  const d = document.createElement('div')
+  d.className = 'model-card' + (active ? ' active' : '')
+
+  const displayName = escapeHtml(character.customName || character.displayName || character.id || '이름 없음')
+  const modelType = escapeHtml((character.modelType || character.type || 'character').toUpperCase())
+
+  d.innerHTML = `
+    <div class="model-icon">${getModelIcon(character.modelType || character.type)}</div>
+    <div class="model-info">
+      <div class="model-name">${displayName}</div>
+      <div class="model-type">${modelType}</div>
+    </div>
+    ${active
+      ? '<span class="badge">적용 중</span>'
+      : '<button class="btn btn-ghost" data-action="select">선택</button>'}
+  `
+
+  const selectBtn = d.querySelector('[data-action="select"]')
+  if (selectBtn) {
+    selectBtn.addEventListener('click', async () => {
+      await selectImportedCharacter(character.id)
+    })
+  }
+
+  return d
+}
+
+function makeLegacyCard(m, active) {
+  const d = document.createElement('div')
+  d.className = 'model-card' + (active ? ' active' : '')
+  const icon = getModelIcon(m.type)
+
+  d.innerHTML = `
+    <div class="model-icon">${icon}</div>
+    <div class="model-info">
+      <div class="model-name">${escapeHtml(m.name || m.id || '이름 없음')}</div>
+      <div class="model-type">${escapeHtml((m.type || 'built-in').toUpperCase())}</div>
+    </div>
+    ${active
+      ? '<span class="badge">적용 중</span>'
+      : '<button class="btn btn-ghost" data-action="select-legacy">선택</button>'}
+    ${m.id !== 'dummy'
+      ? '<button class="btn btn-red" data-action="remove-legacy">✕</button>'
+      : ''}
+  `
+
+  const selectBtn = d.querySelector('[data-action="select-legacy"]')
+  if (selectBtn) {
+    selectBtn.addEventListener('click', () => {
+      settings.activeModel = m.id
+      settings.activeCharacter = null
+      renderModels()
+    })
+  }
+
+  const removeBtn = d.querySelector('[data-action="remove-legacy"]')
+  if (removeBtn) {
+    removeBtn.addEventListener('click', () => {
+      models = models.filter(model => model.id !== m.id)
+      if (settings.activeModel === m.id) settings.activeModel = 'dummy'
+      renderModels()
+    })
+  }
+
+  return d
+}
+
+function getModelIcon(type) {
+  if (type === 'vrm') return '👤'
+  if (type === 'pmx') return '🎭'
+  if (type === 'built-in') return '🤖'
+  return '🧩'
+}
+
+function selectBuiltin() {
+  settings.activeModel = 'dummy'
+  settings.activeCharacter = 'dummy'
+  renderModels()
+}
+
+async function selectImportedCharacter(characterId) {
+  settings.activeCharacter = characterId
+  settings.activeModel = characterId
+
+  if (typeof window.api.setActiveCharacter === 'function') {
+    try {
+      await window.api.setActiveCharacter(characterId)
+    } catch (err) {
+      console.warn('[Settings] setActiveCharacter 실패:', err)
+    }
+  }
+
+  renderModels()
+}
+
+function bindImportEvents() {
+  const dz = document.getElementById('dropzone')
+  const fi = document.getElementById('file-input')
+
+  dz.addEventListener('click', () => fi.click())
+  dz.addEventListener('dragover', e => {
+    e.preventDefault()
+    dz.classList.add('over')
+  })
+  dz.addEventListener('dragleave', () => dz.classList.remove('over'))
+  dz.addEventListener('drop', async e => {
+    e.preventDefault()
+    dz.classList.remove('over')
+    const file = e.dataTransfer.files?.[0]
+    if (file) await importFile(file)
+  })
+
+  fi.addEventListener('change', async e => {
+    const file = e.target.files?.[0]
+    if (file) await importFile(file)
+    fi.value = ''
+  })
+}
+
+async function importFile(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase()
+
+  if (!['zip', 'vrm', 'pmx'].includes(ext)) {
+    alert('지원하지 않는 파일 형식입니다.\nZIP / VRM / PMX만 가능합니다.')
+    return
+  }
+
+  if (typeof window.api.importCharacterZip !== 'function') {
+    alert('현재 앱에 캐릭터 import API가 연결되지 않았습니다.\npreload.js와 main.js의 IPC 연결을 먼저 추가해주세요.')
+    return
+  }
+
+  const displayNameInput = document.getElementById('import-display-name')
+  const customNameInput = document.getElementById('import-custom-name')
+  const summaryInput = document.getElementById('import-summary')
+  const descriptionInput = document.getElementById('import-description')
+
+  const baseName = file.name.replace(/\.[^/.]+$/, '')
+  const displayName = (displayNameInput.value || '').trim() || baseName
+  const customName = (customNameInput.value || '').trim()
+  const summary = (summaryInput.value || '').trim()
+  const description = (descriptionInput.value || '').trim()
+
+  setLoading(true, '파일 구조를 분석하고 캐릭터를 등록하고 있습니다...')
+
+  try {
+    const result = await window.api.importCharacterZip({
+      zipPath: file.path,
+      displayName,
+      customName,
+      summary,
+      description
+    })
+
+    if (!result) {
+      throw new Error('응답이 비어 있습니다.')
+    }
+
+    if (result.error) {
+      throw new Error(result.error)
+    }
+
+    await loadCharacterRegistryIfAvailable()
+
+    const importedId =
+      result.character?.id ||
+      result.id ||
+      result.characterId ||
+      null
+
+    if (importedId) {
+      settings.activeCharacter = importedId
+      settings.activeModel = importedId
+    }
+
+    renderModels()
+    clearImportInputs()
+
+    alert('캐릭터가 등록되었습니다.')
+  } catch (err) {
+    console.error('[Settings] import 실패:', err)
+    alert('캐릭터 등록 실패: ' + (err?.message || err))
+  } finally {
+    setLoading(false)
+  }
+}
+
+function clearImportInputs() {
+  document.getElementById('import-display-name').value = ''
+  document.getElementById('import-custom-name').value = ''
+  document.getElementById('import-summary').value = ''
+  document.getElementById('import-description').value = ''
+}
+
+function setLoading(on, text = '') {
+  const overlay = document.getElementById('loading-overlay')
+  const textEl = document.getElementById('loading-text')
+  if (text) textEl.textContent = text
+  overlay.style.display = on ? 'flex' : 'none'
+}
+
+function applyToUI() {
+  document.getElementById('always-on-top').checked = settings.alwaysOnTop !== false
+  document.getElementById('char-scale').value = settings.charScale || 100
+  document.getElementById('scale-val').textContent = (settings.charScale || 100) + '%'
+  document.getElementById('auto-behavior').checked = settings.autoBehavior !== false
+  document.getElementById('ai-mode').value = settings.aiMode || 'local'
+  document.getElementById('memory-turns').value = settings.memoryTurns || 10
+  document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '턴'
+  document.getElementById('tts-enabled').checked = settings.ttsEnabled !== false
+}
+
+document.getElementById('char-scale').addEventListener('input', e => {
+  document.getElementById('scale-val').textContent = e.target.value + '%'
+})
+
+document.getElementById('memory-turns').addEventListener('input', e => {
+  document.getElementById('memory-val').textContent = e.target.value + '턴'
+})
+
+async function loadVoices() {
+  try {
+    const d = await window.api.getVoices()
+    const sel = document.getElementById('voice-select')
+    d.voices?.forEach(v => {
+      const o = document.createElement('option')
+      o.value = v.id
+      o.textContent = v.name
+      if (settings.voiceId === v.id) o.selected = true
+      sel.appendChild(o)
+    })
+  } catch (e) {
+    console.warn('[Settings] loadVoices 실패:', e)
+  }
+}
+
+async function save() {
+  const saved = {
+    ...settings,
+    models,
+    alwaysOnTop: document.getElementById('always-on-top').checked,
+    charScale: parseInt(document.getElementById('char-scale').value, 10),
+    autoBehavior: document.getElementById('auto-behavior').checked,
+    aiMode: document.getElementById('ai-mode').value,
+    memoryTurns: parseInt(document.getElementById('memory-turns').value, 10),
+    ttsEnabled: document.getElementById('tts-enabled').checked,
+    voiceId: document.getElementById('voice-select').value,
+  }
+
+  await window.api.applySettings(saved)
+  window.close()
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+init()
+</script>
+</body>
+</html>

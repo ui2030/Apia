@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Apia</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body {
+      width:100vw; height:100vh;
+      background:transparent; overflow:hidden;
+      font-family:'Pretendard','Noto Sans KR',sans-serif;
+      user-select:none;
+    }
+    :root {
+      --purple:#7c3aed; --purple-light:#a78bfa;
+      --bg-panel:rgba(10,8,24,0.88);
+      --bg-border:rgba(124,58,237,0.35);
+      --text:rgba(255,255,255,0.92);
+      --text-dim:rgba(255,255,255,0.5);
+    }
+
+    #vrm-canvas {
+      position:fixed; right:20px; bottom:50px;
+      width:280px; height:420px; pointer-events:none;
+    }
+
+    #speech-bubble {
+      position:fixed; right:160px; bottom:340px;
+      max-width:230px; background:var(--bg-panel);
+      border:1px solid var(--bg-border);
+      border-radius:12px 12px 4px 12px;
+      padding:10px 14px; font-size:13px; color:var(--text);
+      line-height:1.5; pointer-events:none;
+      opacity:0; transform:translateY(6px);
+      transition:opacity 0.3s, transform 0.3s;
+    }
+    #speech-bubble.visible { opacity:1; transform:translateY(0); }
+
+    #world-layer { position:fixed; inset:0; pointer-events:none; }
+    .world-object {
+      position:absolute; pointer-events:auto; cursor:pointer;
+      transition:transform 0.2s;
+      filter:drop-shadow(0 2px 8px rgba(124,58,237,0.3));
+    }
+    .world-object:hover { transform:scale(1.08); }
+
+    #chat-toggle, #settings-btn {
+      position:fixed; bottom:14px;
+      width:36px; height:36px; border-radius:50%;
+      background:var(--bg-panel); border:1px solid var(--bg-border);
+      cursor:pointer; display:flex; align-items:center; justify-content:center;
+      pointer-events:auto; transition:background 0.2s;
+    }
+    #chat-toggle { left:20px; }
+    #settings-btn { left:62px; }
+    #chat-toggle:hover, #settings-btn:hover { background:rgba(124,58,237,0.3); }
+
+    /* ── 핵심 수정: 닫힌 상태에서 pointer-events:none ── */
+    #chat-panel {
+      position:fixed; left:20px; bottom:56px; width:300px;
+      background:var(--bg-panel); border:1px solid var(--bg-border);
+      border-radius:14px; overflow:hidden;
+      display:flex; flex-direction:column;
+      pointer-events:none; opacity:0; transform:translateY(12px);
+      transition:opacity 0.3s, transform 0.3s, pointer-events 0s 0.3s;
+    }
+    #chat-panel.visible {
+      opacity:1; transform:translateY(0);
+      pointer-events:auto; transition:opacity 0.3s, transform 0.3s, pointer-events 0s 0s;
+    }
+
+    .panel-header {
+      padding:10px 14px; border-bottom:1px solid rgba(255,255,255,0.07);
+      display:flex; align-items:center; justify-content:space-between;
+    }
+    .panel-title {
+      font-size:12px; font-weight:600; color:var(--purple-light);
+      display:flex; align-items:center; gap:6px;
+    }
+    .status-dot { width:6px; height:6px; border-radius:50%; background:#4ade80; animation:pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    #messages {
+      height:200px; overflow-y:auto; padding:10px;
+      display:flex; flex-direction:column; gap:8px;
+      scrollbar-width:thin; scrollbar-color:rgba(124,58,237,0.3) transparent;
+    }
+    .msg-row { display:flex; flex-direction:column; }
+    .msg-row.user { align-items:flex-end; }
+    .msg-label { font-size:9px; color:var(--text-dim); margin-bottom:2px; padding:0 4px; }
+    .msg-bubble { max-width:85%; padding:7px 11px; font-size:12px; line-height:1.5; border-radius:12px; }
+    .msg-row.ai .msg-bubble {
+      background:rgba(124,58,237,0.2); border:1px solid rgba(124,58,237,0.25);
+      color:var(--text); border-radius:4px 12px 12px 12px;
+    }
+    .msg-row.user .msg-bubble {
+      background:rgba(255,255,255,0.08); color:var(--text);
+      border-radius:12px 4px 12px 12px;
+    }
+
+    #input-area {
+      padding:8px 10px; border-top:1px solid rgba(255,255,255,0.07);
+      display:flex; gap:6px; align-items:center;
+    }
+    #chat-input {
+      flex:1; background:rgba(255,255,255,0.06);
+      border:1px solid rgba(255,255,255,0.1); border-radius:8px;
+      padding:7px 10px; font-size:12px; color:var(--text);
+      outline:none; font-family:inherit;
+    }
+    #chat-input:focus { border-color:rgba(124,58,237,0.5); }
+    #chat-input::placeholder { color:var(--text-dim); }
+
+    .icon-btn {
+      width:30px; height:30px; border-radius:50%; border:none;
+      cursor:pointer; display:flex; align-items:center; justify-content:center;
+      transition:transform 0.15s; flex-shrink:0;
+    }
+    .icon-btn:hover { transform:scale(1.1); }
+    .icon-btn:active { transform:scale(0.95); }
+    #mic-btn { background:rgba(124,58,237,0.35); border:1px solid rgba(124,58,237,0.45); }
+    #mic-btn.listening { background:rgba(239,68,68,0.45); animation:pulse 1s infinite; }
+    #send-btn { background:var(--purple); }
+
+    #backend-status {
+      position:fixed; top:14px; right:14px;
+      padding:4px 10px; border-radius:20px;
+      font-size:11px; font-weight:600; pointer-events:none; opacity:0.85;
+    }
+    #backend-status.online { background:rgba(16,185,129,0.2); border:1px solid rgba(16,185,129,0.4); color:#6ee7b7; }
+    #backend-status.offline { background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; }
+  </style>
+</head>
+<body>
+  <div id="backend-status" class="offline">백엔드 연결 중...</div>
+  <div id="world-layer"></div>
+  <canvas id="vrm-canvas"></canvas>
+  <div id="speech-bubble"></div>
+
+  <button id="chat-toggle" title="채팅">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v7a1 1 0 01-1 1H5l-3 3V3z" fill="rgba(167,139,250,0.9)"/>
+    </svg>
+  </button>
+  <button id="settings-btn" title="설정">
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+      <circle cx="7.5" cy="7.5" r="2" stroke="rgba(167,139,250,0.9)" stroke-width="1.3"/>
+      <path d="M7.5 1v1.5M7.5 12.5V14M1 7.5h1.5M12.5 7.5H14M3.2 3.2l1.1 1.1M10.7 10.7l1.1 1.1M3.2 11.8l1.1-1.1M10.7 4.3l1.1-1.1" stroke="rgba(167,139,250,0.9)" stroke-width="1.3" stroke-linecap="round"/>
+    </svg>
+  </button>
+
+  <div id="chat-panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <div class="status-dot"></div>
+        Apia
+      </div>
+      <div style="font-size:10px;color:var(--text-dim)" id="voice-label">기본 목소리</div>
+    </div>
+    <div id="messages">
+      <div class="msg-row ai">
+        <div class="msg-label">Apia</div>
+        <div class="msg-bubble">안녕하세요! 저는 Apia예요 👋 무엇이든 물어보세요.</div>
+      </div>
+    </div>
+    <div id="input-area">
+      <input id="chat-input" type="text" placeholder="메시지 입력... (Enter)">
+      <button class="icon-btn" id="mic-btn">
+        <svg width="13" height="15" viewBox="0 0 13 15" fill="none">
+          <rect x="4" y="0" width="5" height="9" rx="2.5" fill="rgba(255,255,255,0.8)"/>
+          <path d="M1 7C1 10.3 12 10.3 12 7" stroke="rgba(255,255,255,0.8)" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+          <line x1="6.5" y1="10" x2="6.5" y2="13.5" stroke="rgba(255,255,255,0.8)" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button class="icon-btn" id="send-btn">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+          <path d="M1 6.5L12 6.5M8 2.5L12 6.5L8 10.5" stroke="white" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

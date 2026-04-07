@@ -1,0 +1,25 @@
+# ── 핵심 서버 ──
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.9
+
+# ── EXAONE 로컬 실행 ──
+transformers>=4.40.0
+accelerate>=0.27.0
+sentencepiece
+protobuf
+
+# ── PyTorch CUDA (RTX 3060 - CUDA 12.1) ──
+# 아래 명령어로 별도 설치:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# ── TTS ──
+pyttsx3==2.90
+soundfile==0.12.1
+numpy==1.26.0
+
+# ── 기타 API (선택) ──
+httpx>=0.27.0
+huggingface_hub>=0.21.0
+anthropic>=0.18.0
+groq>=0.4.0
