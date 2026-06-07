@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('api', {
   sendMessage: (msg, hist) => ipcRenderer.invoke('send-message', { message: msg, history: hist }),
   tts: (text, voice_id) => ipcRenderer.invoke('tts', { text, voice_id }),
   getVoices: () => ipcRenderer.invoke('get-voices'),
+  warmup: () => ipcRenderer.invoke('warmup'),
+  getWarmupStatus: () => ipcRenderer.invoke('warmup:status'),
   loadWorld: () => ipcRenderer.invoke('load-world'),
   saveWorld: (d) => ipcRenderer.invoke('save-world', d),
   getSettings: () => ipcRenderer.invoke('get-settings'),
@@ -14,6 +16,9 @@ contextBridge.exposeInMainWorld('api', {
   openSettings: () => ipcRenderer.invoke('open-settings'),
   applySettings: (d) => ipcRenderer.invoke('apply-settings', d),
   onSettingsApplied: (cb) => ipcRenderer.on('settings-applied', (e, s) => cb(s)),
+  openBackendDataDir: () => ipcRenderer.invoke('settings:openBackendDataDir'),
+  getBackendEnvKeys: () => ipcRenderer.invoke('settings:getBackendEnvKeys'),
+  saveBackendEnvKeys: (updates) => ipcRenderer.invoke('settings:saveBackendEnvKeys', updates),
 
   // 🔥 캐릭터 시스템
   listCharacters: () => ipcRenderer.invoke('characters:list'),
@@ -23,6 +28,12 @@ contextBridge.exposeInMainWorld('api', {
 
   importCharacterZip: (payload) =>
     ipcRenderer.invoke('characters:importZip', payload),
+
+  pickCharacterSource: () =>
+    ipcRenderer.invoke('characters:pickSource'),
+
+  deleteCharacter: (characterId) =>
+    ipcRenderer.invoke('characters:delete', { characterId }),
 
   // 이벤트
   onCharacterImported: (cb) =>

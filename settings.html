@@ -175,6 +175,104 @@
       color:rgba(255,255,255,0.58);
       line-height:1.6;
     }
+
+    /* ── 토스트 알림 ── */
+    .toast-container {
+      position:fixed; bottom:62px; left:50%; transform:translateX(-50%);
+      z-index:10000; display:flex; flex-direction:column; gap:6px; align-items:center;
+      pointer-events:none;
+    }
+    .toast {
+      padding:8px 16px; border-radius:8px; font-size:11px; font-weight:500;
+      line-height:1.5; max-width:360px; text-align:center;
+      pointer-events:auto; opacity:0; transform:translateY(8px);
+      animation:toastIn 0.25s ease forwards;
+    }
+    .toast.out { animation:toastOut 0.2s ease forwards; }
+    .toast-success { background:rgba(16,185,129,0.25); border:1px solid rgba(16,185,129,0.4); color:#6ee7b7; }
+    .toast-error { background:rgba(239,68,68,0.25); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; }
+    .toast-warn { background:rgba(234,179,8,0.2); border:1px solid rgba(234,179,8,0.35); color:#fde68a; }
+    .toast-info { background:rgba(124,58,237,0.2); border:1px solid rgba(124,58,237,0.35); color:#c4b5fd; }
+    @keyframes toastIn { to { opacity:1; transform:translateY(0); } }
+    @keyframes toastOut { to { opacity:0; transform:translateY(-6px); } }
+
+    /* ── 로딩 단계 표시 ── */
+    .loading-steps { margin-top:8px; text-align:left; }
+    .loading-step {
+      font-size:10px; color:rgba(255,255,255,0.35); line-height:1.8;
+      transition:color 0.2s;
+    }
+    .loading-step.active { color:#a78bfa; }
+    .loading-step.done { color:rgba(16,185,129,0.7); }
+    .loading-step.done::before { content:'✓ '; }
+    .loading-step.active::before { content:'◉ '; }
+
+    /* ── Provider status panel ── */
+    .provider-status {
+      margin-top:10px;
+      padding:10px 12px;
+      background:rgba(124,58,237,0.08);
+      border:1px solid rgba(124,58,237,0.2);
+      border-radius:8px;
+      font-size:11px;
+    }
+    .provider-status-head {
+      display:flex; align-items:center; justify-content:space-between;
+      margin-bottom:6px;
+    }
+    .provider-status-title {
+      font-size:10px; font-weight:600;
+      color:#a78bfa; text-transform:uppercase; letter-spacing:0.06em;
+    }
+    .provider-status-refresh {
+      padding:3px 8px; font-size:10px;
+    }
+    .provider-status-row {
+      display:flex; justify-content:space-between; gap:8px;
+      padding:3px 0; line-height:1.5;
+    }
+    .ps-key {
+      color:rgba(255,255,255,0.45);
+      min-width:64px;
+    }
+    .ps-val {
+      color:rgba(255,255,255,0.82);
+      text-align:right; word-break:break-word;
+      font-family:'JetBrains Mono','Consolas',monospace;
+      font-size:10px;
+    }
+    .ps-val.ps-state-ready { color:#6ee7b7; }
+    .ps-val.ps-state-warming { color:#fde68a; }
+    .ps-val.ps-state-fallback { color:#fca5a5; }
+    .ps-val.ps-state-unreachable { color:#fca5a5; }
+    .ps-error { color:#fca5a5; }
+    .provider-status-hint {
+      margin-top:6px; padding-top:6px;
+      border-top:1px solid rgba(124,58,237,0.18);
+      font-size:10px; color:rgba(255,255,255,0.55); line-height:1.55;
+    }
+
+    /* API key fields */
+    .api-keys { margin-top:8px; display:flex; flex-direction:column; gap:8px; }
+    .api-key-row {
+      padding:8px 10px;
+      background:rgba(255,255,255,0.03);
+      border:1px solid rgba(255,255,255,0.07);
+      border-radius:8px;
+    }
+    .api-key-head {
+      display:flex; justify-content:space-between; align-items:center;
+      margin-bottom:6px;
+    }
+    .api-key-label { font-size:11px; color:rgba(255,255,255,0.78); font-weight:500; }
+    .api-key-status {
+      font-size:10px; color:rgba(255,255,255,0.4);
+    }
+    .api-key-status.present {
+      color:#6ee7b7;
+    }
+    .api-key-controls { display:flex; gap:6px; align-items:center; }
+    .api-key-input { flex:1; }
   </style>
 </head>
 <body>
@@ -197,7 +295,7 @@
       </div>
     </div>
 
-    <input type="file" id="file-input" accept=".zip,.vrm,.pmx" style="display:none">
+    <input type="file" id="file-input" accept=".zip,.vrm,.pmx,.pmd" style="display:none">
 
     <div class="import-form">
       <input class="input" id="import-display-name" type="text" placeholder="표시 이름 (예: 마리, 히나, 아루)">
@@ -250,10 +348,79 @@
     <div class="row">
       <div class="row-label">AI 모드</div>
       <select id="ai-mode">
+        <option value="auto">Auto (Recommended)</option>
         <option value="local">로컬 (Qwen2.5)</option>
         <option value="groq">Groq API</option>
+        <option value="hf_api">HuggingFace API</option>
         <option value="claude">Claude API</option>
       </select>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">backend.env 폴더 열기</div>
+        <div class="row-sub">키와 모델 ID를 직접 편집할 수 있어요</div>
+      </div>
+      <button type="button" class="btn btn-ghost" id="open-backend-env">폴더 열기</button>
+    </div>
+
+    <div class="api-keys">
+      <div class="api-key-row" data-key="APIA_GROQ_KEY">
+        <div class="api-key-head">
+          <span class="api-key-label">Groq API 키</span>
+          <span class="api-key-status" data-status>저장된 키 없음</span>
+        </div>
+        <div class="api-key-controls">
+          <input class="input api-key-input" type="password"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="gsk_..." data-input>
+          <button type="button" class="btn btn-red api-key-clear" data-clear hidden>삭제</button>
+        </div>
+      </div>
+
+      <div class="api-key-row" data-key="APIA_ANTHROPIC_KEY">
+        <div class="api-key-head">
+          <span class="api-key-label">Claude API 키</span>
+          <span class="api-key-status" data-status>저장된 키 없음</span>
+        </div>
+        <div class="api-key-controls">
+          <input class="input api-key-input" type="password"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="sk-ant-..." data-input>
+          <button type="button" class="btn btn-red api-key-clear" data-clear hidden>삭제</button>
+        </div>
+      </div>
+
+      <div class="api-key-row" data-key="APIA_HF_TOKEN">
+        <div class="api-key-head">
+          <span class="api-key-label">HuggingFace 토큰</span>
+          <span class="api-key-status" data-status>저장된 키 없음</span>
+        </div>
+        <div class="api-key-controls">
+          <input class="input api-key-input" type="password"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="hf_..." data-input>
+          <button type="button" class="btn btn-red api-key-clear" data-clear hidden>삭제</button>
+        </div>
+      </div>
+
+      <div class="helper-text">
+        키를 비워두면 변경되지 않습니다. 새 값을 입력하면 저장 시 backend.env에 반영되고,
+        삭제 버튼을 누르면 해당 키가 backend.env에서 제거됩니다.
+      </div>
+    </div>
+
+    <div id="provider-status" class="provider-status">
+      <div class="provider-status-head">
+        <span class="provider-status-title">Provider status</span>
+        <button type="button" id="provider-status-refresh" class="btn btn-ghost provider-status-refresh">Refresh</button>
+      </div>
+      <div class="provider-status-row"><span class="ps-key">Active</span><span class="ps-val" id="ps-active">--</span></div>
+      <div class="provider-status-row" id="ps-auto-row" hidden><span class="ps-key">Auto target</span><span class="ps-val" id="ps-auto-target">--</span></div>
+      <div class="provider-status-row"><span class="ps-key">Available</span><span class="ps-val" id="ps-available">--</span></div>
+      <div class="provider-status-row"><span class="ps-key">Status</span><span class="ps-val" id="ps-state">--</span></div>
+      <div class="provider-status-row" id="ps-error-row" hidden><span class="ps-key">Error</span><span class="ps-val ps-error" id="ps-error">--</span></div>
+      <div class="provider-status-hint" id="ps-hint" hidden></div>
     </div>
 
     <div class="row">
@@ -297,8 +464,11 @@
   <div class="loading-box">
     <div class="loading-title">캐릭터 가져오는 중</div>
     <div class="loading-text" id="loading-text">파일을 분석하고 있습니다...</div>
+    <div class="loading-steps" id="loading-steps"></div>
   </div>
 </div>
+
+<div class="toast-container" id="toast-container"></div>
 
 <script>
 let settings = {}
@@ -319,6 +489,10 @@ async function init() {
   applyToUI()
   loadVoices()
   bindImportEvents()
+  bindProviderStatus()
+  refreshProviderStatus()
+  bindBackendEnvControls()
+  refreshBackendEnvPresence()
 }
 
 async function loadCharacterRegistryIfAvailable() {
@@ -395,22 +569,54 @@ function makeImportedCharacterCard(character, active) {
 
   const displayName = escapeHtml(character.customName || character.displayName || character.id || '이름 없음')
   const modelType = escapeHtml((character.modelType || character.type || 'character').toUpperCase())
+  const summaryText = character.summary ? `<div class="model-type">${escapeHtml(character.summary)}</div>` : ''
 
   d.innerHTML = `
     <div class="model-icon">${getModelIcon(character.modelType || character.type)}</div>
     <div class="model-info">
       <div class="model-name">${displayName}</div>
       <div class="model-type">${modelType}</div>
+      ${summaryText}
     </div>
     ${active
       ? '<span class="badge">적용 중</span>'
       : '<button class="btn btn-ghost" data-action="select">선택</button>'}
+    <button class="btn btn-red" data-action="delete" title="삭제">✕</button>
   `
 
   const selectBtn = d.querySelector('[data-action="select"]')
   if (selectBtn) {
     selectBtn.addEventListener('click', async () => {
       await selectImportedCharacter(character.id)
+      showToast(`${character.displayName || character.id} 적용됨`, 'info', 2000)
+    })
+  }
+
+  const deleteBtn = d.querySelector('[data-action="delete"]')
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', async () => {
+      const name = character.customName || character.displayName || character.id
+      if (!confirm(`"${name}" 캐릭터를 삭제할까요?`)) return
+
+      try {
+        if (typeof window.api.deleteCharacter === 'function') {
+          await window.api.deleteCharacter(character.id)
+        } else {
+          // API가 아직 없으면 로컬 목록에서만 제거
+          importedCharacters = importedCharacters.filter(c => c.id !== character.id)
+        }
+
+        if (settings.activeCharacter === character.id) {
+          settings.activeCharacter = 'dummy'
+          settings.activeModel = 'dummy'
+        }
+
+        await loadCharacterRegistryIfAvailable()
+        renderModels()
+        showToast(`${name} 삭제됨`, 'warn', 2500)
+      } catch (err) {
+        showToast('삭제 실패: ' + (err?.message || err), 'error')
+      }
     })
   }
 
@@ -489,7 +695,21 @@ function bindImportEvents() {
   const dz = document.getElementById('dropzone')
   const fi = document.getElementById('file-input')
 
-  dz.addEventListener('click', () => fi.click())
+  dz.addEventListener('click', async () => {
+    if (typeof window.api.pickCharacterSource === 'function') {
+      const picked = await window.api.pickCharacterSource()
+      if (picked?.ok && picked.path) {
+        await importFile({
+          name: picked.name || 'character',
+          path: picked.path,
+          kind: picked.kind || 'file'
+        })
+      }
+      return
+    }
+
+    fi.click()
+  })
   dz.addEventListener('dragover', e => {
     e.preventDefault()
     dz.classList.add('over')
@@ -499,7 +719,14 @@ function bindImportEvents() {
     e.preventDefault()
     dz.classList.remove('over')
     const file = e.dataTransfer.files?.[0]
-    if (file) await importFile(file)
+    const entry = e.dataTransfer.items?.[0]?.webkitGetAsEntry?.()
+    if (file) {
+      await importFile({
+        name: file.name,
+        path: file.path,
+        kind: entry?.isDirectory ? 'directory' : 'file'
+      })
+    }
   })
 
   fi.addEventListener('change', async e => {
@@ -510,15 +737,19 @@ function bindImportEvents() {
 }
 
 async function importFile(file) {
-  const ext = (file.name.split('.').pop() || '').toLowerCase()
+  const fileName = file?.name || ''
+  const ext = (fileName.split('.').pop() || '').toLowerCase()
+  const isDirectoryCandidate =
+    file?.kind === 'directory' ||
+    (file?.path && !fileName.includes('.'))
 
-  if (!['zip', 'vrm', 'pmx'].includes(ext)) {
-    alert('지원하지 않는 파일 형식입니다.\nZIP / VRM / PMX만 가능합니다.')
+  if (!isDirectoryCandidate && !['zip', 'vrm', 'pmx', 'pmd'].includes(ext)) {
+    showToast('지원하지 않는 소스입니다. ZIP / VRM / PMX / PMD / 모델 폴더만 가능합니다.', 'error')
     return
   }
 
   if (typeof window.api.importCharacterZip !== 'function') {
-    alert('현재 앱에 캐릭터 import API가 연결되지 않았습니다.\npreload.js와 main.js의 IPC 연결을 먼저 추가해주세요.')
+    showToast('캐릭터 import API가 연결되지 않았습니다.', 'error')
     return
   }
 
@@ -527,15 +758,40 @@ async function importFile(file) {
   const summaryInput = document.getElementById('import-summary')
   const descriptionInput = document.getElementById('import-description')
 
-  const baseName = file.name.replace(/\.[^/.]+$/, '')
-  const displayName = (displayNameInput.value || '').trim() || baseName
+  const baseName = fileName.replace(/\.[^/.]+$/, '')
+  const displayName = (displayNameInput.value || '').trim() || baseName || 'character'
   const customName = (customNameInput.value || '').trim()
   const summary = (summaryInput.value || '').trim()
   const description = (descriptionInput.value || '').trim()
 
-  setLoading(true, '파일 구조를 분석하고 캐릭터를 등록하고 있습니다...')
+  // ── 중복 감지 ──
+  const dupByName = importedCharacters.find(c =>
+    (c.displayName || '').toLowerCase() === displayName.toLowerCase() ||
+    (c.customName || '').toLowerCase() === displayName.toLowerCase()
+  )
+  if (dupByName) {
+    const confirmed = confirm(
+      `"${dupByName.displayName || dupByName.customName}" 캐릭터가 이미 등록되어 있습니다.\n그래도 추가로 등록할까요?`
+    )
+    if (!confirmed) return
+  }
+
+  const STEPS = ['소스 분석', '모델 파일 탐색', '텍스처 매핑 생성', '프로필 생성', '레지스트리 등록']
+
+  setLoading(true, '캐릭터를 등록하고 있습니다...')
+  let stepTimer = null
+  setLoadingStep(STEPS, 0)
 
   try {
+    // 단계 시뮬레이션 (실제 백엔드는 한 번에 처리하므로 타이머로 UX 보강)
+    stepTimer = setInterval(() => {
+      const stepsEl = document.getElementById('loading-steps')
+      const doneCount = stepsEl.querySelectorAll('.done').length
+      if (doneCount < STEPS.length - 1) {
+        setLoadingStep(STEPS, doneCount + 1)
+      }
+    }, 600)
+
     const result = await window.api.importCharacterZip({
       zipPath: file.path,
       displayName,
@@ -544,21 +800,16 @@ async function importFile(file) {
       description
     })
 
-    if (!result) {
-      throw new Error('응답이 비어 있습니다.')
-    }
+    clearInterval(stepTimer)
+    setLoadingStep(STEPS, STEPS.length) // 전부 완료 표시
 
-    if (result.error) {
-      throw new Error(result.error)
+    if (!result || result.error) {
+      throw new Error(result?.error || '응답이 비어 있습니다.')
     }
 
     await loadCharacterRegistryIfAvailable()
 
-    const importedId =
-      result.character?.id ||
-      result.id ||
-      result.characterId ||
-      null
+    const importedId = result.character?.id || result.id || result.characterId || null
 
     if (importedId) {
       settings.activeCharacter = importedId
@@ -568,11 +819,16 @@ async function importFile(file) {
     renderModels()
     clearImportInputs()
 
-    alert('캐릭터가 등록되었습니다.')
+    // 등록 결과 토스트
+    const charName = result.character?.displayName || displayName
+    const texCount = result.manifest?.assets?.images?.length || 0
+    showToast(`${charName} 등록 완료! (텍스처 ${texCount}개)`, 'success', 4000)
+
   } catch (err) {
     console.error('[Settings] import 실패:', err)
-    alert('캐릭터 등록 실패: ' + (err?.message || err))
+    showToast('등록 실패: ' + (err?.message || err), 'error', 5000)
   } finally {
+    if (stepTimer) clearInterval(stepTimer)
     setLoading(false)
   }
 }
@@ -587,8 +843,30 @@ function clearImportInputs() {
 function setLoading(on, text = '') {
   const overlay = document.getElementById('loading-overlay')
   const textEl = document.getElementById('loading-text')
+  const stepsEl = document.getElementById('loading-steps')
   if (text) textEl.textContent = text
+  if (!on) stepsEl.innerHTML = ''
   overlay.style.display = on ? 'flex' : 'none'
+}
+
+function setLoadingStep(steps, activeIndex) {
+  const stepsEl = document.getElementById('loading-steps')
+  stepsEl.innerHTML = steps.map((label, i) => {
+    const cls = i < activeIndex ? 'done' : i === activeIndex ? 'active' : ''
+    return `<div class="loading-step ${cls}">${label}</div>`
+  }).join('')
+}
+
+function showToast(message, type = 'info', duration = 3000) {
+  const container = document.getElementById('toast-container')
+  const el = document.createElement('div')
+  el.className = `toast toast-${type}`
+  el.textContent = message
+  container.appendChild(el)
+  setTimeout(() => {
+    el.classList.add('out')
+    setTimeout(() => el.remove(), 200)
+  }, duration)
 }
 
 function applyToUI() {
@@ -596,7 +874,7 @@ function applyToUI() {
   document.getElementById('char-scale').value = settings.charScale || 100
   document.getElementById('scale-val').textContent = (settings.charScale || 100) + '%'
   document.getElementById('auto-behavior').checked = settings.autoBehavior !== false
-  document.getElementById('ai-mode').value = settings.aiMode || 'local'
+  document.getElementById('ai-mode').value = settings.aiMode || 'auto'
   document.getElementById('memory-turns').value = settings.memoryTurns || 10
   document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '턴'
   document.getElementById('tts-enabled').checked = settings.ttsEnabled !== false
@@ -610,10 +888,164 @@ document.getElementById('memory-turns').addEventListener('input', e => {
   document.getElementById('memory-val').textContent = e.target.value + '턴'
 })
 
+// ── Provider status ──
+// Polls GET /warmup via the warmup:status IPC channel. Renders four states:
+//   - unreachable  → backend not responding
+//   - warming      → background warmup task in flight
+//   - ready        → at least one provider initialized
+//   - fallback     → no provider available (no key + no local stack)
+// We deliberately do NOT auto-poll on a timer here: the settings window is
+// short-lived, the user explicitly visits it, and a manual Refresh button is
+// less noisy than a ticking interval that surprises them on every open.
+// One-shot timer for the post-warming auto-refresh. Tracked at module scope
+// so a manual refresh click can cancel a pending auto-refresh, and so a
+// subsequent "still warming" response doesn't stack multiple pending fires.
+let _providerStatusAutoRefreshTimer = null
+
+function clearProviderStatusAutoRefresh() {
+  if (_providerStatusAutoRefreshTimer !== null) {
+    clearTimeout(_providerStatusAutoRefreshTimer)
+    _providerStatusAutoRefreshTimer = null
+  }
+}
+
+function bindProviderStatus() {
+  const refreshBtn = document.getElementById('provider-status-refresh')
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      // Manual refresh supersedes any pending auto-refresh.
+      clearProviderStatusAutoRefresh()
+      refreshProviderStatus()
+    })
+  }
+  // No mode-change listener: the dropdown only saves on the explicit Save
+  // button, so refreshing the panel against the *previous* backend state
+  // when the user picks a different mode is just misleading.
+}
+
+function setProviderStatusValue(id, text, stateClass) {
+  const el = document.getElementById(id)
+  if (!el) return
+  el.textContent = text
+  el.className = 'ps-val' + (stateClass ? ' ' + stateClass : '')
+}
+
+function renderProviderHint(status) {
+  const hintEl = document.getElementById('ps-hint')
+  if (!hintEl) return
+  const available = Array.isArray(status?.available_modes) ? status.available_modes : []
+  if (available.length === 0 && status?.mode !== 'local') {
+    hintEl.hidden = false
+    hintEl.textContent =
+      'No provider has credentials. Set APIA_GROQ_KEY, APIA_ANTHROPIC_KEY, ' +
+      'or APIA_HF_TOKEN in backend.env, or install torch+transformers for ' +
+      'local mode. Restart the backend after changes.'
+    return
+  }
+  hintEl.hidden = true
+  hintEl.textContent = ''
+}
+
+function renderAutoTargetRow(status) {
+  // Key the "Auto target" row off default_mode (saved on-disk choice), NOT
+  // the live `mode` field. ensure_mode('auto') resolves `mode` to the
+  // picked provider (e.g. 'groq'), so checking `mode === 'auto'` would
+  // hide this row exactly when the user needs it ("auto picked groq").
+  const row = document.getElementById('ps-auto-row')
+  if (!row) return
+  if (status.default_mode !== 'auto') {
+    row.hidden = true
+    return
+  }
+  row.hidden = false
+  const target = status.auto_target
+  setProviderStatusValue(
+    'ps-auto-target',
+    target ? target : '(no candidate)',
+    target ? null : 'ps-state-fallback'
+  )
+}
+
+async function refreshProviderStatus() {
+  if (typeof window.api.getWarmupStatus !== 'function') {
+    setProviderStatusValue('ps-active', 'unavailable', 'ps-state-unreachable')
+    return
+  }
+  setProviderStatusValue('ps-state', 'Checking...', null)
+  let status
+  try {
+    status = await window.api.getWarmupStatus()
+  } catch (err) {
+    console.warn('[Settings] getWarmupStatus failed:', err)
+    status = null
+  }
+
+  const errorRow = document.getElementById('ps-error-row')
+
+  if (!status) {
+    setProviderStatusValue('ps-active', '--', null)
+    setProviderStatusValue('ps-available', '--', null)
+    setProviderStatusValue('ps-state', 'Backend unreachable', 'ps-state-unreachable')
+    if (errorRow) errorRow.hidden = true
+    renderProviderHint(null)
+    clearProviderStatusAutoRefresh() // no point auto-retrying against a dead backend
+    return
+  }
+
+  const activeMode = status.mode || '--'
+  const available = Array.isArray(status.available_modes) ? status.available_modes : []
+  const initialized = Array.isArray(status.initialized_modes) ? status.initialized_modes : []
+
+  setProviderStatusValue('ps-active', activeMode, null)
+  setProviderStatusValue(
+    'ps-available',
+    available.length ? available.join(', ') : '(none)',
+    null
+  )
+  renderAutoTargetRow(status)
+
+  if (status.warming) {
+    setProviderStatusValue('ps-state', 'Warming...', 'ps-state-warming')
+    // Schedule a single follow-up refresh so the user sees warming → ready
+    // without manually clicking. 2s lands well after Groq init (~100-500ms)
+    // and most Claude first-request paths; slow stacks still need a manual
+    // click but the panel won't keep stacking timers. Replace any previous
+    // pending fire so back-to-back "still warming" responses don't pile up.
+    clearProviderStatusAutoRefresh()
+    _providerStatusAutoRefreshTimer = setTimeout(() => {
+      _providerStatusAutoRefreshTimer = null
+      refreshProviderStatus()
+    }, 2000)
+  } else if (activeMode === 'fallback' || (available.length === 0 && initialized.length === 0)) {
+    setProviderStatusValue('ps-state', 'No provider available', 'ps-state-fallback')
+    clearProviderStatusAutoRefresh()
+  } else if (initialized.length > 0) {
+    // Only call it Ready when a provider has actually been initialized.
+    // available_modes alone means "prereqs satisfied" — the first /chat
+    // request still pays the init cost.
+    setProviderStatusValue('ps-state', 'Ready', 'ps-state-ready')
+    clearProviderStatusAutoRefresh()
+  } else {
+    setProviderStatusValue('ps-state', 'Idle (not warmed)', null)
+    clearProviderStatusAutoRefresh()
+  }
+
+  if (status.last_error) {
+    if (errorRow) errorRow.hidden = false
+    setProviderStatusValue('ps-error', String(status.last_error), 'ps-error')
+  } else if (errorRow) {
+    errorRow.hidden = true
+  }
+
+  renderProviderHint(status)
+}
+
 async function loadVoices() {
   try {
     const d = await window.api.getVoices()
     const sel = document.getElementById('voice-select')
+    sel.innerHTML = '<option value="">기본 목소리</option>'
+    if (sel.firstElementChild) sel.firstElementChild.textContent = 'Default Voice'
     d.voices?.forEach(v => {
       const o = document.createElement('option')
       o.value = v.id
@@ -639,8 +1071,153 @@ async function save() {
     voiceId: document.getElementById('voice-select').value,
   }
 
+  // backend.env keys are a separate boundary (different file, secret values)
+  // so they ride a dedicated IPC. If the user explicitly tried to change a
+  // key and it failed, keep the window open so they can see the toast and
+  // retry. The rest of the settings still flow through `applySettings`.
+  const envOk = await persistBackendEnvUpdates()
+  if (!envOk) return
+
   await window.api.applySettings(saved)
   window.close()
+}
+
+// ── backend.env folder + API keys ─────────────────────────────────────────
+// Tracks rows where the user typed a new value or hit Clear since opening
+// the settings window. Empty input + no clear = "no change" — matches the
+// dotenv-style UX: leaving a field blank means "don't touch what's there".
+const apiKeysState = {
+  pendingClears: new Set()
+}
+
+function bindBackendEnvControls() {
+  const openBtn = document.getElementById('open-backend-env')
+  if (openBtn) {
+    openBtn.addEventListener('click', async () => {
+      try {
+        const result = await window.api.openBackendDataDir()
+        if (!result?.ok) {
+          showToast('폴더를 열지 못했습니다: ' + (result?.error || '알 수 없는 오류'), 'error')
+          return
+        }
+        showToast('backend.env 폴더를 열었습니다.', 'info', 1800)
+      } catch (err) {
+        showToast('폴더 열기 실패: ' + (err?.message || err), 'error')
+      }
+    })
+  }
+
+  document.querySelectorAll('.api-key-row').forEach(row => {
+    const input = row.querySelector('[data-input]')
+    const clearBtn = row.querySelector('[data-clear]')
+    const key = row.dataset.key
+
+    // Typing a new value cancels a pending clear — otherwise the IPC payload
+    // would tell the repo to both write and clear, and the repo would clear.
+    if (input) {
+      input.addEventListener('input', () => {
+        if (input.value.length > 0) {
+          apiKeysState.pendingClears.delete(key)
+          if (clearBtn) clearBtn.disabled = true
+        } else if (clearBtn) {
+          clearBtn.disabled = false
+        }
+      })
+    }
+
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        apiKeysState.pendingClears.add(key)
+        if (input) input.value = ''
+        clearBtn.disabled = true
+        const statusEl = row.querySelector('[data-status]')
+        if (statusEl) {
+          statusEl.textContent = '저장 시 삭제됨'
+          statusEl.classList.remove('present')
+        }
+      })
+    }
+  })
+}
+
+async function refreshBackendEnvPresence() {
+  if (typeof window.api.getBackendEnvKeys !== 'function') return
+  let payload = null
+  try {
+    payload = await window.api.getBackendEnvKeys()
+  } catch (err) {
+    console.warn('[Settings] getBackendEnvKeys 실패:', err)
+  }
+  const keys = payload?.keys || {}
+
+  document.querySelectorAll('.api-key-row').forEach(row => {
+    const key = row.dataset.key
+    const presence = keys[key]
+    const statusEl = row.querySelector('[data-status]')
+    const clearBtn = row.querySelector('[data-clear]')
+    const input = row.querySelector('[data-input]')
+    const hasInput = input && input.value.length > 0
+
+    if (presence?.present) {
+      if (statusEl) {
+        statusEl.textContent = '저장된 키 있음'
+        statusEl.classList.add('present')
+      }
+      if (clearBtn) {
+        clearBtn.hidden = false
+        clearBtn.disabled = hasInput
+      }
+    } else {
+      if (statusEl) {
+        statusEl.textContent = '저장된 키 없음'
+        statusEl.classList.remove('present')
+      }
+      if (clearBtn) clearBtn.hidden = true
+    }
+  })
+}
+
+// Returns true when the renderer-side save flow may proceed to close the
+// window: either there was nothing to do, or the update succeeded. Returns
+// false on a real failure so save() can keep the window open and let the
+// user see the toast.
+async function persistBackendEnvUpdates() {
+  if (typeof window.api.saveBackendEnvKeys !== 'function') return true
+  const updates = {}
+  let dirty = false
+
+  document.querySelectorAll('.api-key-row').forEach(row => {
+    const key = row.dataset.key
+    const input = row.querySelector('[data-input]')
+    const value = input ? input.value : ''
+    if (apiKeysState.pendingClears.has(key)) {
+      updates[`${key}_clear`] = true
+      dirty = true
+    } else if (value.length > 0) {
+      updates[key] = value
+      dirty = true
+    }
+  })
+
+  if (!dirty) return true
+
+  try {
+    const result = await window.api.saveBackendEnvKeys(updates)
+    if (!result?.ok) {
+      showToast('API 키 저장 실패: ' + (result?.error || '알 수 없는 오류'), 'error', 5000)
+      return false
+    }
+    const parts = []
+    if (result.written?.length) parts.push(`저장 ${result.written.length}건`)
+    if (result.cleared?.length) parts.push(`삭제 ${result.cleared.length}건`)
+    if (parts.length) {
+      showToast('API 키 ' + parts.join(', ') + ' 완료. 백엔드를 재시작하면 적용됩니다.', 'info', 3500)
+    }
+    return true
+  } catch (err) {
+    showToast('API 키 저장 실패: ' + (err?.message || err), 'error', 5000)
+    return false
+  }
 }
 
 function escapeHtml(value) {
