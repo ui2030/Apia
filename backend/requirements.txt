@@ -19,7 +19,19 @@ soundfile==0.12.1
 numpy==1.26.0
 
 # ── 기타 API (선택) ──
-httpx>=0.27.0
+# httpx<0.28 : starlette TestClient는 httpx 0.28에서 제거된 `app=` kwarg를 쓴다
+# (fastapi 0.109/starlette 0.35 기준). 백엔드 런타임에선 영향 없지만 pytest 픽스처
+# (FastAPI TestClient)가 0.28+에서 깨지므로 함께 핀해둔다.
+httpx>=0.27.0,<0.28
 huggingface_hub>=0.21.0
 anthropic>=0.18.0
 groq>=0.4.0
+
+# ── 임베딩 (장기 기억 / 파일 이해 / 웹 검색 결과 의미 비교) ──
+# sentence-transformers는 첫 실행 때 모델(~90MB)을 HuggingFace에서 다운받아
+# 캐시하고, 이후엔 오프라인으로도 동작한다. all-MiniLM-L6-v2가 기본.
+sentence-transformers>=2.7.0
+
+# ── 개발/테스트 (dist에는 포함 안 됨, requirements-packaging.txt 참고) ──
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
