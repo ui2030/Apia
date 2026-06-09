@@ -17,8 +17,10 @@ contextBridge.exposeInMainWorld('api', {
   applySettings: (d) => ipcRenderer.invoke('apply-settings', d),
   onSettingsApplied: (cb) => ipcRenderer.on('settings-applied', (e, s) => cb(s)),
   openBackendDataDir: () => ipcRenderer.invoke('settings:openBackendDataDir'),
+  openBackendEnvFile: () => ipcRenderer.invoke('settings:openBackendEnvFile'),
   getBackendEnvKeys: () => ipcRenderer.invoke('settings:getBackendEnvKeys'),
   saveBackendEnvKeys: (updates) => ipcRenderer.invoke('settings:saveBackendEnvKeys', updates),
+  restartBackend: () => ipcRenderer.invoke('settings:restartBackend'),
 
   // 🔥 캐릭터 시스템
   listCharacters: () => ipcRenderer.invoke('characters:list'),

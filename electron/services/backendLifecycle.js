@@ -152,6 +152,12 @@ class BackendLifecycle {
     return this.#startedByApp
   }
 
+  // Exposed so main.js can branch on the e2e seam without re-reading
+  // process.env (the source of truth lives in the lifecycle constructor).
+  isE2EDisabled() {
+    return this.#e2eDisable
+  }
+
   // ── URL discovery (port collision) ─────────────────────────────────────
 
   async pickAvailableUrl() {
@@ -312,20 +318,30 @@ class BackendLifecycle {
 
   // ── Public ensure / stop ───────────────────────────────────────────────
 
-  async ensureRunning({ force = false } = {}) {
-    if (this.#e2eDisable) return false
-    if (await this.isHealthy()) return true
+  ensureRunning({ force = false, skipHealthCheck = false } = {}) {
+    if (this.#e2eDisable) return Promise.resolve(false)
+    // Dedup is set up *synchronously* — earlier this lived after
+    // `await this.isHealthy()`, so a second call landing during the very
+    // first awaited microtask saw `#ensurePromise === null` and started its
+    // own racing ensure. A more visible symptom: `restart()` running
+    // immediately after `ensureRunning()` would miss the in-flight gate and
+    // incorrectly bail with `skipped:'not-managed'`. Wrapping the async
+    // body and assigning #ensurePromise before returning closes that gap.
     if (this.#ensurePromise) return this.#ensurePromise
 
-    // Capture the entire decision (URL discovery + cooldown + spawn) in the
-    // dedup promise BEFORE any further await. Earlier this set #ensurePromise
-    // only after `await pickAvailableUrl`, so two concurrent ensureRunning
-    // calls could both pass the dedup gate while pickAvailableUrl was
-    // resolving and end up double-spawning when discovery was slow.
-    this.#ensurePromise = this.#runEnsure({ force }).finally(() => {
+    this.#ensurePromise = this.#ensureBody({ force, skipHealthCheck }).finally(() => {
       this.#ensurePromise = null
     })
     return this.#ensurePromise
+  }
+
+  async #ensureBody({ force, skipHealthCheck }) {
+    // restart() passes skipHealthCheck=true because a child we just killed
+    // can still answer /health for a few milliseconds while its socket
+    // lingers — without this skip, restart would return ok:true without
+    // spawning a replacement. Codex MUST-FIX.
+    if (!skipHealthCheck && await this.isHealthy()) return true
+    return this.#runEnsure({ force })
   }
 
   async #runEnsure({ force }) {
@@ -359,6 +375,54 @@ class BackendLifecycle {
     if (this.#e2eDisable) return false
     if (await this.isHealthy(800)) return true
     return this.ensureRunning()
+  }
+
+  // Stop the current child and force a fresh spawn. The naive call site
+  // pattern `stop(); ensureRunning({force:true})` is wrong: ensureRunning
+  // returns the existing in-flight `#ensurePromise` if one exists, so a
+  // restart could end up awaiting the *original* non-forced start instead
+  // of a fresh spawn. Wait for that to settle here, then run a clean
+  // stop+ensure inside a brand-new dedup promise. Codex MUST-FIX.
+  async restart() {
+    if (this.#e2eDisable) return { ok: false, skipped: 'e2e' }
+
+    // Await any in-flight ensureRunning first — it may itself be the call
+    // that flips startedByApp true. Checking startedByApp before awaiting
+    // would race the very first spawn and incorrectly report not-managed.
+    let inFlightFailed = false
+    if (this.#ensurePromise) {
+      try {
+        const inFlightStarted = await this.#ensurePromise
+        inFlightFailed = !inFlightStarted
+      } catch {
+        inFlightFailed = true
+      }
+    }
+
+    if (!this.#startedByApp) {
+      // Distinguish "we never managed this backend" from "we tried but the
+      // last spawn failed". Codex NICE-TO-HAVE: the renderer can show a
+      // backend-startup error toast instead of mislabeling a local failure
+      // as an external backend.
+      return inFlightFailed
+        ? { ok: false, skipped: 'failed-start' }
+        : { ok: false, skipped: 'not-managed' }
+    }
+
+    this.stop()
+    // Reset the cooldown clock so the upcoming spawn is never blocked by a
+    // recent failed attempt; force=true would also skip the cooldown, but
+    // making it explicit means a future caller can't accidentally remove
+    // the force flag and silently regress to "cooldown swallows the
+    // restart".
+    this.#lastLaunchAt = 0
+
+    // skipHealthCheck: a process we just SIGTERM/taskkill'd can still
+    // briefly respond to /health while its socket lingers, which would
+    // cause ensureRunning's preflight to return true *without* spawning a
+    // replacement. Codex MUST-FIX.
+    const started = await this.ensureRunning({ force: true, skipHealthCheck: true })
+    return { ok: Boolean(started), started: Boolean(started) }
   }
 
   stop() {

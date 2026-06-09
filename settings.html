@@ -358,10 +358,13 @@
 
     <div class="row">
       <div>
-        <div class="row-label">backend.env 폴더 열기</div>
+        <div class="row-label">backend.env 편집</div>
         <div class="row-sub">키와 모델 ID를 직접 편집할 수 있어요</div>
       </div>
-      <button type="button" class="btn btn-ghost" id="open-backend-env">폴더 열기</button>
+      <div style="display:flex;gap:6px;">
+        <button type="button" class="btn btn-ghost" id="open-backend-env-file">파일 열기</button>
+        <button type="button" class="btn btn-ghost" id="open-backend-env">폴더 열기</button>
+      </div>
     </div>
 
     <div class="api-keys">
@@ -456,8 +459,8 @@
 </div>
 
 <div class="footer">
-  <button class="btn btn-ghost" onclick="window.close()">취소</button>
-  <button class="btn btn-purple" onclick="save()">저장 및 적용</button>
+  <button class="btn btn-ghost" id="cancel-btn" onclick="window.close()">취소</button>
+  <button class="btn btn-purple" id="save-btn" onclick="save()">저장 및 적용</button>
 </div>
 
 <div class="loading-overlay" id="loading-overlay">
@@ -1058,6 +1061,32 @@ async function loadVoices() {
   }
 }
 
+// Busy-state guards live at the save() boundary so any intermediate failure
+// path (saveBackendEnvKeys failure, restart failure) gets the buttons back
+// to a clickable state via the finally block. window.close() drops the
+// window entirely so the restore on success is a no-op.
+const saveBusy = (() => {
+  const saveBtn = document.getElementById('save-btn')
+  const cancelBtn = document.getElementById('cancel-btn')
+  const originalLabel = saveBtn?.textContent || '저장 및 적용'
+  return {
+    set(label) {
+      if (saveBtn) {
+        saveBtn.disabled = true
+        saveBtn.textContent = label
+      }
+      if (cancelBtn) cancelBtn.disabled = true
+    },
+    clear() {
+      if (saveBtn) {
+        saveBtn.disabled = false
+        saveBtn.textContent = originalLabel
+      }
+      if (cancelBtn) cancelBtn.disabled = false
+    }
+  }
+})()
+
 async function save() {
   const saved = {
     ...settings,
@@ -1071,15 +1100,26 @@ async function save() {
     voiceId: document.getElementById('voice-select').value,
   }
 
-  // backend.env keys are a separate boundary (different file, secret values)
-  // so they ride a dedicated IPC. If the user explicitly tried to change a
-  // key and it failed, keep the window open so they can see the toast and
-  // retry. The rest of the settings still flow through `applySettings`.
-  const envOk = await persistBackendEnvUpdates()
-  if (!envOk) return
+  saveBusy.set('저장 중…')
+  try {
+    // backend.env keys are a separate boundary (different file, secret values)
+    // so they ride a dedicated IPC. If the user explicitly tried to change a
+    // key and it failed, keep the window open so they can see the toast and
+    // retry. The rest of the settings still flow through `applySettings`.
+    const envOk = await persistBackendEnvUpdates({
+      onPhase: (phase) => {
+        if (phase === 'restarting') saveBusy.set('백엔드 재시작 중…')
+      }
+    })
+    if (!envOk) return
 
-  await window.api.applySettings(saved)
-  window.close()
+    await window.api.applySettings(saved)
+    window.close()
+  } finally {
+    // Restore only when the window is still here (failure paths returned
+    // early without close()). On success window.close() removes the DOM.
+    saveBusy.clear()
+  }
 }
 
 // ── backend.env folder + API keys ─────────────────────────────────────────
@@ -1103,6 +1143,28 @@ function bindBackendEnvControls() {
         showToast('backend.env 폴더를 열었습니다.', 'info', 1800)
       } catch (err) {
         showToast('폴더 열기 실패: ' + (err?.message || err), 'error')
+      }
+    })
+  }
+
+  const openFileBtn = document.getElementById('open-backend-env-file')
+  if (openFileBtn && typeof window.api.openBackendEnvFile === 'function') {
+    openFileBtn.addEventListener('click', async () => {
+      try {
+        const result = await window.api.openBackendEnvFile()
+        if (!result?.ok) {
+          showToast('backend.env 파일을 열지 못했습니다: ' + (result?.error || '알 수 없는 오류'), 'error')
+          return
+        }
+        if (result.missing) {
+          showToast('backend.env가 아직 없어 폴더만 열었습니다. API 키를 저장하면 생성됩니다.', 'info', 3500)
+        } else if (result.fallback) {
+          showToast('편집기 연결이 없어 파일을 폴더에서 표시했습니다.', 'info', 2800)
+        } else {
+          showToast('backend.env 파일을 열었습니다.', 'info', 1800)
+        }
+      } catch (err) {
+        showToast('파일 열기 실패: ' + (err?.message || err), 'error')
       }
     })
   }
@@ -1181,7 +1243,7 @@ async function refreshBackendEnvPresence() {
 // window: either there was nothing to do, or the update succeeded. Returns
 // false on a real failure so save() can keep the window open and let the
 // user see the toast.
-async function persistBackendEnvUpdates() {
+async function persistBackendEnvUpdates({ onPhase } = {}) {
   if (typeof window.api.saveBackendEnvKeys !== 'function') return true
   const updates = {}
   let dirty = false
@@ -1207,15 +1269,62 @@ async function persistBackendEnvUpdates() {
       showToast('API 키 저장 실패: ' + (result?.error || '알 수 없는 오류'), 'error', 5000)
       return false
     }
+    const writtenCount = result.written?.length || 0
+    const clearedCount = result.cleared?.length || 0
+    const changed = writtenCount + clearedCount > 0
     const parts = []
-    if (result.written?.length) parts.push(`저장 ${result.written.length}건`)
-    if (result.cleared?.length) parts.push(`삭제 ${result.cleared.length}건`)
+    if (writtenCount) parts.push(`저장 ${writtenCount}건`)
+    if (clearedCount) parts.push(`삭제 ${clearedCount}건`)
     if (parts.length) {
-      showToast('API 키 ' + parts.join(', ') + ' 완료. 백엔드를 재시작하면 적용됩니다.', 'info', 3500)
+      showToast('API 키 ' + parts.join(', ') + ' 완료.', 'info', 2500)
+    }
+    if (changed) {
+      // AWAITED restart: codex MUST-FIX — fire-and-forget would let the
+      // settings window close while restart was still in flight, and the
+      // failure toast (e.g. backend won't start) would never reach the
+      // user. Returning false on failure also keeps the window open so the
+      // user can see the toast and retry, matching the save-failure UX
+      // above.
+      if (typeof onPhase === 'function') onPhase('restarting')
+      const restartOk = await triggerBackendRestart()
+      if (!restartOk) return false
     }
     return true
   } catch (err) {
     showToast('API 키 저장 실패: ' + (err?.message || err), 'error', 5000)
+    return false
+  }
+}
+
+// Returns true when save() may continue closing the settings window:
+//  - ok success → toast + true
+//  - skipped 'e2e' → silent true (test seam)
+//  - skipped 'not-managed' → info toast + true (external backend, expected)
+//  - skipped 'failed-start' → error toast + false (in-flight spawn failed,
+//      user needs to see this and fix it before the window closes)
+//  - real failure → error toast + false
+async function triggerBackendRestart() {
+  if (typeof window.api.restartBackend !== 'function') return true
+  showToast('백엔드 재시작 중…', 'info', 2500)
+  try {
+    const result = await window.api.restartBackend()
+    if (result?.skipped === 'e2e') return true
+    if (result?.skipped === 'not-managed') {
+      showToast('외부 백엔드라 재시작을 건너뛰었습니다. 수동으로 재시작하세요.', 'info', 4000)
+      return true
+    }
+    if (result?.skipped === 'failed-start') {
+      showToast('백엔드가 시작되지 않은 상태입니다. 로그를 확인하세요.', 'error', 5000)
+      return false
+    }
+    if (result?.ok) {
+      showToast('백엔드 재시작 완료. 새 키가 적용되었습니다.', 'info', 2800)
+      return true
+    }
+    showToast('백엔드 재시작 실패: ' + (result?.error || '알 수 없는 오류'), 'error', 5000)
+    return false
+  } catch (err) {
+    showToast('백엔드 재시작 실패: ' + (err?.message || err), 'error', 5000)
     return false
   }
 }

@@ -628,3 +628,177 @@ describe('stop', () => {
     expect(backend.isStartedByApp()).toBe(false)
   })
 })
+
+describe('restart', () => {
+  it('skips with not-managed when the app never started the backend', async () => {
+    const deps = createBaseDeps()
+    const backend = new BackendLifecycle(deps)
+    // No prior ensureRunning → #startedByApp is false.
+    const result = await backend.restart()
+    expect(result).toEqual({ ok: false, skipped: 'not-managed' })
+    expect(deps.spawn).not.toHaveBeenCalled()
+    expect(deps.spawnSync).not.toHaveBeenCalled()
+  })
+
+  it('skips with e2e when the e2e seam is on', async () => {
+    const deps = createBaseDeps({ env: { APIA_E2E_DISABLE_BACKEND: '1' } })
+    const backend = new BackendLifecycle(deps)
+    const result = await backend.restart()
+    expect(result).toEqual({ ok: false, skipped: 'e2e' })
+    expect(deps.spawn).not.toHaveBeenCalled()
+  })
+
+  it('stops the old child and spawns a fresh one', async () => {
+    // Health probe schedule:
+    //   1) initial ensureRunning: not healthy yet → spawn
+    //   2) waitForReady after first spawn: healthy → started=true
+    //   3) restart inner ensureRunning: not healthy (we just killed) → spawn again
+    //   4) waitForReady after second spawn: healthy → started=true
+    const { http, https } = createFakeHttp([
+      { error: new Error('initial down') },
+      { status: 200 },
+      { error: new Error('killed') },
+      { status: 200 }
+    ])
+    const deps = createBaseDeps({ http, https, platform: 'linux' })
+    const firstChild = createFakeChild({ pid: 100 })
+    const secondChild = createFakeChild({ pid: 101 })
+    deps.spawn
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild)
+    const backend = new BackendLifecycle(deps)
+    const started1 = await backend.ensureRunning()
+    expect(started1).toBe(true)
+    expect(deps.spawn).toHaveBeenCalledTimes(1)
+    expect(backend.isStartedByApp()).toBe(true)
+
+    const result = await backend.restart()
+    expect(result).toEqual({ ok: true, started: true })
+    // The old child got SIGTERM and a brand-new spawn fired.
+    expect(firstChild.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(deps.spawn).toHaveBeenCalledTimes(2)
+    expect(backend.isStartedByApp()).toBe(true)
+  })
+
+  it('bypasses the cooldown that would normally block a back-to-back spawn', async () => {
+    // After a successful first start the cooldown clock guards against a
+    // tight respawn loop. A restart must drive through it so a "save key →
+    // restart" flow isn't silently a no-op when the user changed keys
+    // within the cooldown window. This is the codex MUST-FIX equivalent:
+    // ensureRunning({force:true}) inside restart needs cooldown bypassed.
+    const { http, https } = createFakeHttp([
+      { error: new Error('initial down') },
+      { status: 200 },
+      { error: new Error('killed') },
+      { status: 200 }
+    ])
+    const deps = createBaseDeps({
+      http,
+      https,
+      platform: 'linux',
+      cooldownMs: 1_000_000  // huge cooldown to prove restart bypasses it
+    })
+    const firstChild = createFakeChild({ pid: 200 })
+    const secondChild = createFakeChild({ pid: 201 })
+    deps.spawn
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild)
+    const backend = new BackendLifecycle(deps)
+    await backend.ensureRunning()
+    expect(deps.spawn).toHaveBeenCalledTimes(1)
+
+    const result = await backend.restart()
+    expect(result.ok).toBe(true)
+    expect(deps.spawn).toHaveBeenCalledTimes(2)
+  })
+
+  it('awaits an in-flight ensureRunning before restarting (no double-await of stale promise)', async () => {
+    // Regression for the codex MUST-FIX: a naive `stop() + ensureRunning({force:true})`
+    // would still hit the dedup branch and await the in-flight non-forced
+    // promise. We prove restart waits for it to settle and then spawns
+    // again, so spawn fires twice total (once for the in-flight, once for
+    // the fresh post-stop respawn).
+    const { http, https } = createFakeHttp([
+      { error: new Error('initial down') },
+      { status: 200 },
+      { error: new Error('killed') },
+      { status: 200 }
+    ])
+    const deps = createBaseDeps({ http, https, platform: 'linux' })
+    const firstChild = createFakeChild({ pid: 300 })
+    const secondChild = createFakeChild({ pid: 301 })
+    deps.spawn
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild)
+    const backend = new BackendLifecycle(deps)
+    const inFlight = backend.ensureRunning()
+    const restart = backend.restart()
+    const [startedFirst, restarted] = await Promise.all([inFlight, restart])
+    expect(startedFirst).toBe(true)
+    expect(restarted).toEqual({ ok: true, started: true })
+    expect(deps.spawn).toHaveBeenCalledTimes(2)
+    expect(firstChild.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('skips the health preflight on respawn so a lingering /health does not return ok with no new spawn', async () => {
+    // Regression for codex MUST-FIX: a process we just killed can still
+    // answer /health for a few ms while its socket lingers. If
+    // ensureRunning's preflight ran during that window, restart would
+    // return ok:true without spawning a replacement, leaving #process null
+    // and #startedByApp false. The skipHealthCheck path closes that.
+    const { http, https } = createFakeHttp([
+      { error: new Error('initial down') },  // 1) first ensureRunning preflight
+      { status: 200 },                        // 2) first waitForReady → ready
+      { status: 200 },                        // 3) post-stop /health (lingering — would short-circuit without skipHealthCheck)
+      { status: 200 }                         // 4) post-respawn waitForReady → ready
+    ])
+    const deps = createBaseDeps({ http, https, platform: 'linux' })
+    const firstChild = createFakeChild({ pid: 400 })
+    const secondChild = createFakeChild({ pid: 401 })
+    deps.spawn
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild)
+    const backend = new BackendLifecycle(deps)
+    await backend.ensureRunning()
+    expect(deps.spawn).toHaveBeenCalledTimes(1)
+
+    const result = await backend.restart()
+    // The third planned response (lingering /health = 200) MUST NOT have
+    // short-circuited the restart — spawn must fire a second time.
+    expect(deps.spawn).toHaveBeenCalledTimes(2)
+    expect(result).toEqual({ ok: true, started: true })
+  })
+
+  it('returns skipped:failed-start when the in-flight ensureRunning never managed to spawn', async () => {
+    // Reproduces "user clicked Save during the very first backend spawn,
+    // and that spawn failed". restart() awaits the in-flight, sees
+    // startedByApp still false, and must NOT report 'not-managed' (which
+    // would mislead the renderer into "external backend" messaging).
+    const { http, https } = createFakeHttp([
+      { error: new Error('initial down') },  // first ensureRunning preflight: not healthy
+      // No spawn-side responses queued — spawn itself throws below.
+    ])
+    const deps = createBaseDeps({ http, https, platform: 'linux' })
+    deps.spawn.mockImplementation(() => {
+      throw new Error('cannot spawn python')
+    })
+    const backend = new BackendLifecycle(deps)
+    const inFlight = backend.ensureRunning()
+    const restartResult = await backend.restart()
+    await inFlight  // drain
+    expect(restartResult).toEqual({ ok: false, skipped: 'failed-start' })
+    // The restart itself must NOT have attempted another spawn (we never
+    // got past the not-managed gate).
+    // spawn was called once for the in-flight attempt that threw.
+    expect(deps.spawn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('isE2EDisabled', () => {
+  it('reflects APIA_E2E_DISABLE_BACKEND=1 from the constructor env', () => {
+    const onDeps = createBaseDeps({ env: { APIA_E2E_DISABLE_BACKEND: '1' } })
+    expect(new BackendLifecycle(onDeps).isE2EDisabled()).toBe(true)
+    const offDeps = createBaseDeps({ env: {} })
+    expect(new BackendLifecycle(offDeps).isE2EDisabled()).toBe(false)
+  })
+})

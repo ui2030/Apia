@@ -41,7 +41,9 @@ test('settings window opens and renders Korean labels without mojibake', async (
     // tied to user-visible content, not DOM structure.
     await expect(settings.locator('.section-title', { hasText: 'AI 설정' })).toBeVisible()
     await expect(settings.locator('.section-title', { hasText: '캐릭터 모델' })).toBeVisible()
-    await expect(settings.locator('text=backend.env 폴더 열기')).toBeVisible()
+    await expect(settings.locator('text=backend.env 편집')).toBeVisible()
+    await expect(settings.locator('#open-backend-env-file')).toBeVisible()
+    await expect(settings.locator('#open-backend-env')).toBeVisible()
     await expect(settings.locator('text=Groq API 키')).toBeVisible()
   } finally {
     await cleanup()
@@ -106,6 +108,64 @@ test('API key write→read→clear roundtrip lands in backend.env', async () => 
       const text = await readFile(envPath, 'utf-8').catch(() => '')
       return text.includes('APIA_GROQ_KEY=')
     }, { timeout: 5_000 }).toBe(false)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('backend.env file button reports missing when file does not exist', async () => {
+  // Fresh tmp userData → backend.env has never been created. The handler
+  // must return ok:true + missing:true and (under the no-shell-open seam)
+  // not attempt to spawn a real editor.
+  const { app, mainWindow, userData, cleanup } = await launchApia()
+  try {
+    const settings = await openSettingsWindow(app, mainWindow)
+    const result = await settings.evaluate(async () => window.api.openBackendEnvFile())
+    expect(result.ok).toBe(true)
+    expect(result.missing).toBe(true)
+    expect(result.stubbed).toBe(true)
+    // The reported path must point at the would-be backend.env inside the
+    // isolated tmp dir — proves we didn't leak the user's real %APPDATA%.
+    const normalize = (p) => p.toLowerCase().replaceAll('\\', '/')
+    expect(normalize(result.path)).toContain(normalize(join(userData, 'backend-data', 'backend.env')))
+  } finally {
+    await cleanup()
+  }
+})
+
+test('backend.env file button reports ok (not missing) after a key was saved', async () => {
+  const { app, mainWindow, userData, cleanup } = await launchApia()
+  try {
+    // Seed backend.env via the save IPC so the file actually exists.
+    let settings = await openSettingsWindow(app, mainWindow)
+    await settings.locator('.api-key-row[data-key="APIA_GROQ_KEY"] [data-input]')
+      .fill('gsk_e2e_for_open_file')
+    await settings.click('button.btn-purple')
+
+    const envPath = join(userData, 'backend-data', 'backend.env')
+    await expect.poll(() => existsSync(envPath), { timeout: 5_000 }).toBe(true)
+
+    // Re-open settings and click the file-open IPC.
+    settings = await openSettingsWindow(app, mainWindow)
+    const result = await settings.evaluate(async () => window.api.openBackendEnvFile())
+    expect(result.ok).toBe(true)
+    expect(result.missing).toBeFalsy()
+    expect(result.stubbed).toBe(true)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('restartBackend is skipped under the e2e seam', async () => {
+  // APIA_E2E_DISABLE_BACKEND=1 (set by launchApia) means the lifecycle was
+  // never spawned, so restart must return skipped:'e2e' without trying to
+  // kill anything. This pins the seam at the IPC boundary.
+  const { app, mainWindow, cleanup } = await launchApia()
+  try {
+    const settings = await openSettingsWindow(app, mainWindow)
+    const result = await settings.evaluate(async () => window.api.restartBackend())
+    expect(result.ok).toBe(false)
+    expect(result.skipped).toBe('e2e')
   } finally {
     await cleanup()
   }

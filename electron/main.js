@@ -408,6 +408,51 @@ ipcMain.handle('settings:openBackendDataDir', async () => {
   }
 })
 
+// Opens backend.env directly in the OS-associated editor. When the file does
+// not exist yet (no API key has ever been saved), fall back to opening the
+// parent folder rather than auto-creating an empty env file — the repo only
+// writes backend.env when applyUpdates is called, so an auto-create here
+// would diverge from that lifecycle. shell.openPath returns '' on success
+// and a non-empty error string on failure; on failure we try
+// showItemInFolder as a fallback because some Windows installs report a
+// success-but-no-editor case where openPath returns an error string.
+ipcMain.handle('settings:openBackendEnvFile', async () => {
+  const envPath = backendEnvRepo.getEnvPath()
+  const folder = path.dirname(envPath)
+  try {
+    fs.mkdirSync(folder, { recursive: true })
+    const exists = fs.existsSync(envPath)
+    if (APIA_E2E_NO_SHELL_OPEN) {
+      return { ok: true, path: envPath, missing: !exists, stubbed: true }
+    }
+    if (!exists) {
+      const folderError = await shell.openPath(folder)
+      if (folderError) {
+        return { ok: false, error: folderError, path: envPath, missing: true }
+      }
+      return { ok: true, path: envPath, missing: true }
+    }
+    const errorMessage = await shell.openPath(envPath)
+    if (errorMessage) {
+      // openPath failed (no editor association, locked file, etc.) — fall
+      // back to highlighting the file in the OS file manager so the user
+      // can open it manually. showItemInFolder has no return value, so we
+      // can't verify success; reporting ok:true with fallback:true is the
+      // best we can do.
+      try {
+        shell.showItemInFolder(envPath)
+        return { ok: true, path: envPath, fallback: true, openPathError: errorMessage }
+      } catch (fallbackError) {
+        return { ok: false, error: errorMessage, path: envPath, fallbackError: fallbackError?.message || String(fallbackError) }
+      }
+    }
+    return { ok: true, path: envPath }
+  } catch (error) {
+    logWarn('[OPEN_BACKEND_ENV_FILE_WARN]', error)
+    return { ok: false, error: error?.message || String(error), path: envPath }
+  }
+})
+
 // Renderer-facing summary of which keys are currently set in backend.env.
 // Only `present: boolean` is returned — never the value — so the renderer
 // has no way to leak the secret back into a log or DOM attribute.
@@ -429,6 +474,23 @@ ipcMain.handle('settings:saveBackendEnvKeys', async (e, updates) => {
     return { ok: true, ...result }
   } catch (error) {
     logWarn('[BACKEND_ENV_WRITE_WARN]', error)
+    return { ok: false, error: error?.message || String(error) }
+  }
+})
+
+// Restarts the locally-spawned backend so newly-saved API keys take effect.
+// Only meaningful when the app itself started the backend — for an external
+// or remote backend (APIA_BACKEND_URL set, or user launched Python manually),
+// stopping it would be hostile, so we short-circuit with skipped:'not-managed'.
+// All in-flight ensure dedup, cooldown reset, and force-respawn are handled
+// inside BackendLifecycle.restart so the IPC stays a thin pass-through.
+ipcMain.handle('settings:restartBackend', async () => {
+  try {
+    const result = await backend.restart()
+    logInfo('[BACKEND_RESTART_IPC]', result)
+    return result
+  } catch (error) {
+    logWarn('[BACKEND_RESTART_WARN]', error)
     return { ok: false, error: error?.message || String(error) }
   }
 })
