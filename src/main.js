@@ -110,6 +110,13 @@ const camera = _sceneRuntime.camera
 const renderer = _sceneRuntime.renderer
 const clock = _sceneRuntime.clock
 const CAM_DEFAULT = _sceneRuntime.CAM_DEFAULT
+// E2E diagnostic hatch — surface the scene for tests/gui/* scripts that
+// need to walk the skeleton without coupling to the renderer's module
+// boundary. Renderer's sandbox blocks process.env access, so we always
+// expose; it's just the Three.js scene graph, no secrets.
+if (typeof window !== 'undefined') {
+  window.__apiaScene = scene
+}
 const applyCameraDefault = _sceneRuntime.applyCameraDefault
 
 let currentModel = null
