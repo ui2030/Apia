@@ -72,16 +72,51 @@ export function resolveMotionAsset(motionName) {
   )
 }
 
+// Step 5 of /goal — auto-register .vmd files that the user dropped into
+// idle/talk/react folders without editing manifest.json. Filename (sans
+// extension) becomes a motion key. Categories are inferred from the
+// parent folder: idle/walk.vmd → motion name 'idle_walk', talk/foo.vmd
+// → 'talk_foo'. Files already covered by the manifest are skipped (the
+// manifest entry's loop/fadeIn metadata wins).
+const _autoVmdEntries = new Map()
+{
+  const manifestPaths = new Set(
+    Object.values(vmdManifest.clips || {})
+      .map((c) => c?.path)
+      .filter(Boolean)
+  )
+  for (const [rel, url] of vmdPathToUrl.entries()) {
+    if (manifestPaths.has(rel)) continue
+    const parts = rel.split('/')
+    if (parts.length < 2) continue
+    const category = parts[0] // 'idle' | 'talk' | 'react' | …
+    const baseName = parts[parts.length - 1].replace(/\.vmd$/i, '')
+    const motionName = `${category}_${baseName}`
+    // Default loop=true for idle/talk, false for react.
+    const loop = category === 'idle' || category === 'talk'
+    _autoVmdEntries.set(motionName, { url, loop, fadeIn: vmdManifest.defaultFadeIn ?? 0.4 })
+  }
+  if (_autoVmdEntries.size > 0) {
+    console.info('[motionAssets] auto-registered .vmd clips', Array.from(_autoVmdEntries.keys()))
+  }
+}
+
 /**
  * MMD 측 동일 motion-name 키에 대한 .vmd 클립 resolver.
  * VRMA와 같은 이름 ('idle_breath_soft' 등)을 받지만 vmd manifest를 본다.
- * Step 6 deferral: PMX rig is not Mixamo-compatible — no .fbx fallback here.
+ * Step 5 of /goal: manifest 미등록 .vmd도 filename 기반 motion name으로
+ * 자동 등록. 사용자가 매니페스트 안 만져도 idle/foo.vmd 드롭만으로
+ * `idle_foo` 모션이 활성화됨.
  *
  * @param {string} motionName
  * @returns {{ url: string, kind: 'vmd', loop: boolean, fadeIn: number } | null}
  */
 export function resolveMmdMotionAsset(motionName) {
-  return resolveFromManifest(vmdManifest, vmdPathToUrl, motionName, 'vmd')
+  const fromManifest = resolveFromManifest(vmdManifest, vmdPathToUrl, motionName, 'vmd')
+  if (fromManifest) return fromManifest
+  const auto = _autoVmdEntries.get(motionName)
+  if (auto) return { url: auto.url, kind: 'vmd', loop: auto.loop, fadeIn: auto.fadeIn }
+  return null
 }
 
 export function listAvailableMotions() {

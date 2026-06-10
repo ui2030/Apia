@@ -23,6 +23,14 @@ import { initChat, setCharacterRaycaster } from './chat.js'
 import { MotionManager } from './motionManager.js'
 import { resolveMotionAsset, resolveMmdMotionAsset } from './motionAssets.js'
 import {
+  buildBoneRegistry,
+  createPoseSpring,
+  createSaccadeState,
+  stepPoseSpring,
+  applyPose,
+  computePoseTargets
+} from './poseRig.js'
+import {
   getVRMRuntime,
   getVRMUtils,
   getMmdRuntime,
@@ -72,14 +80,25 @@ function playMotion(motion) {
   const type = currentModel?.type
   if (type === 'mmd') {
     const asset = resolveMmdMotionAsset(motion.name)
-    if (!asset) return
+    if (!asset) {
+      // No .vmd matched — procedural owns the rig until next motion call.
+      if (currentModel) currentModel._vmdClipActive = false
+      return
+    }
+    if (currentModel) currentModel._vmdClipActive = true
     playMMDAnimation(asset.url, { loop: asset.loop })
-      .catch((err) => console.warn('[playMotion] vmd clip failed', motion.name, err))
+      .catch((err) => {
+        if (currentModel) currentModel._vmdClipActive = false
+        console.warn('[playMotion] vmd clip failed', motion.name, err)
+      })
     return
   }
   if (type === 'vrm') {
     const asset = resolveMotionAsset(motion.name)
-    if (!asset) return
+    if (!asset) {
+      if (currentModel) currentModel._vrmaClipActive = false
+      return
+    }
     // Step 6: resolveMotionAsset now returns `kind: 'vrma' | 'fbx'`. FBX
     // clips run through the Mixamo retargeter; VRMA is the native VRM
     // animation format and plays directly. Same race-guard pattern, same
@@ -88,8 +107,14 @@ function playMotion(motion) {
       playFBXAnimation(asset.url, { loop: asset.loop, fadeIn: asset.fadeIn })
         .catch((err) => console.warn('[playMotion] fbx clip failed', motion.name, err))
     } else {
+      // Step 5 of /goal — VRMA clips also need the clipMask treatment so
+      // the procedural arm/torso layers don't fight the mixer's clip track.
+      if (currentModel) currentModel._vrmaClipActive = true
       playVRMAnimation(asset.url, { loop: asset.loop, fadeIn: asset.fadeIn })
-        .catch((err) => console.warn('[playMotion] vrma clip failed', motion.name, err))
+        .catch((err) => {
+          if (currentModel) currentModel._vrmaClipActive = false
+          console.warn('[playMotion] vrma clip failed', motion.name, err)
+        })
     }
     return
   }
@@ -306,6 +331,16 @@ async function loadVRMRuntimeModel(url, loadToken) {
         }
 
         setupVRMRestPose(vrm)
+        // Pose rig (Step 2 of /goal) — replaces every per-part updateVRMBody
+        // block. Snapshots rest pose so the model's posture survives.
+        {
+          const registry = buildBoneRegistry(vrm.scene, 'vrm', vrm)
+          currentModel.poseRig = {
+            registry,
+            spring: createPoseSpring(registry),
+            saccade: createSaccadeState(),
+          }
+        }
         applyCharacterScale()
         alignCharacterToGround()
         frameCharacterCamera()
@@ -406,6 +441,21 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
           morphs: mesh.morphTargetDictionary || {},
           baseScale: normalizedScale,
           sourcePath: url
+        }
+        // Pose rig (Step 2 of /goal). Snapshots the rest quaternion for
+        // every humanoid bone *before* helper.add({physics:true}) runs
+        // below. That's fine for humanoid roles (head/arms/torso/legs)
+        // because MMDPhysics only mutates the rigid-body bones (hair,
+        // skirt, tail, etc.) which aren't in HUMANOID_ROLES. If we ever
+        // add hair/skirt roles, this needs to move below the helper.add
+        // call so the snapshot reflects the settled physics pose.
+        {
+          const registry = buildBoneRegistry(mesh, 'mmd')
+          currentModel.poseRig = {
+            registry,
+            spring: createPoseSpring(registry),
+            saccade: createSaccadeState(),
+          }
         }
 
         // Codex MUST-FIX (생동감): turn the MMD physics simulator on so
@@ -569,11 +619,8 @@ function clearModel() {
     getVRMUtils()?.deepDispose(currentModel.root)
   }
 
-  // Phase H1: drop the MMD bone cache so the next model resolves its own
-  // bones from scratch (PMX bone naming varies per author).
-  _mmdBoneCache = null
-  _mmdBoneCacheKey = null
-
+  // Step 2 of /goal: bone cache is gone — poseRig (per-model registry)
+  // owns role resolution now.
   currentModel = null
 }
 
@@ -663,520 +710,107 @@ function setupVRMRestPose(vrm) {
   set('rightUpperLeg', 0, 0, -0.06)
 }
 
-// ── VRM 전신 프로시저럴 업데이트 (매 프레임) ─────────────────────────────────
-// Layer 2: 숨결·흔들림·시선 추적·팔 생동감 / Layer 3 클립이 추가되면 이 위에 blend.
-function updateVRMBody(t) {
-  if (!currentModel || currentModel.type !== 'vrm') return
-  const vrm = currentModel.obj
-  const h = vrm.humanoid
-  if (!h) return
+// ── Unified body update — Step 2 of /goal ─────────────────────────────────
+// One function for VRM + MMD, driven by the data-driven poseRig in
+// src/poseRig.js. The old part-by-part updateVRMBody (148 lines) and
+// updateMMDBody (186 lines) are gone — every humanoid bone is now
+// resolved through a registry, every per-frame target is computed in
+// computePoseTargets, and every write goes through `quaternion = restQuat
+// * eulerDelta` so model-specific rest posture (e.g. Kisaki's head tilt
+// at restEuler [0.028, -0.071, 0.002]) survives.
+//
+// `state === 'walk'` still wants a stride-driven leg gait. We layer that
+// here as a hand-written overlay because the gait is naturally
+// *positional* (phase tracks foot plant), not breath-like. It is
+// computed in the same { x, y, z } per-role accumulator the spring then
+// filters, so the visible motion still goes through critically-damped
+// smoothing.
+function updateBody(t, delta) {
+  if (!currentModel?.poseRig) return
+  const { registry, spring, saccade } = currentModel.poseRig
+  if (!registry || !spring) return
 
   const look = getLookTarget()
-  const lx = look.x          // -1 ~ 1 (마우스 좌우)
-  const ly = look.y          // -1 ~ 1 (마우스 상하)
   const state = getState()
   const motion = getCurrentMotion()
-  const intensity = Number.isFinite(motion?.intensity) ? motion.intensity : 1
-
-  const breath = Math.sin(t * 0.55)          // 호흡 주기
-  const sway   = Math.sin(t * 0.28)          // 느린 몸 흔들림
-  const isTalk = state === 'talk'
-
-  // ── 등뼈 / 가슴 ─────────────────────────────────
-  const spine = h.getRawBoneNode('spine')
-  if (spine) {
-    spine.rotation.x = breath * 0.007 * intensity
-    spine.rotation.z = sway  * 0.006 * intensity
-  }
-  const chest = h.getRawBoneNode('chest')
-  if (chest) {
-    chest.rotation.x = breath * 0.016 * intensity
-    chest.rotation.z = sway  * 0.008 * intensity
-  }
-  const upper = h.getRawBoneNode('upperChest')
-  if (upper) upper.rotation.x = breath * 0.008 * intensity
-
-  // ── 목 + 고개 (시선 추적 분리) ──────────────────
-  const neck = h.getRawBoneNode('neck')
-  if (neck) {
-    neck.rotation.y = lx * 0.14
-    neck.rotation.x = -ly * 0.07
-    neck.rotation.z = sway * 0.004
-  }
-  const head = h.getRawBoneNode('head')
-  if (head) {
-    head.rotation.y = lx * 0.10 + Math.sin(t * 0.50) * 0.018
-    head.rotation.x = -ly * 0.05 + Math.sin(t * 0.45) * 0.008
-    head.rotation.z = Math.sin(t * 0.32) * 0.009
+  const personality = motionManager.getPersonalityVector?.() || {
+    energy: 0.5,
+    expressiveness: 0.5,
+    fidgetiness: 0.5,
   }
 
-  // ── 눈 깜빡임 ────────────────────────────────────
-  if (vrm.expressionManager) {
-    const b = t % 4.0
-    vrm.expressionManager.setValue('blink', b < 0.12 ? Math.sin((b / 0.12) * Math.PI) : 0)
-  }
+  // .vmd / .vrma / .fbx clip active → that clip owns arms + torso. Breath,
+  // gaze and saccade still ride on top because they touch chest/neck/head/
+  // eyes which the spring blends against the clip's mixer output without
+  // fighting the clip's pose.
+  const clipMask = (
+    currentModel._vmdClipActive ||
+    currentModel._fbxClipActive ||
+    currentModel._vrmaClipActive
+  )
+    ? { arms: true, torso: true }
+    : null
+  // TODO (split when first arm-only clip lands): granular mask
+  // `{ arms, torso, legs }` so a partial-body clip can let procedural
+  // continue on the bones it doesn't own. Trigger: any motion in
+  // resolveMotionAsset / resolveMmdMotionAsset that targets only arm
+  // bones (no torso/leg tracks).
 
-  // ── 팔 (A-포즈 기준 + 생동감) ────────────────────
-  // Step 1: amplitudes route through _amp() so the user's expressiveness /
-  // energy slider rescales every gesture together. `intensity` from
-  // motionManager still rides on top for per-motion variance.
-  const breathArm = breath * _amp(0.013, { energy: 0.6, warmth: 0.4 }) * intensity
-  const talkSwingAmp = _amp(0.05, { expr: 1.0, talkSpeed: 0.4 })
-  const talkSwayL =  isTalk ? Math.sin(t * 2.2)         * talkSwingAmp * intensity : 0
-  const talkSwayR =  isTalk ? Math.sin(t * 2.2 + 1.1)   * talkSwingAmp * intensity : 0
-  const armSwayAmp = _amp(0.014, { fidget: 0.6, energy: 0.4 })
-
-  const lUA = h.getRawBoneNode('leftUpperArm')
-  if (lUA) {
-    lUA.rotation.z = 0.9 + breathArm
-    lUA.rotation.x = sway * armSwayAmp * intensity + talkSwayL
-  }
-  const rUA = h.getRawBoneNode('rightUpperArm')
-  if (rUA) {
-    rUA.rotation.z = -0.9 - breathArm
-    rUA.rotation.x = -sway * armSwayAmp * intensity - talkSwayR * 0.6
-  }
-  const elbowAmp = _amp(0.035, { expr: 0.8, talkSpeed: 0.3 })
-  const lLA = h.getRawBoneNode('leftLowerArm')
-  if (lLA) {
-    lLA.rotation.z = 0.2
-    lLA.rotation.x = isTalk ? Math.sin(t * 1.8)        * elbowAmp * intensity : 0
-  }
-  const rLA = h.getRawBoneNode('rightLowerArm')
-  if (rLA) {
-    rLA.rotation.z = -0.2
-    rLA.rotation.x = isTalk ? Math.sin(t * 1.8 + 1.3)  * elbowAmp * intensity : 0
-  }
-
-  // ── 다리: 앉기 / 걷기 / 서기 ──────────────────────
-  // Codex MUST-FIX (Phase A): walk gait는 같은 함수에서 절대값으로 합쳐서
-  // sit/talk/rest pose와 충돌하지 않게. 매 프레임 sit→else 분기가 다리를
-  // 0으로 리셋하던 게 T자 콩콩의 핵심 원인이었으니, walk가 가장 강한 신호.
-  const lUL = h.getRawBoneNode('leftUpperLeg')
-  const rUL = h.getRawBoneNode('rightUpperLeg')
-  const lLL = h.getRawBoneNode('leftLowerLeg')
-  const rLL = h.getRawBoneNode('rightLowerLeg')
-  if (state === 'sit') {
-    // Phase G — sit gets a subtle breathing bend on top of the fixed pose
-    // so the silhouette doesn't read as a propped statue. Amplitudes stay
-    // tiny (≤ 0.015 rad ≈ 0.9°) so a model's actual sit clip can override
-    // these without fighting Phase A's absolute-write pattern.
-    const sitBreath = breath * 0.012 * intensity
-    if (lUL) lUL.rotation.x = -1.35 + sitBreath
-    if (rUL) rUL.rotation.x = -1.35 + sitBreath
-    if (lLL) lLL.rotation.x =  1.70 - sitBreath
-    if (rLL) rLL.rotation.x =  1.70 - sitBreath
-  } else if (state === 'walk') {
-    // VRM0: leftUpperLeg.rotation.x positive = leg forward swing.
-    // Step 1: stride amp + swing amp now scale with energy/movementRange so
-    // a "shy" character takes shorter steps and "active" one swings wider.
-    const stride = t * (6.5 + (_ampFactor({ energy: 0.6 }) - 1) * 2)
-    const swing = _amp(0.35, { energy: 0.6, range: 0.4 }) * intensity
-    const phase = Math.sin(stride)
-    if (lUL) lUL.rotation.x =  phase * swing
-    if (rUL) rUL.rotation.x = -phase * swing
-    // Knee bend tracks the gait. Knee amplitude also scaled.
-    const kneeAmp = _amp(0.3, { energy: 0.5, range: 0.4 })
-    if (lLL) lLL.rotation.x = Math.max(0,  Math.sin(stride + 0.4)) * kneeAmp
-    if (rLL) rLL.rotation.x = Math.max(0, -Math.sin(stride + 0.4)) * kneeAmp
-    // Arms swing opposite phase for natural walking. This OVERRIDES the
-    // earlier breathArm + talkSway assignments above on purpose.
-    const armWalkAmp = _amp(0.32, { energy: 0.6, expr: 0.4 })
-    if (lUA) {
-      lUA.rotation.z = 0.9 + breathArm
-      lUA.rotation.x = -phase * armWalkAmp
-    }
-    if (rUA) {
-      rUA.rotation.z = -0.9 - breathArm
-      rUA.rotation.x =  phase * armWalkAmp
-    }
-    // Phase G — natural walk extras layered on top of the breathing spine/
-    // chest values set earlier. Each adds a small twice-per-stride signal:
-    //   - spine roll = weight shift to the planted foot
-    //   - chest counter-yaw = shoulders rotate opposite to the hips
-    //   - head micro-yaw = head catches up to the body a beat late
-    // OVERRIDE (not add) on spine/chest because the earlier breath values
-    // here drown the gait signal; head uses += so mouse look-target stays.
-    if (spine) {
-      spine.rotation.z = phase * 0.045 * intensity
-      spine.rotation.x = breath * 0.005 * intensity + Math.abs(phase) * 0.01 * intensity
-    }
-    if (chest) {
-      chest.rotation.y = -phase * 0.06 * intensity
-      chest.rotation.z = phase * 0.025 * intensity
-    }
-    if (head) {
-      head.rotation.y += Math.sin(stride * 0.5) * 0.035 * intensity
-    }
-  } else {
-    if (lUL) lUL.rotation.x = 0
-    if (rUL) rUL.rotation.x = 0
-    if (lLL) lLL.rotation.x = 0
-    if (rLL) rLL.rotation.x = 0
-  }
-}
-
-// ── Personality-driven amplitude helpers (step 1) ─────────────────────────
-// One place where the personality vector decides "how big" any procedural
-// gesture is. Both updateVRMBody and updateMMDBody read through these so
-// changing a vector signal (e.g. user drags the "expressiveness" slider)
-// rescales arms, legs, spine, head together — no per-bone editing needed.
-//
-// `_amp(baseline, { expr, energy, gaze, fidget, range, talkSpeed })`
-//   returns `baseline * factor` where factor is a weighted sum of the
-//   selected signals around 1.0 (default vector reproduces the old
-//   constant). Each weight is the SHARE of the signal in the multiplier,
-//   capped so a single signal at 1.0 can roughly *double* the gesture but
-//   not blow it up. Falls back to baseline when no vector is set.
-
-function _ampFactor(weights) {
-  const v = motionManager.getPersonalityVector?.()
-  if (!v) return 1
-  let factor = 1
-  if (weights.expr)      factor += (v.expressiveness - 0.45) * weights.expr
-  if (weights.energy)    factor += (v.energy - 0.5)        * weights.energy
-  if (weights.gaze)      factor += (v.gazeStrength - 0.45) * weights.gaze
-  if (weights.fidget)    factor += (v.fidgetiness - 0.3)   * weights.fidget
-  if (weights.range)     factor += (v.movementRange - 0.2) * weights.range
-  if (weights.talkSpeed) factor += (v.talkSpeed - 0.5)     * weights.talkSpeed
-  if (weights.warmth)    factor += (v.warmth - 0.5)        * weights.warmth
-  // Clamp the final factor: 0.4x .. 1.9x of the baseline. Stops a maxed-out
-  // expressive slider from making elbows clip the head.
-  return Math.max(0.4, Math.min(1.9, factor))
-}
-
-function _amp(baseline, weights) {
-  return baseline * _ampFactor(weights)
-}
-
-// ── PMX/MMD procedural body (Phase H1) ─────────────────────────────────────
-// VRM has a humanoid bone API + an enforced A-pose rest. PMX bones are model-
-// specific (often Japanese, sometimes English aliases) and ship in T-pose by
-// default. We don't try to retarget here — just probe for the canonical
-// bone names and apply the same sine-wave layer that updateVRMBody uses, so
-// at minimum the legs/spine move in walk and a small breath shows in sit.
-// Bones we can't find are silently skipped; a PMX with a fully Roman-only
-// rig won't move at all, but it won't error either.
-//
-// This is a stopgap for users who keep their PMX models. Real BlueArchive-
-// quality motion still needs `.vmd` clips — see vrma/README.md for the
-// Mixamo→VMD route.
-// Phase H1 round 3 — PMX usually skins the mesh to display/deform bones
-// (`左足D`, `左ひざD`) that get their pose from the logical bones via a
-// transform-passthrough rig. When the model has both, the LOGICAL bones
-// (`左足`, `左ひざ`) are the input — but if a model author only ships the
-// D bones, those are what actually move pixels. Tries D-suffixed first
-// because user's console dump showed both, and the D-bones are guaranteed
-// to drive the mesh.
-// Codex MUST-FIX (생동감 패스): shoulder + elbow bones were missing, so
-// the upper arm never moved and motion read as "elbow-only twitch".
-// Shoulder candidates ordered by safety per Codex review — 肩C (child)
-// drives mesh in many PMX rigs without dragging arm IK; 肩 (normal)
-// is the standard hinge; 肩P (parent) only if the model lacks the
-// other two (overrotation risk on some rigs).
-const _MMD_BONE_CANDIDATES = {
-  hip:       ['腰', 'グルーブ', 'Hip', 'hip', 'Pelvis', 'Bip01_Pelvis'],
-  lowerBody: ['下半身', 'LowerBody', 'lowerBody', 'Bip01'],
-  spine:     ['上半身', 'Spine', 'spine', 'UpperBody', 'Bip01_Spine'],
-  chest:     ['上半身2', 'Chest', 'chest', 'UpperBody2', 'Bip01_Spine1'],
-  neck:      ['首', 'Neck', 'neck', 'Bip01_Neck'],
-  head:      ['頭', 'Head', 'head', 'Bip01_Head'],
-  lShoulder: ['左肩C', '左肩', '左肩P', 'L_Shoulder', 'shoulder_L', 'LeftShoulder', 'Bip01_L_Clavicle'],
-  rShoulder: ['右肩C', '右肩', '右肩P', 'R_Shoulder', 'shoulder_R', 'RightShoulder', 'Bip01_R_Clavicle'],
-  lArm:      ['左腕', 'L_Arm', 'arm_L', 'leftArm', 'LeftArm', 'L_UpperArm',
-              'LeftUpperArm', 'UpperArm_L', 'Bip01_L_UpperArm'],
-  rArm:      ['右腕', 'R_Arm', 'arm_R', 'rightArm', 'RightArm', 'R_UpperArm',
-              'RightUpperArm', 'UpperArm_R', 'Bip01_R_UpperArm'],
-  lArmTwist: ['左腕捩', 'L_ArmTwist', 'LeftArmTwist'],
-  rArmTwist: ['右腕捩', 'R_ArmTwist', 'RightArmTwist'],
-  lElbow:    ['左ひじ', '左ヒジ', '左肘', 'L_Elbow', 'elbow_L', 'LeftElbow', 'L_LowerArm', 'LeftLowerArm', 'Bip01_L_Forearm'],
-  rElbow:    ['右ひじ', '右ヒジ', '右肘', 'R_Elbow', 'elbow_R', 'RightElbow', 'R_LowerArm', 'RightLowerArm', 'Bip01_R_Forearm'],
-  lHandTwist:['左手捩', 'L_HandTwist', 'LeftHandTwist'],
-  rHandTwist:['右手捩', 'R_HandTwist', 'RightHandTwist'],
-  lLeg:      ['左足D', '左足', 'L_Leg', 'leg_L', 'leftLeg', 'LeftLeg',
-              'L_UpperLeg', 'LeftUpperLeg', 'UpperLeg_L', 'L_Thigh',
-              'Bip01_L_Thigh'],
-  rLeg:      ['右足D', '右足', 'R_Leg', 'leg_R', 'rightLeg', 'RightLeg',
-              'R_UpperLeg', 'RightUpperLeg', 'UpperLeg_R', 'R_Thigh',
-              'Bip01_R_Thigh'],
-  lKnee:     ['左ひざD', '左ひざ', '左膝', 'L_Knee', 'knee_L', 'leftKnee',
-              'LeftKnee', 'L_LowerLeg', 'LeftLowerLeg', 'LowerLeg_L',
-              'L_Calf', 'Bip01_L_Calf'],
-  rKnee:     ['右ひざD', '右ひざ', '右膝', 'R_Knee', 'knee_R', 'rightKnee',
-              'RightKnee', 'R_LowerLeg', 'RightLowerLeg', 'LowerLeg_R',
-              'R_Calf', 'Bip01_R_Calf'],
-}
-
-function _findMmdBone(mesh, candidates) {
-  if (!mesh?.skeleton) return null
-  const skel = mesh.skeleton
-  for (const name of candidates) {
-    const direct = skel.getBoneByName?.(name)
-    if (direct) return direct
-    const fallback = skel.bones?.find?.((b) => b.name === name)
-    if (fallback) return fallback
-  }
-  return null
-}
-
-let _mmdBoneCache = null
-let _mmdBoneCacheKey = null
-function _getMmdBones(mesh) {
-  if (_mmdBoneCacheKey === mesh && _mmdBoneCache) return _mmdBoneCache
-  _mmdBoneCache = {}
-  const missing = []
-  for (const [key, candidates] of Object.entries(_MMD_BONE_CANDIDATES)) {
-    _mmdBoneCache[key] = _findMmdBone(mesh, candidates)
-    if (!_mmdBoneCache[key]) missing.push(key)
-  }
-  _mmdBoneCacheKey = mesh
-  // Phase H1 diagnostic: dump found bones + the full bone roster the model
-  // actually shipped with, so a user who reports "legs still frozen" can
-  // open the console (F12) and paste back the bone names. We add the
-  // missing aliases on the next pass instead of guessing.
-  const allBones = mesh.skeleton?.bones?.map((b) => b.name) || []
-  console.info('[Apia MMD bones]', {
-    found: Object.fromEntries(
-      Object.entries(_mmdBoneCache).map(([k, b]) => [k, b?.name || null])
-    ),
-    missing,
-    allBones,
+  const { summed } = computePoseTargets({
+    registry,
+    saccadeState: saccade,
+    t,
+    look,
+    state,
+    motion,
+    personality,
+    clipMask,
   })
-  return _mmdBoneCache
-}
 
-// Codex MUST-FIX (생동감): per-character phase offsets so two PMX models
-// with the same personality don't move in perfect lockstep. Seeded from
-// `mesh.uuid` so it's stable across frames + reproducible across reloads.
-function _phaseOffsetFor(mesh, slot) {
-  // Codex NICE-TO-HAVE round 2: JS `%` is signed, so the old version
-  // sometimes produced negative phases. Force the positive modulus, and
-  // multiply the slot in instead of XOR-ing so each slot maps to a
-  // visibly distinct phase ring.
-  let h = 0
-  const id = mesh?.uuid || ''
-  for (let i = 0; i < id.length; i += 1) {
-    h = ((h << 5) - h) + id.charCodeAt(i)
-    h |= 0
-  }
-  const salted = ((h * 31) + slot * 9973) >>> 0
-  return ((salted % 6283) / 1000) // 0..2π (6283 ≈ 2π * 1000)
-}
-
-// Scratch objects reused every frame so we don't churn the GC inside the
-// hot per-bone loop. updateMMDBody is the only caller.
-const _armPoseQuat = new Quaternion()
-const _armPoseEuler = new Euler(0, 0, 0, 'XYZ')
-
-/**
- * Anatomical arm pose: keep the PMX rest pose as the base, then layer
- * (Z = abduction-reduction so the arm hangs by the torso instead of
- * sticking out T-pose, X = flexion/extension swing for walking/talking).
- * Snapshots `restQuat` on first touch and writes through `bone.quaternion`
- * so the change persists across frames cleanly.
- *
- * @param {object|null} bone - PMX upper-arm bone (`左腕` / `右腕`) or null
- * @param {number} swingX - flexion/extension angle (rad), signed
- * @param {number} abductionZ - how far to pull the arm down (rad). Negative
- *   for the left arm, positive for the right — the local-X axis points
- *   outward to the wrist in PMX rigs, so positive Z rotates the arm down
- *   on the right side and negative does the mirror on the left.
- */
-function _applyArmPose(bone, swingX, abductionZ) {
-  if (!bone) return
-  if (!bone.userData._restQuat) {
-    bone.userData._restQuat = bone.quaternion.clone()
-  }
-  _armPoseEuler.set(swingX, 0, abductionZ)
-  _armPoseQuat.setFromEuler(_armPoseEuler)
-  bone.quaternion.copy(bone.userData._restQuat).multiply(_armPoseQuat)
-}
-
-function updateMMDBody(t) {
-  if (!currentModel || currentModel.type !== 'mmd') return
-  const mesh = currentModel.obj
-  if (!mesh?.skeleton) return
-  const bones = _getMmdBones(mesh)
-
-  const look = getLookTarget()
-  const state = getState()
-  const motion = getCurrentMotion()
-  const intensity = Number.isFinite(motion?.intensity) ? motion.intensity : 1
-
-  // Per-character phase offsets — break the symmetric lockstep that made
-  // body/head/arms tick on identical sin curves.
-  const pBreath = _phaseOffsetFor(mesh, 1)
-  const pSway   = _phaseOffsetFor(mesh, 2)
-  const pHead   = _phaseOffsetFor(mesh, 3)
-  const pArm    = _phaseOffsetFor(mesh, 4)
-  const pShoulder = _phaseOffsetFor(mesh, 5)
-
-  // Codex MUST-FIX (생동감): tiny saccade noise on top of mouse-tracked gaze
-  // so the eyes never look perfectly steady — humans never do.
-  const saccadeX = Math.sin(t * 3.1 + pHead) * 0.012 + Math.sin(t * 1.3) * 0.006
-  const saccadeY = Math.sin(t * 2.7 + pSway) * 0.008
-  const lx = look.x + saccadeX
-  const ly = look.y + saccadeY
-
-  const breath = Math.sin(t * 0.55 + pBreath)
-  const breathChest = Math.sin(t * 0.55 + pBreath + 0.4)  // slight lag vs spine
-  const sway = Math.sin(t * 0.28 + pSway)
-  const swayHip = Math.sin(t * 0.28 + pSway + 0.6)  // hip lags chest
-  const isTalk = state === 'talk'
-
-  // Spine / chest breath with phase lag — drives "the chest follows the
-  // belly half a beat later", which reads as alive instead of mechanical.
-  if (bones.spine) {
-    bones.spine.rotation.x = breath * 0.008 * intensity
-    bones.spine.rotation.z = sway * 0.006 * intensity
-  }
-  if (bones.chest) {
-    bones.chest.rotation.x = breathChest * 0.014 * intensity
-    bones.chest.rotation.z = -sway * 0.003 * intensity  // counter-twist
-  }
-  if (bones.hip) {
-    bones.hip.rotation.z = swayHip * 0.025 * intensity
-    bones.hip.rotation.x = breath * 0.008 * intensity
-  }
-  if (bones.lowerBody) {
-    bones.lowerBody.rotation.z = swayHip * 0.012 * intensity
-  }
-
-  // Look target — neck does most of the work, head adds micro motion +
-  // saccade. lx/ly already include saccade noise above.
-  if (bones.neck) {
-    bones.neck.rotation.y = lx * 0.12
-    bones.neck.rotation.x = -ly * 0.06
-  }
-  if (bones.head) {
-    bones.head.rotation.y = lx * 0.08 + Math.sin(t * 0.5 + pHead) * 0.018
-    bones.head.rotation.x = -ly * 0.04 + Math.sin(t * 0.4 + pHead) * 0.008
-    bones.head.rotation.z = Math.sin(t * 0.32 + pHead) * 0.009
-  }
-
-  // ── Shoulders + upper arms (Codex MUST-FIX 생동감) ─────────────────
-  // Shoulders sway with the chest counter-twist so they don't read as a
-  // fixed block when only the elbow moves. Asymmetric phase between L/R.
-  const shoulderAmp = _amp(0.018, { expr: 0.8, fidget: 0.4 })
-  if (bones.lShoulder) {
-    bones.lShoulder.rotation.x = Math.sin(t * 0.6 + pShoulder) * shoulderAmp * intensity
-    bones.lShoulder.rotation.z = sway * shoulderAmp * 0.7 * intensity
-  }
-  if (bones.rShoulder) {
-    bones.rShoulder.rotation.x = Math.sin(t * 0.6 + pShoulder + 0.9) * shoulderAmp * intensity
-    bones.rShoulder.rotation.z = -sway * shoulderAmp * 0.7 * intensity
-  }
-
-  // Arms — anatomical fix (사용자 보고: T-pose with swing).
-  // PMX rest pose stores the upper arm at ~90° abduction (T-pose). Before
-  // this round we overwrote `rotation.x` with a tiny swing, which left the
-  // arm horizontal and just rocked it forward/back — exactly the silhouette
-  // the user reported. Real anatomy: standing posture has the upper arm
-  // adducted to ~5–10° from the torso, with flexion/extension swing of
-  // ±20° during a relaxed walk.
-  //
-  // Fix: snapshot the bone's rest quaternion on first touch, then build a
-  // delta = (Z-abduction reduction) * (X-flex/ext swing) and apply it as
-  // `quaternion = rest * delta`. PMX upper-arm bones are aligned so local
-  // +Z roughly maps to body-forward — rotating around Z pulls the arm down
-  // to the torso (negative for L, positive for R because the bone's local
-  // X points outward to the wrist).
-  const armTalkAmp = _amp(0.07, { expr: 1.0, talkSpeed: 0.4 })
-  const armSwayAmp = _amp(0.022, { fidget: 0.6, energy: 0.4 })
-  const talkSwayL = isTalk
-    ? Math.sin(t * 2.2 + pArm) * armTalkAmp * intensity
-    : sway * armSwayAmp * intensity
-  const talkSwayR = isTalk
-    ? Math.sin(t * 2.2 + pArm + 1.3) * armTalkAmp * 0.85 * intensity
-    : -sway * armSwayAmp * 0.8 * intensity
-  const ARM_ABDUCTION_REDUCTION = 1.15 // ~66° pulled toward the torso
-  _applyArmPose(bones.lArm, talkSwayL, -ARM_ABDUCTION_REDUCTION)
-  _applyArmPose(bones.rArm, talkSwayR, ARM_ABDUCTION_REDUCTION)
-
-  // Elbows + forearm twist. Without these the upper arm rotates but the
-  // forearm stays rigid → the "shoulder fixed, only forearm moves" feel
-  // the user reported. Talk state drives a wider arc; idle keeps a small
-  // settle motion.
-  const elbowTalkAmp = _amp(0.10, { expr: 1.0, talkSpeed: 0.4 })
-  const elbowIdleAmp = _amp(0.025, { fidget: 0.6 })
-  if (bones.lElbow) {
-    bones.lElbow.rotation.x = isTalk
-      ? Math.sin(t * 1.8 + pArm) * elbowTalkAmp * intensity
-      : Math.sin(t * 0.6 + pArm) * elbowIdleAmp * intensity
-  }
-  if (bones.rElbow) {
-    bones.rElbow.rotation.x = isTalk
-      ? Math.sin(t * 1.8 + pArm + 1.1) * elbowTalkAmp * intensity
-      : Math.sin(t * 0.6 + pArm + 0.7) * elbowIdleAmp * intensity
-  }
-  // Twist bones add subtle wrist roll — barely visible but breaks the
-  // "stiff arm" silhouette in close-up.
-  const twistAmp = _amp(0.015, { expr: 0.5 })
-  if (bones.lArmTwist)   bones.lArmTwist.rotation.x = Math.sin(t * 1.2 + pArm + 0.3) * twistAmp * intensity
-  if (bones.rArmTwist)   bones.rArmTwist.rotation.x = Math.sin(t * 1.2 + pArm + 1.7) * twistAmp * intensity
-  if (bones.lHandTwist)  bones.lHandTwist.rotation.x = Math.sin(t * 1.5 + pArm + 0.6) * twistAmp * 0.7 * intensity
-  if (bones.rHandTwist)  bones.rHandTwist.rotation.x = Math.sin(t * 1.5 + pArm + 1.4) * twistAmp * 0.7 * intensity
-
-  // Legs — sit / walk / standing fallback
-  if (state === 'sit') {
-    const sitBreath = breath * 0.012 * intensity
-    if (bones.lLeg) bones.lLeg.rotation.x = -1.35 + sitBreath
-    if (bones.rLeg) bones.rLeg.rotation.x = -1.35 + sitBreath
-    if (bones.lKnee) bones.lKnee.rotation.x = 1.70 - sitBreath
-    if (bones.rKnee) bones.rKnee.rotation.x = 1.70 - sitBreath
-  } else if (state === 'walk') {
-    // Step 1: stride speed + swing scale with energy/movementRange. Same
-    // vector signals updateVRMBody uses, so a personality applied to a PMX
-    // model reads identically to the same personality on a VRM model.
-    const stride = t * (6.5 + (_ampFactor({ energy: 0.6 }) - 1) * 2)
-    const swing = _amp(0.35, { energy: 0.6, range: 0.4 }) * intensity
+  // — Walk gait overlay. Procedural sine on top of the summed map so the
+  // spring filter is the only consumer. Same stride math the old
+  // updateVRMBody used; this is the one part of the body where layered
+  // breath isn't the right model. Foot/hip phase drives everything else.
+  if (state === 'walk' && !clipMask) {
+    const intensity = Number.isFinite(motion?.intensity) ? motion.intensity : 1
+    const energyBoost = (personality.energy ?? 0.5) - 0.5
+    const stride = t * (6.5 + energyBoost * 2)
+    const range = (personality.movementRange ?? 0.5) - 0.5
+    const swing = 0.35 * intensity * (1 + range * 0.4)
     const phase = Math.sin(stride)
-    const kneeAmp = _amp(0.3, { energy: 0.5, range: 0.4 })
-    const armWalkAmp = _amp(0.30, { energy: 0.6, expr: 0.4 })
-    if (bones.lLeg) bones.lLeg.rotation.x = phase * swing
-    if (bones.rLeg) bones.rLeg.rotation.x = -phase * swing
-    if (bones.lKnee) bones.lKnee.rotation.x = Math.max(0, Math.sin(stride + 0.4)) * kneeAmp
-    if (bones.rKnee) bones.rKnee.rotation.x = Math.max(0, -Math.sin(stride + 0.4)) * kneeAmp
-    if (bones.lArm) bones.lArm.rotation.x = -phase * armWalkAmp
-    if (bones.rArm) bones.rArm.rotation.x = phase * armWalkAmp
-    // Spine weight-shift + chest counter-yaw (matches updateVRMBody pattern)
-    if (bones.spine) {
-      bones.spine.rotation.z = phase * 0.045 * intensity
-      bones.spine.rotation.x = breath * 0.005 * intensity + Math.abs(phase) * 0.01 * intensity
+    const kneePhase = Math.sin(stride + 0.4)
+    const kneeAmp = 0.30 * intensity * (1 + range * 0.4)
+    const armWalkAmp = 0.30 * intensity * (1 + energyBoost * 0.4)
+    function bump(role, dx, dy, dz) {
+      if (!registry.roles.has(role)) return
+      const cur = summed.get(role) || { x: 0, y: 0, z: 0 }
+      cur.x += dx || 0
+      cur.y += dy || 0
+      cur.z += dz || 0
+      summed.set(role, cur)
     }
-    if (bones.chest) {
-      bones.chest.rotation.y = -phase * 0.06 * intensity
+    bump('lLeg', phase * swing, 0, 0)
+    bump('rLeg', -phase * swing, 0, 0)
+    bump('lKnee', Math.max(0, kneePhase) * kneeAmp, 0, 0)
+    bump('rKnee', Math.max(0, -kneePhase) * kneeAmp, 0, 0)
+    bump('lArm', -phase * armWalkAmp, 0, 0)
+    bump('rArm', phase * armWalkAmp, 0, 0)
+    bump('spine', Math.abs(phase) * 0.01 * intensity, 0, phase * 0.045 * intensity)
+    bump('chest', 0, -phase * 0.06 * intensity, 0)
+    bump('head', 0, Math.sin(stride * 0.5) * 0.035 * intensity, 0)
+  }
+
+  stepPoseSpring(spring, summed, delta, clipMask)
+  applyPose(registry, spring, clipMask)
+
+  // VRM-only: blink expression. PMX blink rides on the morph map and is
+  // driven by lipsyncMMD/lipsyncVRM downstream.
+  if (currentModel.type === 'vrm') {
+    const vrm = currentModel.obj
+    if (vrm?.expressionManager) {
+      const b = t % 4.0
+      vrm.expressionManager.setValue('blink', b < 0.12 ? Math.sin((b / 0.12) * Math.PI) : 0)
     }
-    if (bones.head) {
-      bones.head.rotation.y += Math.sin(stride * 0.5) * 0.035 * intensity
-    }
-  } else {
-    // Phase H1 round 3 — user reported "legs still frozen" after round 2.
-    // Two causes addressed here: (a) amplitudes were < 1° so motion was
-    // imperceptible, (b) hip/lowerBody wasn't moving so even leg rotation
-    // wouldn't read as "shifting weight". Cranked the idle amplitudes ~3x
-    // and added a gentle hip rock that drags the whole lower body.
-    // Step 1: idle scale follows fidgetiness + energy. Shy character
-    // barely shifts, active one rocks side to side noticeably.
-    const idleBreath = breath * _amp(0.04, { energy: 0.6, warmth: 0.3 }) * intensity
-    const weightShift = sway * _amp(0.10, { fidget: 0.7, energy: 0.4 }) * intensity
-    if (bones.hip) {
-      bones.hip.rotation.z = sway * 0.025 * intensity
-      bones.hip.rotation.x = breath * 0.012 * intensity
-    }
-    if (bones.lowerBody) {
-      bones.lowerBody.rotation.z = sway * 0.018 * intensity
-    }
-    if (bones.lLeg) {
-      bones.lLeg.rotation.x = idleBreath
-      bones.lLeg.rotation.z = weightShift
-    }
-    if (bones.rLeg) {
-      bones.rLeg.rotation.x = idleBreath
-      bones.rLeg.rotation.z = weightShift * 0.7
-    }
-    if (bones.lKnee) bones.lKnee.rotation.x = Math.max(0, weightShift) * 0.55
-    if (bones.rKnee) bones.rKnee.rotation.x = Math.max(0, -weightShift) * 0.55
   }
 }
 
@@ -1227,15 +861,17 @@ function animate() {
       // keyframes own spine/arms/legs/hips; running updateVRMBody after
       // mixer.update() would overwrite them every frame and the user
       // sees the procedural "T-pose with arm sway" instead of the clip.
-      if (!currentModel._fbxClipActive) {
-        updateVRMBody(t)
-      }
+      // Step 5 of /goal: updateBody now uses clipMask to defer arm/torso
+      // bones to whatever the active clip (.vmd/.vrma/.fbx) wrote, while
+      // still running breath/gaze/saccade. So we no longer skip the call
+      // when an FBX clip is active — the mask handles the conflict.
+      updateBody(t, delta)
       lipsyncVRM()
       updateCharacter(root, t, delta)
     } else if (currentModel.type === 'mmd') {
       currentModel.mixer?.update(delta)
       getMmdHelper()?.update(delta)
-      updateMMDBody(t)
+      updateBody(t, delta)
       updateCharacter(root, t, delta)
       lipsyncMMD()
     } else {
