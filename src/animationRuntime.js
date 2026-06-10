@@ -396,8 +396,13 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
 
           // helper.add는 같은 mesh에 호출돼도 누적될 수 있다. remove 먼저 호출해서
           // 이전 animation / mixer state를 깔끔히 비우고 새 clip을 단다.
+          // Codex MUST-FIX (생동감): physics: true so hair/skirt rigid
+          // bodies keep swinging while the animation track plays. The
+          // initial helper.add (in main.js after MMDLoader.load) already
+          // turned physics on; re-adding with `physics:false` was killing
+          // the simulator the moment any clip played.
           try { helper.remove(model.obj) } catch {}
-          helper.add(model.obj, { animation: clip, physics: false })
+          helper.add(model.obj, { animation: clip, physics: true })
 
           if (!loop) {
             // MMDAnimationHelper가 mesh별로 내부 mixer를 만든다. helper.objects는

@@ -383,8 +383,33 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
           sourcePath: url
         }
 
-        // `helper` is the modelRuntime singleton — no need to mirror it here,
-        // consumers reach it via getMmdHelper().
+        // Codex MUST-FIX (생동감): turn the MMD physics simulator on so
+        // hair/skirt/ribbons (rigid bodies + joints baked into the PMX)
+        // actually swing. helper.add without an animation just registers
+        // the mesh + enables physics; playMMDAnimation later remove/adds
+        // with the same `physics:true` so the animation track joins the
+        // already-active simulation. Diagnostic logs the rigid body /
+        // constraint counts so a user reporting "hair still fixed" can
+        // tell whether the model itself shipped without physics data.
+        try {
+          helper?.add?.(mesh, { physics: true })
+          const physicsBody = mesh.geometry?.userData?.MMD
+          const rigidBodyCount = physicsBody?.rigidBodies?.length ?? 0
+          const constraintCount = physicsBody?.constraints?.length ?? 0
+          const morphNames = Object.keys(mesh.morphTargetDictionary || {})
+          console.info('[Apia MMD physics + morphs]', {
+            rigidBodyCount,
+            constraintCount,
+            physicsEnabled: rigidBodyCount > 0,
+            morphCount: morphNames.length,
+            morphSample: morphNames.slice(0, 32),
+          })
+          if (rigidBodyCount === 0) {
+            console.warn('[Apia MMD] model ships with no rigid bodies — hair/clothes will not sway')
+          }
+        } catch (err) {
+          console.warn('[Apia MMD] physics enable failed', err)
+        }
         void helper
         applyCharacterScale()
         alignCharacterToGround()
@@ -818,19 +843,31 @@ function _amp(baseline, weights) {
 // D bones, those are what actually move pixels. Tries D-suffixed first
 // because user's console dump showed both, and the D-bones are guaranteed
 // to drive the mesh.
+// Codex MUST-FIX (생동감 패스): shoulder + elbow bones were missing, so
+// the upper arm never moved and motion read as "elbow-only twitch".
+// Shoulder candidates ordered by safety per Codex review — 肩C (child)
+// drives mesh in many PMX rigs without dragging arm IK; 肩 (normal)
+// is the standard hinge; 肩P (parent) only if the model lacks the
+// other two (overrotation risk on some rigs).
 const _MMD_BONE_CANDIDATES = {
-  // Lower-body anchors that make a noticeable difference even when leg
-  // bones are stuck. `腰`/`下半身` wobble drags the legs visually.
   hip:       ['腰', 'グルーブ', 'Hip', 'hip', 'Pelvis', 'Bip01_Pelvis'],
   lowerBody: ['下半身', 'LowerBody', 'lowerBody', 'Bip01'],
   spine:     ['上半身', 'Spine', 'spine', 'UpperBody', 'Bip01_Spine'],
   chest:     ['上半身2', 'Chest', 'chest', 'UpperBody2', 'Bip01_Spine1'],
   neck:      ['首', 'Neck', 'neck', 'Bip01_Neck'],
   head:      ['頭', 'Head', 'head', 'Bip01_Head'],
+  lShoulder: ['左肩C', '左肩', '左肩P', 'L_Shoulder', 'shoulder_L', 'LeftShoulder', 'Bip01_L_Clavicle'],
+  rShoulder: ['右肩C', '右肩', '右肩P', 'R_Shoulder', 'shoulder_R', 'RightShoulder', 'Bip01_R_Clavicle'],
   lArm:      ['左腕', 'L_Arm', 'arm_L', 'leftArm', 'LeftArm', 'L_UpperArm',
               'LeftUpperArm', 'UpperArm_L', 'Bip01_L_UpperArm'],
   rArm:      ['右腕', 'R_Arm', 'arm_R', 'rightArm', 'RightArm', 'R_UpperArm',
               'RightUpperArm', 'UpperArm_R', 'Bip01_R_UpperArm'],
+  lArmTwist: ['左腕捩', 'L_ArmTwist', 'LeftArmTwist'],
+  rArmTwist: ['右腕捩', 'R_ArmTwist', 'RightArmTwist'],
+  lElbow:    ['左ひじ', '左ヒジ', '左肘', 'L_Elbow', 'elbow_L', 'LeftElbow', 'L_LowerArm', 'LeftLowerArm', 'Bip01_L_Forearm'],
+  rElbow:    ['右ひじ', '右ヒジ', '右肘', 'R_Elbow', 'elbow_R', 'RightElbow', 'R_LowerArm', 'RightLowerArm', 'Bip01_R_Forearm'],
+  lHandTwist:['左手捩', 'L_HandTwist', 'LeftHandTwist'],
+  rHandTwist:['右手捩', 'R_HandTwist', 'RightHandTwist'],
   lLeg:      ['左足D', '左足', 'L_Leg', 'leg_L', 'leftLeg', 'LeftLeg',
               'L_UpperLeg', 'LeftUpperLeg', 'UpperLeg_L', 'L_Thigh',
               'Bip01_L_Thigh'],
@@ -883,6 +920,24 @@ function _getMmdBones(mesh) {
   return _mmdBoneCache
 }
 
+// Codex MUST-FIX (생동감): per-character phase offsets so two PMX models
+// with the same personality don't move in perfect lockstep. Seeded from
+// `mesh.uuid` so it's stable across frames + reproducible across reloads.
+function _phaseOffsetFor(mesh, slot) {
+  // Codex NICE-TO-HAVE round 2: JS `%` is signed, so the old version
+  // sometimes produced negative phases. Force the positive modulus, and
+  // multiply the slot in instead of XOR-ing so each slot maps to a
+  // visibly distinct phase ring.
+  let h = 0
+  const id = mesh?.uuid || ''
+  for (let i = 0; i < id.length; i += 1) {
+    h = ((h << 5) - h) + id.charCodeAt(i)
+    h |= 0
+  }
+  const salted = ((h * 31) + slot * 9973) >>> 0
+  return ((salted % 6283) / 1000) // 0..2π (6283 ≈ 2π * 1000)
+}
+
 function updateMMDBody(t) {
   if (!currentModel || currentModel.type !== 'mmd') return
   const mesh = currentModel.obj
@@ -890,46 +945,111 @@ function updateMMDBody(t) {
   const bones = _getMmdBones(mesh)
 
   const look = getLookTarget()
-  const lx = look.x
-  const ly = look.y
   const state = getState()
   const motion = getCurrentMotion()
   const intensity = Number.isFinite(motion?.intensity) ? motion.intensity : 1
 
-  const breath = Math.sin(t * 0.55)
-  const sway = Math.sin(t * 0.28)
+  // Per-character phase offsets — break the symmetric lockstep that made
+  // body/head/arms tick on identical sin curves.
+  const pBreath = _phaseOffsetFor(mesh, 1)
+  const pSway   = _phaseOffsetFor(mesh, 2)
+  const pHead   = _phaseOffsetFor(mesh, 3)
+  const pArm    = _phaseOffsetFor(mesh, 4)
+  const pShoulder = _phaseOffsetFor(mesh, 5)
+
+  // Codex MUST-FIX (생동감): tiny saccade noise on top of mouse-tracked gaze
+  // so the eyes never look perfectly steady — humans never do.
+  const saccadeX = Math.sin(t * 3.1 + pHead) * 0.012 + Math.sin(t * 1.3) * 0.006
+  const saccadeY = Math.sin(t * 2.7 + pSway) * 0.008
+  const lx = look.x + saccadeX
+  const ly = look.y + saccadeY
+
+  const breath = Math.sin(t * 0.55 + pBreath)
+  const breathChest = Math.sin(t * 0.55 + pBreath + 0.4)  // slight lag vs spine
+  const sway = Math.sin(t * 0.28 + pSway)
+  const swayHip = Math.sin(t * 0.28 + pSway + 0.6)  // hip lags chest
   const isTalk = state === 'talk'
 
-  // Spine / chest breath (subtle — small models can over-amplify)
+  // Spine / chest breath with phase lag — drives "the chest follows the
+  // belly half a beat later", which reads as alive instead of mechanical.
   if (bones.spine) {
-    bones.spine.rotation.x = breath * 0.006 * intensity
-    bones.spine.rotation.z = sway * 0.005 * intensity
+    bones.spine.rotation.x = breath * 0.008 * intensity
+    bones.spine.rotation.z = sway * 0.006 * intensity
   }
   if (bones.chest) {
-    bones.chest.rotation.x = breath * 0.012 * intensity
+    bones.chest.rotation.x = breathChest * 0.014 * intensity
+    bones.chest.rotation.z = -sway * 0.003 * intensity  // counter-twist
+  }
+  if (bones.hip) {
+    bones.hip.rotation.z = swayHip * 0.025 * intensity
+    bones.hip.rotation.x = breath * 0.008 * intensity
+  }
+  if (bones.lowerBody) {
+    bones.lowerBody.rotation.z = swayHip * 0.012 * intensity
   }
 
-  // Look target (neck does most of the work, head adds micro motion)
+  // Look target — neck does most of the work, head adds micro motion +
+  // saccade. lx/ly already include saccade noise above.
   if (bones.neck) {
     bones.neck.rotation.y = lx * 0.12
     bones.neck.rotation.x = -ly * 0.06
   }
   if (bones.head) {
-    bones.head.rotation.y = lx * 0.08 + Math.sin(t * 0.5) * 0.015
-    bones.head.rotation.x = -ly * 0.04
+    bones.head.rotation.y = lx * 0.08 + Math.sin(t * 0.5 + pHead) * 0.018
+    bones.head.rotation.x = -ly * 0.04 + Math.sin(t * 0.4 + pHead) * 0.008
+    bones.head.rotation.z = Math.sin(t * 0.32 + pHead) * 0.009
+  }
+
+  // ── Shoulders + upper arms (Codex MUST-FIX 생동감) ─────────────────
+  // Shoulders sway with the chest counter-twist so they don't read as a
+  // fixed block when only the elbow moves. Asymmetric phase between L/R.
+  const shoulderAmp = _amp(0.018, { expr: 0.8, fidget: 0.4 })
+  if (bones.lShoulder) {
+    bones.lShoulder.rotation.x = Math.sin(t * 0.6 + pShoulder) * shoulderAmp * intensity
+    bones.lShoulder.rotation.z = sway * shoulderAmp * 0.7 * intensity
+  }
+  if (bones.rShoulder) {
+    bones.rShoulder.rotation.x = Math.sin(t * 0.6 + pShoulder + 0.9) * shoulderAmp * intensity
+    bones.rShoulder.rotation.z = -sway * shoulderAmp * 0.7 * intensity
   }
 
   // Arms — PMX rest is usually T-pose so we layer small motion only.
-  // No forced A-pose drop here: model authors stretch arms differently and a
-  // forced 0.9 rad rotation can fold the sleeves through the body.
-  // Step 1: amplitudes routed through _amp() so the same expressiveness /
-  // energy / fidgetiness slider that scales the VRM rig scales the PMX rig.
-  const armTalkAmp = _amp(0.05, { expr: 1.0, talkSpeed: 0.4 })
-  const armSwayAmp = _amp(0.014, { fidget: 0.6, energy: 0.4 })
-  const talkSwayL = isTalk ? Math.sin(t * 2.2) * armTalkAmp * intensity : sway * armSwayAmp * intensity
-  const talkSwayR = isTalk ? Math.sin(t * 2.2 + 1.1) * armTalkAmp * intensity : -sway * armSwayAmp * intensity
+  // Codex MUST-FIX (생동감): asymmetric phase + larger talk amplitude so
+  // the upper arm reads as moving with the body, not waiting for the elbow.
+  const armTalkAmp = _amp(0.07, { expr: 1.0, talkSpeed: 0.4 })
+  const armSwayAmp = _amp(0.022, { fidget: 0.6, energy: 0.4 })
+  const talkSwayL = isTalk
+    ? Math.sin(t * 2.2 + pArm) * armTalkAmp * intensity
+    : sway * armSwayAmp * intensity
+  const talkSwayR = isTalk
+    ? Math.sin(t * 2.2 + pArm + 1.3) * armTalkAmp * 0.85 * intensity
+    : -sway * armSwayAmp * 0.8 * intensity  // 0.8 = subtle asymmetry
   if (bones.lArm) bones.lArm.rotation.x = talkSwayL
   if (bones.rArm) bones.rArm.rotation.x = talkSwayR
+
+  // Elbows + forearm twist. Without these the upper arm rotates but the
+  // forearm stays rigid → the "shoulder fixed, only forearm moves" feel
+  // the user reported. Talk state drives a wider arc; idle keeps a small
+  // settle motion.
+  const elbowTalkAmp = _amp(0.10, { expr: 1.0, talkSpeed: 0.4 })
+  const elbowIdleAmp = _amp(0.025, { fidget: 0.6 })
+  if (bones.lElbow) {
+    bones.lElbow.rotation.x = isTalk
+      ? Math.sin(t * 1.8 + pArm) * elbowTalkAmp * intensity
+      : Math.sin(t * 0.6 + pArm) * elbowIdleAmp * intensity
+  }
+  if (bones.rElbow) {
+    bones.rElbow.rotation.x = isTalk
+      ? Math.sin(t * 1.8 + pArm + 1.1) * elbowTalkAmp * intensity
+      : Math.sin(t * 0.6 + pArm + 0.7) * elbowIdleAmp * intensity
+  }
+  // Twist bones add subtle wrist roll — barely visible but breaks the
+  // "stiff arm" silhouette in close-up.
+  const twistAmp = _amp(0.015, { expr: 0.5 })
+  if (bones.lArmTwist)   bones.lArmTwist.rotation.x = Math.sin(t * 1.2 + pArm + 0.3) * twistAmp * intensity
+  if (bones.rArmTwist)   bones.rArmTwist.rotation.x = Math.sin(t * 1.2 + pArm + 1.7) * twistAmp * intensity
+  if (bones.lHandTwist)  bones.lHandTwist.rotation.x = Math.sin(t * 1.5 + pArm + 0.6) * twistAmp * 0.7 * intensity
+  if (bones.rHandTwist)  bones.rHandTwist.rotation.x = Math.sin(t * 1.5 + pArm + 1.4) * twistAmp * 0.7 * intensity
 
   // Legs — sit / walk / standing fallback
   if (state === 'sit') {
