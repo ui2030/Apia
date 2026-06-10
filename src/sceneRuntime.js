@@ -66,13 +66,28 @@ const CAM_DEFAULT = Object.freeze({
 // AmbientLight; bumping wall warmth + adding amber wood floor + a slightly
 // warmer ceiling gets the right "afternoon sunlight in a school cafe" vibe
 // before any texture work.
+//
+// Phase E — Apia is an *overlay* on the desktop. The opaque walls/floor/
+// ceiling from Phase D were blanking out the desktop the user actually
+// wants to see behind the character. Each surface keeps its color but goes
+// transparent at a tuned opacity so the desktop reads through:
+//   - walls + ceiling: low opacity (just a wash of room tint)
+//   - floor: low opacity (a hint of the wood, not a slab)
+//   - shadow catcher stays as-is (it's already alpha-driven)
+// Furniture meshes deliberately stay opaque — the character + furniture are
+// the "in front of the glass" subject; the room is the "behind the glass"
+// implication.
 export const ROOM = Object.freeze({
   width: 8,    // x extent (-4 .. +4)
   depth: 6,    // z extent (0 .. +6)
   height: 3,   // y extent (0 .. +3)
   wallColor: 0xfff5e1,   // warm pastel cream (was 0xeae3d8)
   floorColor: 0xc9956a,  // walnut / honey wood (was 0xd8cdb8)
-  ceilColor: 0xfff8ea    // brighter cream so the room doesn't feel low
+  ceilColor: 0xfff8ea,   // brighter cream so the room doesn't feel low
+  wallOpacity: 0.22,
+  floorOpacity: 0.30,
+  ceilOpacity: 0.18,
+  rugOpacity: 0.55
 })
 
 // Window cutout on the back wall — gives the "afternoon light" implication
@@ -231,10 +246,17 @@ function buildRoom(scene) {
   root.name = 'apia-room'
 
   // Colored floor inside the shadow plane. Slightly inset so the shadow
-  // catcher above (y=0.001) renders shadows on top.
+  // catcher above (y=0.001) renders shadows on top. Phase E: low-opacity
+  // so the actual desktop is visible underneath the wood tint.
   const floor = new Mesh(
     new PlaneGeometry(ROOM.width, ROOM.depth),
-    new MeshStandardMaterial({ color: ROOM.floorColor, roughness: 0.95, metalness: 0 })
+    new MeshStandardMaterial({
+      color: ROOM.floorColor,
+      roughness: 0.95,
+      metalness: 0,
+      transparent: true,
+      opacity: ROOM.floorOpacity
+    })
   )
   floor.rotation.x = -Math.PI / 2
   floor.position.set(0, 0, ROOM.depth / 2)
@@ -245,7 +267,9 @@ function buildRoom(scene) {
     color: ROOM.wallColor,
     roughness: 0.9,
     metalness: 0,
-    side: BackSide // visible from inside the room only
+    side: BackSide, // visible from inside the room only
+    transparent: true,
+    opacity: ROOM.wallOpacity
   })
 
   // Back wall sits at z=0 — the deepest wall, farthest from the camera. A
@@ -322,7 +346,9 @@ function buildRoom(scene) {
     color: ROOM.ceilColor,
     roughness: 0.95,
     metalness: 0,
-    side: DoubleSide
+    side: DoubleSide,
+    transparent: true,
+    opacity: ROOM.ceilOpacity
   })
   const ceilingDepth = ROOM.depth / 2
   const ceiling = new Mesh(new PlaneGeometry(ROOM.width, ceilingDepth), ceilMat)
@@ -490,9 +516,19 @@ function buildRug(f) {
   // Codex NICE-TO-HAVE round 1: shadowFloor sits at y=0.001. Rug at y=0.01
   // so it never z-fights, and casts no shadow itself (it IS the shadow
   // receiver visually).
+  // Phase E: the rug is the largest "room" surface inside the camera's
+  // direct line of sight, so transparency here matters a lot for keeping
+  // the desktop visible. Slightly higher opacity than the walls because
+  // the rug pattern wants to read as a softening pad under the character.
   const rug = new Mesh(
     new PlaneGeometry(f.size.w, f.size.d),
-    softMat(f.color)
+    new MeshStandardMaterial({
+      color: f.color,
+      roughness: 0.95,
+      metalness: 0,
+      transparent: true,
+      opacity: ROOM.rugOpacity
+    })
   )
   rug.rotation.x = -Math.PI / 2
   rug.position.set(f.position.x, f.position.y, f.position.z)
