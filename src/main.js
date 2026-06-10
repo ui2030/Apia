@@ -3,12 +3,14 @@ import {
   Box3,
   CapsuleGeometry,
   DoubleSide,
+  Euler,
   FrontSide,
   Group,
   LoadingManager,
   Mesh,
   MeshLambertMaterial,
   PlaneGeometry,
+  Quaternion,
   Raycaster,
   SphereGeometry,
   Vector2,
@@ -954,6 +956,35 @@ function _phaseOffsetFor(mesh, slot) {
   return ((salted % 6283) / 1000) // 0..2π (6283 ≈ 2π * 1000)
 }
 
+// Scratch objects reused every frame so we don't churn the GC inside the
+// hot per-bone loop. updateMMDBody is the only caller.
+const _armPoseQuat = new Quaternion()
+const _armPoseEuler = new Euler(0, 0, 0, 'XYZ')
+
+/**
+ * Anatomical arm pose: keep the PMX rest pose as the base, then layer
+ * (Z = abduction-reduction so the arm hangs by the torso instead of
+ * sticking out T-pose, X = flexion/extension swing for walking/talking).
+ * Snapshots `restQuat` on first touch and writes through `bone.quaternion`
+ * so the change persists across frames cleanly.
+ *
+ * @param {object|null} bone - PMX upper-arm bone (`左腕` / `右腕`) or null
+ * @param {number} swingX - flexion/extension angle (rad), signed
+ * @param {number} abductionZ - how far to pull the arm down (rad). Negative
+ *   for the left arm, positive for the right — the local-X axis points
+ *   outward to the wrist in PMX rigs, so positive Z rotates the arm down
+ *   on the right side and negative does the mirror on the left.
+ */
+function _applyArmPose(bone, swingX, abductionZ) {
+  if (!bone) return
+  if (!bone.userData._restQuat) {
+    bone.userData._restQuat = bone.quaternion.clone()
+  }
+  _armPoseEuler.set(swingX, 0, abductionZ)
+  _armPoseQuat.setFromEuler(_armPoseEuler)
+  bone.quaternion.copy(bone.userData._restQuat).multiply(_armPoseQuat)
+}
+
 function updateMMDBody(t) {
   if (!currentModel || currentModel.type !== 'mmd') return
   const mesh = currentModel.obj
@@ -1029,9 +1060,20 @@ function updateMMDBody(t) {
     bones.rShoulder.rotation.z = -sway * shoulderAmp * 0.7 * intensity
   }
 
-  // Arms — PMX rest is usually T-pose so we layer small motion only.
-  // Codex MUST-FIX (생동감): asymmetric phase + larger talk amplitude so
-  // the upper arm reads as moving with the body, not waiting for the elbow.
+  // Arms — anatomical fix (사용자 보고: T-pose with swing).
+  // PMX rest pose stores the upper arm at ~90° abduction (T-pose). Before
+  // this round we overwrote `rotation.x` with a tiny swing, which left the
+  // arm horizontal and just rocked it forward/back — exactly the silhouette
+  // the user reported. Real anatomy: standing posture has the upper arm
+  // adducted to ~5–10° from the torso, with flexion/extension swing of
+  // ±20° during a relaxed walk.
+  //
+  // Fix: snapshot the bone's rest quaternion on first touch, then build a
+  // delta = (Z-abduction reduction) * (X-flex/ext swing) and apply it as
+  // `quaternion = rest * delta`. PMX upper-arm bones are aligned so local
+  // +Z roughly maps to body-forward — rotating around Z pulls the arm down
+  // to the torso (negative for L, positive for R because the bone's local
+  // X points outward to the wrist).
   const armTalkAmp = _amp(0.07, { expr: 1.0, talkSpeed: 0.4 })
   const armSwayAmp = _amp(0.022, { fidget: 0.6, energy: 0.4 })
   const talkSwayL = isTalk
@@ -1039,9 +1081,10 @@ function updateMMDBody(t) {
     : sway * armSwayAmp * intensity
   const talkSwayR = isTalk
     ? Math.sin(t * 2.2 + pArm + 1.3) * armTalkAmp * 0.85 * intensity
-    : -sway * armSwayAmp * 0.8 * intensity  // 0.8 = subtle asymmetry
-  if (bones.lArm) bones.lArm.rotation.x = talkSwayL
-  if (bones.rArm) bones.rArm.rotation.x = talkSwayR
+    : -sway * armSwayAmp * 0.8 * intensity
+  const ARM_ABDUCTION_REDUCTION = 1.15 // ~66° pulled toward the torso
+  _applyArmPose(bones.lArm, talkSwayL, -ARM_ABDUCTION_REDUCTION)
+  _applyArmPose(bones.rArm, talkSwayR, ARM_ABDUCTION_REDUCTION)
 
   // Elbows + forearm twist. Without these the upper arm rotates but the
   // forearm stays rigid → the "shoulder fixed, only forearm moves" feel
