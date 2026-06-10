@@ -489,6 +489,11 @@ function clearModel() {
     getVRMUtils()?.deepDispose(currentModel.root)
   }
 
+  // Phase H1: drop the MMD bone cache so the next model resolves its own
+  // bones from scratch (PMX bone naming varies per author).
+  _mmdBoneCache = null
+  _mmdBoneCacheKey = null
+
   currentModel = null
 }
 
@@ -725,6 +730,135 @@ function updateVRMBody(t) {
   }
 }
 
+// ── PMX/MMD procedural body (Phase H1) ─────────────────────────────────────
+// VRM has a humanoid bone API + an enforced A-pose rest. PMX bones are model-
+// specific (often Japanese, sometimes English aliases) and ship in T-pose by
+// default. We don't try to retarget here — just probe for the canonical
+// bone names and apply the same sine-wave layer that updateVRMBody uses, so
+// at minimum the legs/spine move in walk and a small breath shows in sit.
+// Bones we can't find are silently skipped; a PMX with a fully Roman-only
+// rig won't move at all, but it won't error either.
+//
+// This is a stopgap for users who keep their PMX models. Real BlueArchive-
+// quality motion still needs `.vmd` clips — see vrma/README.md for the
+// Mixamo→VMD route.
+const _MMD_BONE_CANDIDATES = {
+  spine:     ['上半身', 'Spine', 'spine'],
+  chest:     ['上半身2', 'Chest', 'chest'],
+  neck:      ['首', 'Neck', 'neck'],
+  head:      ['頭', 'Head', 'head'],
+  lArm:      ['左腕', 'L_Arm', 'arm_L', 'leftArm', 'LeftArm'],
+  rArm:      ['右腕', 'R_Arm', 'arm_R', 'rightArm', 'RightArm'],
+  lLeg:      ['左足', 'L_Leg', 'leg_L', 'leftLeg', 'LeftLeg'],
+  rLeg:      ['右足', 'R_Leg', 'leg_R', 'rightLeg', 'RightLeg'],
+  lKnee:     ['左ひざ', '左膝', 'L_Knee', 'knee_L', 'leftKnee', 'LeftKnee'],
+  rKnee:     ['右ひざ', '右膝', 'R_Knee', 'knee_R', 'rightKnee', 'RightKnee'],
+}
+
+function _findMmdBone(mesh, candidates) {
+  if (!mesh?.skeleton) return null
+  const skel = mesh.skeleton
+  for (const name of candidates) {
+    const direct = skel.getBoneByName?.(name)
+    if (direct) return direct
+    const fallback = skel.bones?.find?.((b) => b.name === name)
+    if (fallback) return fallback
+  }
+  return null
+}
+
+let _mmdBoneCache = null
+let _mmdBoneCacheKey = null
+function _getMmdBones(mesh) {
+  if (_mmdBoneCacheKey === mesh && _mmdBoneCache) return _mmdBoneCache
+  _mmdBoneCache = {}
+  for (const [key, candidates] of Object.entries(_MMD_BONE_CANDIDATES)) {
+    _mmdBoneCache[key] = _findMmdBone(mesh, candidates)
+  }
+  _mmdBoneCacheKey = mesh
+  return _mmdBoneCache
+}
+
+function updateMMDBody(t) {
+  if (!currentModel || currentModel.type !== 'mmd') return
+  const mesh = currentModel.obj
+  if (!mesh?.skeleton) return
+  const bones = _getMmdBones(mesh)
+
+  const look = getLookTarget()
+  const lx = look.x
+  const ly = look.y
+  const state = getState()
+  const motion = getCurrentMotion()
+  const intensity = Number.isFinite(motion?.intensity) ? motion.intensity : 1
+
+  const breath = Math.sin(t * 0.55)
+  const sway = Math.sin(t * 0.28)
+  const isTalk = state === 'talk'
+
+  // Spine / chest breath (subtle — small models can over-amplify)
+  if (bones.spine) {
+    bones.spine.rotation.x = breath * 0.006 * intensity
+    bones.spine.rotation.z = sway * 0.005 * intensity
+  }
+  if (bones.chest) {
+    bones.chest.rotation.x = breath * 0.012 * intensity
+  }
+
+  // Look target (neck does most of the work, head adds micro motion)
+  if (bones.neck) {
+    bones.neck.rotation.y = lx * 0.12
+    bones.neck.rotation.x = -ly * 0.06
+  }
+  if (bones.head) {
+    bones.head.rotation.y = lx * 0.08 + Math.sin(t * 0.5) * 0.015
+    bones.head.rotation.x = -ly * 0.04
+  }
+
+  // Arms — PMX rest is usually T-pose so we layer small motion only.
+  // No forced A-pose drop here: model authors stretch arms differently and a
+  // forced 0.9 rad rotation can fold the sleeves through the body.
+  const talkSwayL = isTalk ? Math.sin(t * 2.2) * 0.05 * intensity : sway * 0.014 * intensity
+  const talkSwayR = isTalk ? Math.sin(t * 2.2 + 1.1) * 0.05 * intensity : -sway * 0.014 * intensity
+  if (bones.lArm) bones.lArm.rotation.x = talkSwayL
+  if (bones.rArm) bones.rArm.rotation.x = talkSwayR
+
+  // Legs — sit / walk / standing fallback
+  if (state === 'sit') {
+    const sitBreath = breath * 0.012 * intensity
+    if (bones.lLeg) bones.lLeg.rotation.x = -1.35 + sitBreath
+    if (bones.rLeg) bones.rLeg.rotation.x = -1.35 + sitBreath
+    if (bones.lKnee) bones.lKnee.rotation.x = 1.70 - sitBreath
+    if (bones.rKnee) bones.rKnee.rotation.x = 1.70 - sitBreath
+  } else if (state === 'walk') {
+    const stride = t * 7.5
+    const swing = 0.35 * intensity
+    const phase = Math.sin(stride)
+    if (bones.lLeg) bones.lLeg.rotation.x = phase * swing
+    if (bones.rLeg) bones.rLeg.rotation.x = -phase * swing
+    if (bones.lKnee) bones.lKnee.rotation.x = Math.max(0, Math.sin(stride + 0.4)) * 0.3
+    if (bones.rKnee) bones.rKnee.rotation.x = Math.max(0, -Math.sin(stride + 0.4)) * 0.3
+    if (bones.lArm) bones.lArm.rotation.x = -phase * 0.30
+    if (bones.rArm) bones.rArm.rotation.x = phase * 0.30
+    // Spine weight-shift + chest counter-yaw (matches updateVRMBody pattern)
+    if (bones.spine) {
+      bones.spine.rotation.z = phase * 0.045 * intensity
+      bones.spine.rotation.x = breath * 0.005 * intensity + Math.abs(phase) * 0.01 * intensity
+    }
+    if (bones.chest) {
+      bones.chest.rotation.y = -phase * 0.06 * intensity
+    }
+    if (bones.head) {
+      bones.head.rotation.y += Math.sin(stride * 0.5) * 0.035 * intensity
+    }
+  } else {
+    if (bones.lLeg) bones.lLeg.rotation.x = 0
+    if (bones.rLeg) bones.rLeg.rotation.x = 0
+    if (bones.lKnee) bones.lKnee.rotation.x = 0
+    if (bones.rKnee) bones.rKnee.rotation.x = 0
+  }
+}
+
 function lipsyncVRM() {
   const em = currentModel.obj.expressionManager
   if (!em) return
@@ -773,6 +907,7 @@ function animate() {
     } else if (currentModel.type === 'mmd') {
       currentModel.mixer?.update(delta)
       getMmdHelper()?.update(delta)
+      updateMMDBody(t)
       updateCharacter(root, t, delta)
       lipsyncMMD()
     } else {

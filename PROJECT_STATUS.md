@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-11 (motion clip sample + procedural walk/sit polish)
+Last updated: 2026-06-11 (PMX procedural fallback)
 
 ## Goal
 
@@ -497,7 +497,25 @@ Key files (F1 fix + F2):
   - walk 분기에 layered: spine.z = phase * 0.045 (체중 이동), chest.y = -phase * 0.06 (어깨 반대 위상), head.y += sin(stride/2) * 0.035 (머리 lag). 발걸음 한 사이클에 몸이 좌우로 미세하게 흔들리는 시각.
 - 자연스러움 풀세트를 원하면 사용자가 BOOTH/Mixamo로 받아 폴더에 드롭하면 자동 픽업.
 
-### 26. Dependency security pass
+### 26. Phase H1 — PMX procedural body (MMD 캐릭터 T-pose 탈출)
+
+사용자가 마음에 들어하는 캐릭터들이 모두 PMX(MMD)인데 받아둔 24개 `.vrma`는 VRM 전용이라 적용 X (본 매핑 영문↔일본어 불일치). 또 사용자가 ".vmd 직접 받는 건 나쁜 선택, 자연스럽지 못한 부분 많음"이라 명시. Codex round 1: H1을 PMX procedural fallback으로 강등 (Mixamo 워크플로는 후속 선택형).
+
+- `src/main.js`에 `updateMMDBody(t)` 신설. VRM `updateVRMBody`와 같은 sine-wave layer (breath/sway/look tracking/walk gait/sit breath)를 PMX bone에 적용.
+- `_MMD_BONE_CANDIDATES`: 일본어 표준(`上半身/上半身2/首/頭/左腕/右腕/左足/右足/左ひざ/右ひざ`) + 영문 alias(`L_Arm/leftArm/LeftArm`, `L_Leg/leftLeg`, …) 첫 매칭.
+- `_findMmdBone()` + `_getMmdBones()` mesh-키 캐시 (매 프레임 본 검색 X). `clearModel`에서 캐시 초기화.
+- 본 못 찾으면 silent skip — 모델별 본 작명 차이 흡수.
+- Forced A-pose drop은 *적용 안 함* (PMX rest는 T-pose, 모델별 본 축 차이로 폴딩 위험). 따라서 다리·spine 흔들림은 보이지만 팔이 T자에 머무는 모델이 일부 있음 — 진짜 자연스러움은 `.vmd` 클립 필요.
+
+**Codex round 1 사후 검증 APPROVE: yes**
+
+**후속 (H2~H3 — Mixamo 워크플로, 사용자 의도 결정 시)**
+- Mixamo (Adobe 무료) 클립 + `AmyangXYZ/Mixamo-MMD` Vercel 변환기로 .vmd 자동 변환.
+- 사용자가 클립만 고르면 변환은 자동.
+- 라이센스: Mixamo asset = Adobe TOS (개인/상업 OK, 재배포 비권장 → `.gitignore`로 사용자 .vmd가 Apia git에 묻히지 않게).
+- Apia settings UI에 "모션 가져오기" 체크리스트형 import assistant — 외부 링크 + 파일 드롭 → user-data 런타임 경로에 저장.
+
+### 27. Dependency security pass
 
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".
