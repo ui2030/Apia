@@ -1,6 +1,15 @@
 // src/chat.js - 채팅, STT, TTS
 import { setState, getState } from './characterController.js'
 import { setEmotion, requestFaceCamera } from './characterController.js'
+
+// Step 3: character raycaster injected by main.js. null = wallpaper mode
+// active (or just no character loaded) — click-through manager skips the
+// raycast branch and pointerdown ignores hits. Stays nullable so updates
+// from settings broadcasts can flip it at runtime.
+let _characterRaycaster = null
+export function setCharacterRaycaster(fn) {
+  _characterRaycaster = typeof fn === 'function' ? fn : null
+}
 let _showBubble, _startSpeaking, _stopSpeaking, _applyEmotion
 let _getTalkMotion, _getIdleMotion
 
@@ -96,29 +105,51 @@ function startClickThroughManager() {
   let restoreTimer = null
   const RESTORE_DELAY = 300
 
+  // Step 3 — last known mouse position so the per-frame raycaster knows
+  // where to shoot. window mousemove because the canvas is click-through
+  // when we're not capturing.
+  let mouseX = null
+  let mouseY = null
+  window.addEventListener('mousemove', (e) => {
+    mouseX = e.clientX
+    mouseY = e.clientY
+  }, { passive: true })
+
+  // Click on the character → toggle the chat panel (same as the chat
+  // button). Only fires when raycast hit AND a raycaster is installed
+  // (which main.js refuses to install when wallpaper mode is on).
+  window.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return // primary button only — right-click is OS
+    if (!_characterRaycaster) return
+    if (!_characterRaycaster(e.clientX, e.clientY)) return
+    const toggle = document.getElementById('chat-toggle')
+    toggle?.click()
+  })
+
+  function characterHover() {
+    if (!_characterRaycaster || mouseX == null) return false
+    return _characterRaycaster(mouseX, mouseY) === true
+  }
+
   function poll() {
-    // :hover 셀렉터로 현재 마우스가 올라간 UI 확인
     const hovered = document.querySelector(
       '#chat-toggle:hover, #settings-btn:hover, ' +
       '#chat-panel.visible:hover, .world-object:hover'
-    )
+    ) || characterHover()
 
     if (hovered && !capturing) {
-      // UI 위에 진입 → 클릭 수신 시작
       capturing = true
       clearTimeout(restoreTimer)
       window.api?.setIgnoreMouse(false)
 
     } else if (!hovered && capturing) {
-      // UI 밖으로 나감 → 지연 후 클릭 통과 복원
       if (!restoreTimer) {
         restoreTimer = setTimeout(() => {
           restoreTimer = null
-          // 타이머 만료 시점에 재확인
           const stillHovered = document.querySelector(
             '#chat-toggle:hover, #settings-btn:hover, ' +
             '#chat-panel.visible:hover, .world-object:hover'
-          )
+          ) || characterHover()
           if (!stillHovered) {
             capturing = false
             window.api?.setIgnoreMouse(true)

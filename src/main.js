@@ -9,13 +9,15 @@ import {
   Mesh,
   MeshLambertMaterial,
   PlaneGeometry,
+  Raycaster,
   SphereGeometry,
+  Vector2,
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
 import { updateCharacter, onMouseMove, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector } from './characterController.js'
 import { initWorld, updateWorldLabels } from './world.js'
-import { initChat } from './chat.js'
+import { initChat, setCharacterRaycaster } from './chat.js'
 import { MotionManager } from './motionManager.js'
 import { resolveMotionAsset, resolveMmdMotionAsset } from './motionAssets.js'
 import {
@@ -1205,6 +1207,34 @@ initChat({
     return motionManager.pickIdleMotion()
   }
 })
+
+// Step 3 — click on the character to open the chat panel.
+// Only registered when wallpaper mode is OFF (overlay mode). In wallpaper
+// mode the OS routes clicks to the desktop, so the chat.js raycast path
+// is intentionally dormant; trays + Ctrl+Alt+A are the supported entry
+// points there. Codex MUST-FIX: raycast against `currentModel.root`
+// (VRM .obj is a wrapper, not a hierarchy with geometry; root is the
+// canonical group every model type adds to the scene).
+const _raycaster = new Raycaster()
+const _rayMouse = new Vector2()
+function characterRaycast(clientX, clientY) {
+  if (!currentModel?.root || !camera) return false
+  _rayMouse.x = (clientX / window.innerWidth) * 2 - 1
+  _rayMouse.y = -(clientY / window.innerHeight) * 2 + 1
+  _raycaster.setFromCamera(_rayMouse, camera)
+  const hits = _raycaster.intersectObject(currentModel.root, true)
+  return hits.length > 0
+}
+
+function updateCharacterClickability(settings) {
+  const wallpaperOn = settings?.useWallpaperMode !== false
+  setCharacterRaycaster(wallpaperOn ? null : characterRaycast)
+}
+
+if (window.api?.getSettings) {
+  window.api.getSettings().then(updateCharacterClickability).catch(() => {})
+}
+window.api?.onSettingsApplied?.((s) => updateCharacterClickability(s))
 
 // Phase F2: listen for character actions forwarded from the standalone chat
 // window. Each action is a plain object — main process already validated it
