@@ -45,6 +45,9 @@ def _install_fake_claude_module() -> MagicMock:
     """Replace `services.claude_service.ClaudeService` before chat.py imports it."""
     fake_claude = MagicMock(name="ClaudeService_instance")
     fake_claude.chat = AsyncMock(return_value=("Hello! [EMOTION:happy]", "happy"))
+    # summarize는 step 2부터 MemoryService가 호출. lifespan에서 None이 아닌
+    # callable이어야 enabled가 살아있으므로 AsyncMock으로 둔다.
+    fake_claude.summarize = AsyncMock(return_value="요약된 텍스트")
     fake_claude.is_mode_initialized = MagicMock(return_value=True)
     fake_claude.list_initialized_modes = MagicMock(return_value=["groq"])
     fake_claude.list_available_modes = MagicMock(return_value=["claude", "groq"])
