@@ -13,7 +13,20 @@ const runtimeRoot = join(appDataDir, 'apia')
 const runtimeLogPath = join(runtimeRoot, 'logs', 'main.log')
 const backendEnvExamplePath = join(runtimeRoot, 'backend-data', 'backend.env.example')
 const successMarkers = ['[APP_READY]', '[WINDOW_LOAD_FINISH] main', '[BACKEND_READY]']
-const failureMarkers = ['[BACKEND_READY_TIMEOUT]', '[BACKEND_SPAWN_ERROR]', '[UNCAUGHT_EXCEPTION]', '[UNHANDLED_REJECTION]']
+// Step 4 — wallpaper attach (Phase F1) is a packaged-build-only path:
+// require('electron-as-wallpaper') resolves a native .node binding that
+// is unpacked from .asar via asarUnpack. If asarUnpack drops or the
+// binary doesn't ship, wallpaperMode.js logs [WALLPAPER_ATTACH_FAIL] or
+// [WALLPAPER_UNAVAILABLE]. Either is a release-blocking regression that
+// no source-tree test catches, so we sniff them here.
+const failureMarkers = [
+  '[BACKEND_READY_TIMEOUT]',
+  '[BACKEND_SPAWN_ERROR]',
+  '[UNCAUGHT_EXCEPTION]',
+  '[UNHANDLED_REJECTION]',
+  '[WALLPAPER_ATTACH_FAIL]',
+  '[WALLPAPER_UNAVAILABLE]',
+]
 
 async function assertExists(targetPath, errorCode) {
   try {

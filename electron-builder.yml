@@ -1,0 +1,35 @@
+appId: com.apia.desktop
+productName: Apia
+asar: true
+
+# Step 4 — electron-as-wallpaper ships a Win32 native .node binding
+# (Progman → WorkerW + SetParent). Native modules can't be required from
+# inside an .asar archive on Windows; electron-builder has to unpack them
+# next to the .asar so `require('electron-as-wallpaper')` resolves at run
+# time. Pattern matches the package's npm layout (build/release/*.node).
+asarUnpack:
+  - node_modules/electron-as-wallpaper/**/*
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+  - node_modules/electron-as-wallpaper/**/*
+
+extraResources:
+  - from: backend-dist/ApiaBackend.exe
+    to: backend/ApiaBackend.exe
+
+win:
+  target:
+    - nsis
+  executableName: Apia
+  signAndEditExecutable: false
+
+nsis:
+  artifactName: '${productName}-Setup-${version}.${ext}'
+  oneClick: false
+  allowToChangeInstallationDirectory: true
