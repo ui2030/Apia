@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require('electron')
 app.commandLine.appendSwitch('allow-file-access-from-files')
 
 const path = require('path')
@@ -269,10 +269,16 @@ ipcMain.handle('check-backend', async () => {
   return { ok: Boolean(started && (await backend.isHealthy(1200))) }
 })
 
-ipcMain.handle('send-message', async (e, { message, history }) => {
+ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
   try {
     await backend.ensureAvailableForRequest()
     const settings = loadSettings()
+    // Per-message `useWeb` (boolean) overrides settings.useWebDefault when
+    // explicit. `undefined` from older callers falls back to the saved
+    // default. Cast to boolean either way so the payload is JSON-safe.
+    const resolvedUseWeb = typeof useWeb === 'boolean'
+      ? useWeb
+      : settings.useWebDefault === true
     return await requestBackendJson('/chat', {
       method: 'POST',
       timeout: 30000,
@@ -280,7 +286,8 @@ ipcMain.handle('send-message', async (e, { message, history }) => {
       message,
       history,
       ai_mode: settings.aiMode,
-      memory_turns: settings.memoryTurns
+      memory_turns: settings.memoryTurns,
+      use_web: resolvedUseWeb
       }
     })
   } catch (e) {
@@ -338,6 +345,122 @@ ipcMain.handle('warmup:status', async () => {
     return await requestBackendJson('/warmup', { method: 'GET', timeout: 3000 })
   } catch {
     return null
+  }
+})
+
+// ── /store/* surface (steps 2-4 long-term memory / file / web search) ─────
+//
+// Every handler returns `null` on failure so the renderer doesn't need to
+// parse exception strings. Same convention as warmup:status. Per Codex
+// MUST-FIX (frontend integration round 1): there are 12 store endpoints,
+// not 9 — keep IPC + preload + the smoke probe in sync.
+
+function makeStoreGet(path) {
+  return async () => {
+    try {
+      await backend.ensureAvailableForRequest()
+      return await requestBackendJson(path, { method: 'GET', timeout: 8000 })
+    } catch (error) {
+      logWarn('[STORE_IPC_FAIL]', path, error?.message || error)
+      return null
+    }
+  }
+}
+
+function makeStorePost(path, { timeout = 30000 } = {}) {
+  return async (_event, body) => {
+    try {
+      await backend.ensureAvailableForRequest()
+      return await requestBackendJson(path, {
+        method: 'POST',
+        timeout,
+        body: body || {}
+      })
+    } catch (error) {
+      logWarn('[STORE_IPC_FAIL]', path, error?.message || error)
+      return null
+    }
+  }
+}
+
+ipcMain.handle('store:embeddingStatus', makeStoreGet('/store/embedding/status'))
+ipcMain.handle('store:embeddingWarmup', makeStorePost('/store/embedding/warmup', { timeout: 120000 }))
+
+ipcMain.handle('store:memoryStats', makeStoreGet('/store/memory/stats'))
+ipcMain.handle('store:memorySummarize', makeStorePost('/store/memory/summarize', { timeout: 60000 }))
+
+ipcMain.handle('store:filesListFolders', makeStoreGet('/store/files/folders'))
+ipcMain.handle('store:filesAddFolder', makeStorePost('/store/files/folders'))
+ipcMain.handle('store:filesRemoveFolder', async (_event, body) => {
+  // DELETE with a JSON body — requestBackendJson supports method override.
+  try {
+    await backend.ensureAvailableForRequest()
+    return await requestBackendJson('/store/files/folders', {
+      method: 'DELETE', timeout: 15000, body: body || {}
+    })
+  } catch (error) {
+    logWarn('[STORE_IPC_FAIL]', '/store/files/folders DELETE', error?.message || error)
+    return null
+  }
+})
+// Reindex can take a while if the folder is large; cap is generous.
+ipcMain.handle('store:filesReindex', makeStorePost('/store/files/reindex', { timeout: 300000 }))
+ipcMain.handle('store:filesIngestText', makeStorePost('/store/files/ingest_text', { timeout: 60000 }))
+ipcMain.handle('store:filesStats', makeStoreGet('/store/files/stats'))
+
+ipcMain.handle('store:webStats', makeStoreGet('/store/web/stats'))
+ipcMain.handle('store:webSearch', makeStorePost('/store/web/search', { timeout: 20000 }))
+
+// Native folder picker for the settings UI's "폴더 추가" button. Always
+// returns `{ canceled, path }` so the renderer doesn't need to distinguish a
+// cancel from an error — both yield `path: null`. APIA_E2E_NO_SHELL_OPEN
+// short-circuits the dialog so headless GUI tests don't hang on a modal.
+ipcMain.handle('store:pickFolder', async () => {
+  if (APIA_E2E_NO_SHELL_OPEN) {
+    return { canceled: true, path: null, stubbed: true }
+  }
+  try {
+    const mainWin = windows.getMain()
+    const result = await dialog.showOpenDialog(mainWin || null, {
+      title: '인덱싱할 폴더 선택',
+      properties: ['openDirectory']
+    })
+    if (result.canceled || !result.filePaths?.[0]) {
+      return { canceled: true, path: null }
+    }
+    return { canceled: false, path: result.filePaths[0] }
+  } catch (error) {
+    logWarn('[STORE_PICK_FOLDER_FAIL]', error)
+    return { canceled: true, path: null, error: error?.message || String(error) }
+  }
+})
+
+// citation chip click → open the source URL in the system browser. The
+// allowlist is paranoid by design: only http(s), nothing file: or javascript:
+// or app: schemes that could side-effect the OS. Per Codex MUST-FIX
+// (frontend integration round 1).
+ipcMain.handle('open-external', async (_event, url) => {
+  if (typeof url !== 'string' || !url) {
+    return { ok: false, error: 'invalid url' }
+  }
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    return { ok: false, error: 'malformed url' }
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    logWarn('[OPEN_EXTERNAL_BLOCKED_SCHEME]', parsed.protocol)
+    return { ok: false, error: 'only http/https URLs are allowed' }
+  }
+  if (APIA_E2E_NO_SHELL_OPEN) {
+    return { ok: true, stubbed: true, url: parsed.toString() }
+  }
+  try {
+    await shell.openExternal(parsed.toString())
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) }
   }
 })
 

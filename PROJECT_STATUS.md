@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-10
+Last updated: 2026-06-10 (frontend integration pass)
 
 ## Goal
 
@@ -142,14 +142,14 @@ These commands passed after the latest updates:
 ```powershell
 npm run build              # vite 6
 python -m compileall backend
-npm run verify             # vite build + node --check + vitest run (178 tests)
+npm run verify             # vite build + node --check + vitest run (181 tests)
 npm run dist:dir           # electron-builder 26
 npm run smoke:release      # startup markers + HTTP behavior probes
 backend/.venv/Scripts/python.exe -m pytest backend  # 99 tests
 ```
 
 Test totals (current):
-- Frontend (vitest): 178 across 9 files — schemas, repairs, registryService, backendEnvRepository, windowBoundsPolicy, settingsAggregate, windowManager, backendDiscovery, backendLifecycle
+- Frontend (vitest): 181 across 9 files — schemas, repairs, registryService, backendEnvRepository, windowBoundsPolicy, settingsAggregate, windowManager, backendDiscovery, backendLifecycle
 - Backend (pytest): 99 across 8 files — test_contracts, test_warmup_domain, test_store_service, test_embedding_service, test_memory_service, test_file_index_service, test_context_assembler, test_web_search_service
 
 ## Current Known State
@@ -292,7 +292,44 @@ Key files:
 - [backend/ai_config.py](backend/ai_config.py) (`WEB_PROVIDER`, `WEB_API_KEY`, `WEB_MAX_RESULTS`, `WEB_TIMEOUT_SECONDS`)
 - [backend/tests/test_web_search_service.py](backend/tests/test_web_search_service.py)
 
-### 19. Dependency security pass
+### 19. Frontend integration (step 2-4 features wired into Electron / renderer / settings UI)
+
+After the backend wired memory / files / web search, none of it reached the user until this pass — settings UI had no knobs, the chat panel ignored citations, preload didn't expose any new IPC channels. This pass closes that gap.
+
+- `electron/preload.js` now exposes 13 new methods under `window.api.store.*` plus top-level `openExternal` for citation chips. The grouped shape (`store.memoryStats`, `store.filesAddFolder`, …) keeps the global flat API self-documenting while doubling the surface.
+- `electron/main.js` registers 14 new `ipcMain.handle`s: every `/store/*` endpoint, a native folder picker (`dialog.showOpenDialog`), and an `open-external` channel that enforces `http`/`https` only via `URL.protocol` check before `shell.openExternal` — Codex MUST-FIX (round 1): without the allowlist a malicious citation URL could trigger `file:` / `app:` schemes.
+- `electron/services/backendEnvRepository.js`: `ALLOWED_KEYS` extended from 3 to 7 (added `APIA_WEB_PROVIDER`, `APIA_WEB_API_KEY`, `APIA_MEMORY_ENABLED`, `APIA_FILES_ENABLED`). New `READABLE_KEYS` allow-set lets `presence()` echo the *value* for non-secret toggles (provider name, boolean strings) so the UI can pre-select; secrets remain presence-only. `backend.env.example` now also documents every step 2-4 key.
+- `electron/schemas.js` + `electron/services/settingsAggregate.js`: `useWebDefault: boolean` added with safe coercion (non-boolean → false). Default `false` so a fresh install doesn't trigger web searches before a provider is configured.
+- `electron/main.js` `send-message` handler now picks `use_web` from per-call override → settings default, casting to boolean either way.
+- `src/chat.js` reads `useWebDefault` into chat state, sends `use_web` on every request, and renders `ChatResponse.citations` as a chip row under the AI bubble. Chips use `source_path` (Codex MUST-FIX — `ChatCitation` uses `source_path`, not `url`); `web` kind chips are clickable through `window.api.openExternal`, others are visually disabled.
+- `index.html` has a new `#chat-web-toggle` next to the panel title plus `.msg-citations` / `.citation-chip` styling.
+- `settings.html` "정보 활용" 섹션 new — 한국어/비개발자 친화:
+  - 장기 기억 on/off + stats(turn/summary 카운트 + 마지막 오류) + "지금 요약" 버튼.
+  - 파일 검색 on/off + 폴더 리스트(추가는 native picker, 행마다 재인덱싱·삭제) + 텍스트 직접 추가(label+textarea).
+  - 웹 검색 기본 on/off + provider select(none/tavily/brave) + 상태 표시.
+  - 임베딩 모델 상태 + "지금 받기" 버튼.
+  - 모든 toggle/select 변경은 같은 atomic `saveBackendEnvKeys` + 자동 백엔드 재시작 흐름에 합류 — 사용자에게 단일 토스트.
+- `backend/routers/warmup.py` GET status가 `memory_enabled` / `files_enabled` / `web_enabled` / `web_provider` 4개 필드를 추가로 노출. `app.state.<service>`에서 직접 읽어 lifespan이 실제로 와이어한 상태와 일치.
+- `scripts/smoke-release.mjs`가 패키지된 백엔드의 `/store/{embedding,memory,files,web}/stats` 4개 라우터 shape도 검증. 웹은 의도적으로 `enabled:false`가 정상 상태.
+- 테스트 추가: vitest 178 → 181 (backendEnvRepository에 신규 ALLOWED_KEYS/READABLE_KEYS pin + settingsAggregate `useWebDefault` 기본/강제 변환). backend pytest 99 → 그대로(통합 변경이 회귀 없음).
+
+Key files:
+
+- [electron/preload.js](electron/preload.js) (window.api.store.*, openExternal)
+- [electron/main.js](electron/main.js) (store:* IPC 14개, open-external, store:pickFolder)
+- [electron/services/backendEnvRepository.js](electron/services/backendEnvRepository.js) (ALLOWED_KEYS + READABLE_KEYS)
+- [electron/services/settingsAggregate.js](electron/services/settingsAggregate.js) (useWebDefault + backend.env.example 갱신)
+- [electron/schemas.js](electron/schemas.js) (SettingsSchema)
+- [src/chat.js](src/chat.js) (use_web 송신 + citations 렌더 + openExternal)
+- [index.html](index.html) (chat-web-toggle + citation 스타일)
+- [settings.html](settings.html) ("정보 활용" 섹션 + dataPanel 헬퍼)
+- [backend/routers/warmup.py](backend/routers/warmup.py) (memory/files/web enabled 노출)
+- [backend/schemas.py](backend/schemas.py) (WarmupStatusResponse 4 필드)
+- [scripts/smoke-release.mjs](scripts/smoke-release.mjs) (/store/* probes)
+- [tests/backendEnvRepository.test.js](tests/backendEnvRepository.test.js) (allowlist + 값 노출 정책)
+- [tests/settingsAggregate.test.js](tests/settingsAggregate.test.js) (useWebDefault)
+
+### 20. Dependency security pass
 
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".

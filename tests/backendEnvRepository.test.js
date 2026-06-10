@@ -247,6 +247,49 @@ describe('presence + applyUpdates end-to-end', () => {
   })
 })
 
+describe('data-panel allowlist (frontend integration round 1)', () => {
+  it('ALLOWED_KEYS covers step 2-4 toggles + web key/provider', () => {
+    // Pinning the allowlist so a future refactor that drops one of these
+    // breaks the test instead of silently disabling the settings UI's
+    // memory/files/web toggles.
+    expect(ALLOWED_KEYS).toEqual(expect.arrayContaining([
+      'APIA_GROQ_KEY',
+      'APIA_ANTHROPIC_KEY',
+      'APIA_HF_TOKEN',
+      'APIA_WEB_PROVIDER',
+      'APIA_WEB_API_KEY',
+      'APIA_MEMORY_ENABLED',
+      'APIA_FILES_ENABLED'
+    ]))
+  })
+
+  it('presence echoes value for non-secret toggles but never for API keys', async () => {
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(dataDir, { recursive: true })
+    await writeFile(join(dataDir, ENV_FILENAME), [
+      'APIA_GROQ_KEY=gsk_secret',
+      'APIA_WEB_API_KEY=tav_secret',
+      'APIA_WEB_PROVIDER=tavily',
+      'APIA_MEMORY_ENABLED=false',
+      'APIA_FILES_ENABLED=true'
+    ].join('\n'), { encoding: 'utf-8' })
+
+    const repo = createRepo()
+    const presence = repo.presence()
+
+    // Secrets present but value is NOT echoed.
+    expect(presence.APIA_GROQ_KEY.present).toBe(true)
+    expect(presence.APIA_GROQ_KEY.value).toBeUndefined()
+    expect(presence.APIA_WEB_API_KEY.present).toBe(true)
+    expect(presence.APIA_WEB_API_KEY.value).toBeUndefined()
+
+    // Toggles + provider name ARE echoed so the UI can pre-select.
+    expect(presence.APIA_WEB_PROVIDER.value).toBe('tavily')
+    expect(presence.APIA_MEMORY_ENABLED.value).toBe('false')
+    expect(presence.APIA_FILES_ENABLED.value).toBe('true')
+  })
+})
+
 describe('presence with hand-written file', () => {
   it('parses an existing backend.env created outside the app', async () => {
     const envPath = join(dataDir, ENV_FILENAME)

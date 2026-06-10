@@ -8,7 +8,12 @@ const state = {
   chatOpen: false,
   history: [],
   voiceId: null,
-  isListening: false
+  ttsEnabled: true,
+  memoryTurns: 10,
+  useWebDefault: false,
+  isListening: false,
+  isSending: false,
+  speechReturnState: null
 }
 
 export function initChat({
@@ -28,8 +33,46 @@ export function initChat({
 
   setupUI()
   startClickThroughManager()
+  hydrateSettings()
+  window.api?.onSettingsApplied?.((settings) => {
+    applyRuntimeSettings(settings)
+    loadVoices()
+  })
   checkBackend()
   setInterval(checkBackend, 5000)
+}
+
+function applyRuntimeSettings(settings = {}) {
+  if (typeof settings.voiceId === 'string') {
+    state.voiceId = settings.voiceId || null
+  } else if (settings.voiceId == null) {
+    state.voiceId = null
+  }
+
+  if (typeof settings.ttsEnabled === 'boolean') {
+    state.ttsEnabled = settings.ttsEnabled
+  }
+
+  if (Number.isFinite(settings.memoryTurns)) {
+    state.memoryTurns = Math.max(1, Math.min(50, settings.memoryTurns))
+  }
+
+  if (typeof settings.useWebDefault === 'boolean') {
+    state.useWebDefault = settings.useWebDefault
+    const toggle = document.getElementById('chat-web-toggle')
+    if (toggle) toggle.checked = state.useWebDefault
+  }
+}
+
+async function hydrateSettings() {
+  if (!window.api?.getSettings) return
+
+  try {
+    const settings = await window.api.getSettings()
+    applyRuntimeSettings(settings)
+  } catch (error) {
+    console.warn('[Chat] failed to hydrate settings', error)
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -88,18 +131,6 @@ function startClickThroughManager() {
   }
 
   requestAnimationFrame(poll)
-
-  // 캐릭터 근접 감지 (말풍선 전용)
-  window.addEventListener('mousemove', (e) => {
-    const nearChar = Math.hypot(
-      e.clientX - (window.innerWidth - 140),
-      e.clientY - (window.innerHeight - 250)
-    ) < 150
-    if (window.__onCharNearChange && nearChar !== window.__lastNearChar) {
-      window.__lastNearChar = nearChar
-      window.__onCharNearChange(nearChar)
-    }
-  })
 }
 
 function setupUI() {
@@ -126,6 +157,16 @@ function setupUI() {
   setupSTT(micBtn)
 }
 
+function setComposerBusy(isBusy) {
+  const chatInput = document.getElementById('chat-input')
+  const sendBtn = document.getElementById('send-btn')
+  const micBtn = document.getElementById('mic-btn')
+
+  if (chatInput) chatInput.disabled = isBusy
+  if (sendBtn) sendBtn.disabled = isBusy
+  if (micBtn) micBtn.disabled = isBusy
+}
+
 async function checkBackend() {
   const statusEl = document.getElementById('backend-status')
   if (!statusEl) return
@@ -143,14 +184,19 @@ async function loadVoices() {
   if (!window.api) return
   const d = await window.api.getVoices().catch(()=>({voices:[]}))
   if (d.voices?.length) {
-    state.voiceId = d.voices[0].id
+    const selected = d.voices.find((voice) => voice.id === state.voiceId) || d.voices[0]
+    state.voiceId = selected?.id || null
     const vl = document.getElementById('voice-label')
-    if (vl) vl.textContent = d.voices[0].name
+    if (vl && selected) vl.textContent = selected.name
   }
 }
 
 async function sendMessage(text) {
   if (!text?.trim()) return
+  if (state.isSending) return
+
+  state.isSending = true
+  setComposerBusy(true)
   appendMessage('user', text)
   const inp = document.getElementById('chat-input')
   if (inp) inp.value = ''
@@ -160,53 +206,74 @@ async function sendMessage(text) {
     let reply = '백엔드가 연결되지 않아 오프라인 모드예요. 백엔드를 실행해주세요! 🔧'
     let emotion = 'neutral'
 
+    let citations = []
     if (window.api) {
-      const r = await window.api.sendMessage(text, state.history)
+      const historyLimit = Math.max(1, Math.min(50, state.memoryTurns)) * 2
+      // Per-message toggle wins over settings default. The toggle lives in
+      // the chat panel header (chat-web-toggle); when absent or unchecked we
+      // fall back to the saved default.
+      const toggle = document.getElementById('chat-web-toggle')
+      const useWeb = toggle ? toggle.checked : state.useWebDefault
+      const r = await window.api.sendMessage(
+        text, state.history.slice(-historyLimit), { useWeb }
+      )
       if (r.reply) { reply = r.reply; emotion = r.emotion || 'neutral' }
+      if (Array.isArray(r.citations)) citations = r.citations
       if (r.error) reply = '오류: ' + r.error
     }
 
-    loading.remove()
-    appendMessage('ai', reply)
+    loading?.remove()
+    appendMessage('ai', reply, false, citations)
     state.history.push({ role:'user', content:text }, { role:'assistant', content:reply })
-    if (state.history.length > 40) state.history = state.history.slice(-40)
+    const localHistoryLimit = Math.max(1, Math.min(50, state.memoryTurns)) * 2
+    if (state.history.length > localHistoryLimit) {
+      state.history = state.history.slice(-localHistoryLimit)
+    }
 
     _showBubble?.(reply.slice(0,50)+(reply.length>50?'...':''), 4000)
     _applyEmotion?.(emotion)
-    await speakText(reply)
     const talkMotion = _getTalkMotion?.({ emotion, text: reply })
-    if (talkMotion && window.__applyMotion) {
-      window.__applyMotion(talkMotion)
-    }
+    await speakText(reply, talkMotion)
   } catch(e) {
-    loading.remove()
+    loading?.remove()
     appendMessage('ai', '오류가 발생했어요: ' + e.message)
+  } finally {
+    state.isSending = false
+    setComposerBusy(false)
   }
 }
 
-function startAutoWalkWhileSpeaking() {
-  const x = (Math.random() * 5.2) - 2.6   // 대충 화면 안 범위
-  const z = 1.2 + (Math.random() * 3.8)   // 카메라 앞쪽 범위
-
-  walkTo({ x, z })
-}
-
-function finishSpeakingMotion() {
+function finishSpeakingMotion({ didEnterTalk = false } = {}) {
   _stopSpeaking?.()
 
-  const s = getState?.()
-  if (s !== 'walk' && s !== 'sit') {
-    setState('idle')
+  const previousState =
+    state.speechReturnState && state.speechReturnState !== 'talk'
+      ? state.speechReturnState
+      : 'idle'
+
+  state.speechReturnState = null
+
+  if (didEnterTalk && getState?.() === 'talk') {
+    setState(previousState)
+  }
+
+  if (didEnterTalk && previousState === 'idle') {
+    restoreIdleMotion()
   }
 }
 
-async function speakText(text) {
+async function speakText(text, talkMotion = null) {
   if (!window.api) return
+  if (!state.ttsEnabled) return
+
+  let didEnterTalk = false
 
   try {
-    _startSpeaking?.()
+    const r = await window.api.tts(text, state.voiceId)
 
-    const r = await window.api.tts(text)
+    if (r?.disabled) {
+      return
+    }
 
     if (r.audio) {
       const bytes = atob(r.audio)
@@ -215,32 +282,51 @@ async function speakText(text) {
         buf[i] = bytes.charCodeAt(i)
       }
 
-      const audio = new Audio(
-        URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
-      )
-
-      audio.onended = () => {
-        _stopSpeaking?.()
-        restoreIdleMotion()
-        if (getState?.() === 'talk') setState('idle')
+      const audioUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
+      const audio = new Audio(audioUrl)
+      const cleanupAudio = () => {
+        URL.revokeObjectURL(audioUrl)
       }
 
+      const previousState = getState?.()
+      state.speechReturnState =
+        previousState && previousState !== 'talk'
+          ? previousState
+          : 'idle'
+
+      if (talkMotion && window.__applyMotion) {
+        window.__applyMotion(talkMotion)
+      }
+
+      _startSpeaking?.()
+      didEnterTalk = true
       setState('talk')
 
-      audio.play().catch(() => {
-        _stopSpeaking?.()
-        restoreIdleMotion()
-        if (getState?.() === 'talk') setState('idle')
+      await new Promise((resolve) => {
+        let finished = false
+        const finalizeAudio = () => {
+          if (finished) return
+          finished = true
+          cleanupAudio()
+          finishSpeakingMotion({ didEnterTalk })
+          resolve()
+        }
+
+        audio.onended = () => {
+          finalizeAudio()
+        }
+
+        audio.onerror = () => {
+          finalizeAudio()
+        }
+
+        audio.play().catch(() => {
+          finalizeAudio()
+        })
       })
-    } else {
-      _stopSpeaking?.()
-      restoreIdleMotion()
-      if (getState?.() === 'talk') setState('idle')
     }
   } catch (e) {
-    _stopSpeaking?.()
-    restoreIdleMotion()
-    if (getState?.() === 'talk') setState('idle')
+    finishSpeakingMotion({ didEnterTalk })
   }
 }
 
@@ -271,7 +357,7 @@ function setupSTT(micBtn) {
   })
 }
 
-function appendMessage(role, text, isLoading=false) {
+function appendMessage(role, text, isLoading=false, citations=null) {
   const messages = document.getElementById('messages')
   if (!messages) return null
   const row = document.createElement('div'); row.className = `msg-row ${role}`
@@ -281,9 +367,39 @@ function appendMessage(role, text, isLoading=false) {
   if (isLoading) bubble.style.opacity = '0.5'
   bubble.textContent = text
   row.appendChild(label); row.appendChild(bubble)
+  if (Array.isArray(citations) && citations.length > 0) {
+    row.appendChild(renderCitationChips(citations))
+  }
   messages.appendChild(row)
   messages.scrollTop = messages.scrollHeight
   return row
+}
+
+// Codex MUST-FIX (frontend integration round 1): backend ChatCitation uses
+// `source_path` for the URL (not `url`). Render a chip per marker; click
+// opens the source via `window.api.openExternal`, which the main process
+// gates to http/https only.
+function renderCitationChips(citations) {
+  const wrap = document.createElement('div')
+  wrap.className = 'msg-citations'
+  for (const c of citations) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'citation-chip'
+    const label = c.title?.trim() || c.source_path || '출처'
+    chip.textContent = `[${c.marker_number}] ${label}`
+    if (c.snippet) chip.title = c.snippet
+    if (c.source_kind === 'web' && c.source_path) {
+      chip.addEventListener('click', (event) => {
+        event.preventDefault()
+        window.api?.openExternal?.(c.source_path)
+      })
+    } else {
+      chip.disabled = true
+    }
+    wrap.appendChild(chip)
+  }
+  return wrap
 }
 
 function restoreIdleMotion() {

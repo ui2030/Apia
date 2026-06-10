@@ -86,6 +86,17 @@ describe('normalize', () => {
     expect(repo.normalize({ memoryTurns: 0 }).memoryTurns).toBe(1)
   })
 
+  it('useWebDefault defaults to false and coerces non-boolean to false', () => {
+    // step 4: this toggle controls whether every /chat starts with use_web=true.
+    // Default must stay `false` so a fresh install doesn't fire web searches
+    // before the user configures a provider.
+    const repo = createRepo()
+    expect(repo.normalize().useWebDefault).toBe(false)
+    expect(repo.normalize({ useWebDefault: true }).useWebDefault).toBe(true)
+    expect(repo.normalize({ useWebDefault: 'yes' }).useWebDefault).toBe(false)
+    expect(repo.normalize({ useWebDefault: 1 }).useWebDefault).toBe(false)
+  })
+
   it('rejects an unknown aiMode and falls back to default', () => {
     const repo = createRepo()
     expect(repo.normalize({ aiMode: 'gpt5' }).aiMode).toBe(SETTINGS_DEFAULTS.aiMode)

@@ -92,14 +92,24 @@ def test_warmup_get_status_shape(client, fake_claude):
     response = client.get("/warmup")
     assert response.status_code == 200
     data = response.json()
-    # All seven keys must be present — this is the contract the settings UI
-    # reads. `auto_target` was added so "Auto would use: <mode>" can render
-    # explicitly, and `available_modes`+`last_error` already existed.
+    # All required keys must be present — this is the contract the settings UI
+    # reads. step 2-4 added `memory_enabled` / `files_enabled` / `web_enabled`
+    # / `web_provider` so a single warmup probe surfaces every wired feature's
+    # state in one round-trip.
     assert set(data.keys()) >= {
         "initialized_modes", "available_modes", "auto_target",
-        "mode", "default_mode", "warming", "last_error"
+        "mode", "default_mode", "warming", "last_error",
+        "memory_enabled", "files_enabled", "web_enabled", "web_provider"
     }
     WarmupStatusResponse.model_validate(data)
+    # In the test env the lifespan wires real MemoryService / FileIndexService
+    # / WebSearchService instances; their enabled flags must be booleans (not
+    # null/None) when the lifespan actually ran. web_enabled is False because
+    # APIA_WEB_PROVIDER defaults to "none".
+    assert data["memory_enabled"] is True
+    assert data["files_enabled"] is True
+    assert data["web_enabled"] is False
+    assert data["web_provider"] == "none"
 
 
 def test_warmup_aggregate_invariant_auto_target_in_available(client, fake_claude):

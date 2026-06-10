@@ -31,7 +31,13 @@ const SETTINGS_DEFAULTS = Object.freeze({
   memoryTurns: 10,
   ttsEnabled: true,
   voiceId: null,
-  windowAnchor: null
+  windowAnchor: null,
+  // Step 4: if true, every /chat request defaults to use_web=true so the
+  // assistant tries a web search before answering. Per-message override
+  // can still be added at the renderer layer later. Default false because
+  // a user without a configured provider should not see "we searched but
+  // got nothing" on every reply.
+  useWebDefault: false
 })
 
 const BACKEND_ENV_EXAMPLE_FILENAME = 'backend.env.example'
@@ -45,6 +51,17 @@ APIA_AI_MODE=auto
 # APIA_GROQ_MODEL=llama-3.3-70b-versatile
 # APIA_DEFAULT_MEMORY_TURNS=10
 # APIA_AUTO_MODE_PRIORITY=groq,claude,hf_api,local
+
+# === step 2-4 (장기 기억 / 파일 검색 / 웹 검색) ===
+# APIA_MEMORY_ENABLED=true
+# APIA_FILES_ENABLED=true
+# APIA_WEB_PROVIDER=none           # none | tavily | brave
+# APIA_WEB_API_KEY=                # provider 키
+# APIA_WEB_TIMEOUT_SECONDS=10
+# APIA_FILES_CHUNK_CHARS=1000
+# APIA_FILES_CHUNK_OVERLAP=200
+# APIA_FILES_MAX_FILE_BYTES=5242880
+# APIA_CONTEXT_MAX_CHARS=6000
 `
 
 class SettingsRepository {
@@ -97,6 +114,7 @@ class SettingsRepository {
     settings.autoBehavior = settings.autoBehavior !== false
     settings.alwaysOnTop = settings.alwaysOnTop !== false
     settings.ttsEnabled = settings.ttsEnabled !== false
+    settings.useWebDefault = settings.useWebDefault === true
     settings.models = Array.isArray(settings.models) ? settings.models : []
     settings.voiceId = typeof settings.voiceId === 'string' && settings.voiceId ? settings.voiceId : null
     // Anchor: normalize through the policy module — non-finite, missing, or

@@ -43,7 +43,11 @@ const SettingsSchema = z.object({
   memoryTurns: z.number().int().min(1).max(50),
   ttsEnabled: z.boolean(),
   voiceId: z.string().nullable(),
-  windowAnchor: windowAnchorSchema
+  windowAnchor: windowAnchorSchema,
+  // step 4 — every /chat defaults to use_web=true when enabled. Optional in
+  // the schema for backward compat: a settings.json written by an older
+  // version will hydrate to `false` via SETTINGS_DEFAULTS.
+  useWebDefault: z.boolean().optional()
 }).passthrough() // tolerate forward-compatible extra keys, but enforce known ones
 
 // ── World (apia-world.json) ──────────────────────────────────────────────

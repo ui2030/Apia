@@ -117,6 +117,15 @@ class WarmupStatusResponse(BaseModel):
     # failures (3C), or "[warmup] <message>" for warmup-task failures (the
     # pre-existing source). UI renders the string as-is in the Error row.
     last_error: Optional[str] = None
+    # Step 2-4: long-term memory / file search / web search enabled state.
+    # Optional so older renderers still validate. Each toggle is read from
+    # `app.state.<service>` so the value reflects the *actually wired*
+    # runtime state, not the env var (the env var is only the source of
+    # truth at startup; a future runtime toggle would diverge).
+    memory_enabled: Optional[bool] = None
+    files_enabled: Optional[bool] = None
+    web_enabled: Optional[bool] = None
+    web_provider: Optional[str] = None
 
 
 # ── /tts ───────────────────────────────────────────────────────────────────

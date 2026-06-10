@@ -407,6 +407,19 @@
         </div>
       </div>
 
+      <div class="api-key-row" data-key="APIA_WEB_API_KEY">
+        <div class="api-key-head">
+          <span class="api-key-label">웹 검색 API 키</span>
+          <span class="api-key-status" data-status>저장된 키 없음</span>
+        </div>
+        <div class="api-key-controls">
+          <input class="input api-key-input" type="password"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="tavily / brave 키" data-input>
+          <button type="button" class="btn btn-red api-key-clear" data-clear hidden>삭제</button>
+        </div>
+      </div>
+
       <div class="helper-text">
         키를 비워두면 변경되지 않습니다. 새 값을 입력하면 저장 시 backend.env에 반영되고,
         삭제 버튼을 누르면 해당 키가 backend.env에서 제거됩니다.
@@ -456,6 +469,114 @@
       </select>
     </div>
   </div>
+
+  <!-- ─────────────────────────────────────────────────────────────
+       "정보 활용" 데이터 패널 — 백엔드 2~4단계(장기 기억/파일/웹)
+       기능을 사용자가 실제로 켜고 끄고 관리할 수 있는 UI.
+       모든 toggle/select는 backend.env 키로 저장되고 저장 시 자동
+       백엔드 재시작 흐름(485cc18)에 합류한다.
+       ───────────────────────────────────────────────────────────── -->
+  <div class="section" id="data-section">
+    <div class="section-title">정보 활용</div>
+    <div class="helper-text" style="margin-bottom:8px;">
+      장기 기억(과거 대화 기억), 파일 검색(허용한 폴더 안 문서 검색),
+      웹 검색을 켜거나 끌 수 있어요. 켜면 다음 채팅부터 적용됩니다.
+    </div>
+
+    <!-- 장기 기억 -->
+    <div class="row">
+      <div>
+        <div class="row-label">장기 기억 사용</div>
+        <div class="row-sub">예전 대화를 의미로 기억하고 가끔 요약합니다</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="memory-enabled-toggle">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+    <div class="row" id="memory-stats-row">
+      <div class="row-label">기억 상태</div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="row-sub" id="memory-stats-text" style="font-size:11px;">읽는 중…</span>
+        <button type="button" class="btn btn-ghost" id="memory-summarize-btn">지금 요약</button>
+      </div>
+    </div>
+
+    <!-- 파일 검색 -->
+    <div class="row" style="margin-top:6px;">
+      <div>
+        <div class="row-label">파일 검색 사용</div>
+        <div class="row-sub">허용한 폴더 안 문서를 검색합니다</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="files-enabled-toggle">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+    <div class="row">
+      <div class="row-label">허용 폴더</div>
+      <button type="button" class="btn btn-ghost" id="files-add-folder-btn">폴더 추가</button>
+    </div>
+    <ul id="files-folder-list" style="list-style:none;padding:0;margin:0 0 6px 0;font-size:11px;color:var(--text-dim);"></ul>
+    <div class="row">
+      <div>
+        <div class="row-label">텍스트 직접 추가</div>
+        <div class="row-sub">짧은 메모/노트를 검색 대상에 바로 넣기</div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px;">
+      <input class="input" type="text" id="files-ingest-label" placeholder="라벨(예: 회의 노트)" style="font-size:11px;">
+      <textarea class="input" id="files-ingest-text" rows="3" placeholder="여기에 텍스트를 붙여넣으세요…" style="font-size:11px;font-family:inherit;resize:vertical;"></textarea>
+      <button type="button" class="btn btn-ghost" id="files-ingest-btn" style="align-self:flex-end;">텍스트 추가</button>
+    </div>
+    <div class="row">
+      <div class="row-label">파일 상태</div>
+      <span class="row-sub" id="files-stats-text" style="font-size:11px;">읽는 중…</span>
+    </div>
+
+    <!-- 웹 검색 -->
+    <div class="row" style="margin-top:6px;">
+      <div>
+        <div class="row-label">웹 검색 기본 사용</div>
+        <div class="row-sub">새 채팅을 항상 웹 검색으로 시작합니다 (채팅창 토글로 일회성 변경 가능)</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="use-web-default-toggle">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row-label">웹 검색 공급자</div>
+        <div class="row-sub">none이면 비활성. tavily/brave는 위 "웹 검색 API 키" 필요</div>
+      </div>
+      <select id="web-provider-select">
+        <option value="none">사용 안 함</option>
+        <option value="tavily">Tavily</option>
+        <option value="brave">Brave</option>
+      </select>
+    </div>
+    <div class="row">
+      <div class="row-label">웹 검색 상태</div>
+      <span class="row-sub" id="web-stats-text" style="font-size:11px;">읽는 중…</span>
+    </div>
+
+    <!-- 임베딩 -->
+    <div class="row" style="margin-top:6px;">
+      <div>
+        <div class="row-label">임베딩 모델</div>
+        <div class="row-sub">처음 한 번 ~480MB 받아옵니다. 메모리/파일/웹 검색 공통 사용</div>
+      </div>
+      <button type="button" class="btn btn-ghost" id="embedding-warmup-btn">지금 받기</button>
+    </div>
+    <div class="row">
+      <div class="row-label">임베딩 상태</div>
+      <span class="row-sub" id="embedding-status-text" style="font-size:11px;">읽는 중…</span>
+    </div>
+  </div>
 </div>
 
 <div class="footer">
@@ -496,6 +617,13 @@ async function init() {
   refreshProviderStatus()
   bindBackendEnvControls()
   refreshBackendEnvPresence()
+  bindDataPanelControls()
+  // syncDataPanelEnvFromBackend runs ONCE at init so user edits aren't
+  // overwritten by later refreshes. Stats panels poll separately via
+  // refreshDataPanelStats so memory/files/web counts can refresh on user
+  // actions without resetting the toggle/select values.
+  await syncDataPanelEnvFromBackend()
+  await refreshDataPanelStats()
 }
 
 async function loadCharacterRegistryIfAvailable() {
@@ -881,6 +1009,7 @@ function applyToUI() {
   document.getElementById('memory-turns').value = settings.memoryTurns || 10
   document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '턴'
   document.getElementById('tts-enabled').checked = settings.ttsEnabled !== false
+  document.getElementById('use-web-default-toggle').checked = settings.useWebDefault === true
 }
 
 document.getElementById('char-scale').addEventListener('input', e => {
@@ -1098,6 +1227,7 @@ async function save() {
     memoryTurns: parseInt(document.getElementById('memory-turns').value, 10),
     ttsEnabled: document.getElementById('tts-enabled').checked,
     voiceId: document.getElementById('voice-select').value,
+    useWebDefault: document.getElementById('use-web-default-toggle').checked,
   }
 
   saveBusy.set('저장 중…')
@@ -1261,6 +1391,15 @@ async function persistBackendEnvUpdates({ onPhase } = {}) {
     }
   })
 
+  // Merge data-panel toggle/select changes. They share the same atomic write
+  // + backend restart flow as API keys so the user sees one toast and one
+  // restart even when both groups change.
+  const panelUpdates = collectDataPanelEnvUpdates()
+  for (const [key, value] of Object.entries(panelUpdates)) {
+    updates[key] = value
+    dirty = true
+  }
+
   if (!dirty) return true
 
   try {
@@ -1336,6 +1475,311 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+// ── Data panel (장기 기억 / 파일 / 웹) ──────────────────────────────────
+// 모든 toggle/select 변경은 save()에서 backend.env로 반영되고 자동 백엔드
+// 재시작이 트리거된다. stats/list 호출은 read-only이므로 즉시 실행.
+
+const dataPanel = {
+  // 'true' / 'false' / 'none' / 'tavily' / 'brave' — backend.env 문자열 그대로
+  initialMemoryEnabled: null,
+  initialFilesEnabled: null,
+  initialWebProvider: null,
+}
+
+function bindDataPanelControls() {
+  const summarize = document.getElementById('memory-summarize-btn')
+  if (summarize) summarize.addEventListener('click', async () => {
+    summarize.disabled = true
+    try {
+      const result = await window.api.store.memorySummarize()
+      if (result?.summary_id != null) {
+        showToast('새 요약 ' + result.summary_id + '번 생성', 'info', 2500)
+      } else {
+        const reason = result?.stats?.last_error || '아직 임계치에 못 미쳤어요'
+        showToast('요약 안 만들어짐: ' + reason, 'info', 3500)
+      }
+    } catch (err) {
+      showToast('요약 실패: ' + (err?.message || err), 'error', 4000)
+    } finally {
+      summarize.disabled = false
+      refreshDataPanelStats()
+    }
+  })
+
+  const addBtn = document.getElementById('files-add-folder-btn')
+  if (addBtn) addBtn.addEventListener('click', async () => {
+    addBtn.disabled = true
+    try {
+      const picked = await window.api.store.pickFolder()
+      if (picked?.canceled || !picked?.path) return
+      const result = await window.api.store.filesAddFolder(picked.path)
+      if (result?.status === 'rejected') {
+        showToast('폴더 추가 거부: ' + (result.reason || '알 수 없음'), 'error', 4500)
+      } else if (result?.status === 'exists') {
+        showToast('이미 등록된 폴더입니다.', 'info', 2500)
+      } else if (result?.status === 'added') {
+        showToast('폴더 추가됨. 재인덱싱을 권장합니다.', 'info', 2800)
+      } else {
+        showToast('폴더 추가 실패', 'error', 3500)
+      }
+    } catch (err) {
+      showToast('폴더 추가 실패: ' + (err?.message || err), 'error', 4000)
+    } finally {
+      addBtn.disabled = false
+      refreshFilesPanel()
+    }
+  })
+
+  const ingestBtn = document.getElementById('files-ingest-btn')
+  if (ingestBtn) ingestBtn.addEventListener('click', async () => {
+    const label = document.getElementById('files-ingest-label').value.trim() || 'note'
+    const text = document.getElementById('files-ingest-text').value.trim()
+    if (!text) {
+      showToast('추가할 텍스트를 입력하세요.', 'error', 2500)
+      return
+    }
+    ingestBtn.disabled = true
+    try {
+      const result = await window.api.store.filesIngestText(label, text)
+      const added = result?.chunks_added ?? 0
+      if (added > 0) {
+        showToast('텍스트 ' + added + '조각으로 저장됨', 'info', 2500)
+        document.getElementById('files-ingest-text').value = ''
+        document.getElementById('files-ingest-label').value = ''
+      } else {
+        showToast('저장된 조각이 없어요. 텍스트가 너무 짧을 수 있습니다.', 'info', 3000)
+      }
+    } catch (err) {
+      showToast('텍스트 저장 실패: ' + (err?.message || err), 'error', 4000)
+    } finally {
+      ingestBtn.disabled = false
+      refreshFilesPanel()
+    }
+  })
+
+  const warmupBtn = document.getElementById('embedding-warmup-btn')
+  if (warmupBtn) warmupBtn.addEventListener('click', async () => {
+    warmupBtn.disabled = true
+    const statusEl = document.getElementById('embedding-status-text')
+    if (statusEl) statusEl.textContent = '다운로드/로딩 중… 처음에는 몇 분 걸려요.'
+    try {
+      const result = await window.api.store.embeddingWarmup()
+      renderEmbeddingStatus(result)
+    } catch (err) {
+      if (statusEl) statusEl.textContent = '실패: ' + (err?.message || err)
+    } finally {
+      warmupBtn.disabled = false
+    }
+  })
+}
+
+// Codex MUST-FIX (frontend integration round 2): user actions (summarize,
+// add folder, ingest text, …) refresh stats but MUST NOT call
+// syncDataPanelEnvFromBackend — that would yank the user's pending toggle
+// changes back to whatever is on disk. Keep env-baseline sync as a one-shot
+// at init and at applied-settings broadcast.
+async function refreshDataPanelStats() {
+  await Promise.all([
+    refreshMemoryPanel(),
+    refreshFilesPanel(),
+    refreshWebPanel(),
+    refreshEmbeddingPanel()
+  ])
+}
+
+async function refreshMemoryPanel() {
+  const el = document.getElementById('memory-stats-text')
+  if (!el) return
+  try {
+    const stats = await window.api.store.memoryStats()
+    if (!stats) { el.textContent = '백엔드 응답 없음'; return }
+    if (!stats.enabled) { el.textContent = '기억 꺼짐'; return }
+    const lastErr = stats.last_error ? ` · 최근 오류: ${stats.last_error}` : ''
+    el.textContent = `turn ${stats.turn_count} · 요약 ${stats.summary_count}` + lastErr
+  } catch {
+    el.textContent = '읽기 실패'
+  }
+}
+
+async function refreshFilesPanel() {
+  await refreshFilesFolders()
+  const statsEl = document.getElementById('files-stats-text')
+  if (!statsEl) return
+  try {
+    const stats = await window.api.store.filesStats()
+    if (!stats) { statsEl.textContent = '백엔드 응답 없음'; return }
+    if (!stats.enabled) { statsEl.textContent = '파일 검색 꺼짐'; return }
+    statsEl.textContent = `폴더 ${stats.folder_count} · 청크 ${stats.chunk_count} (드롭 ${stats.dropped_count})`
+  } catch {
+    statsEl.textContent = '읽기 실패'
+  }
+}
+
+async function refreshFilesFolders() {
+  const ul = document.getElementById('files-folder-list')
+  if (!ul) return
+  ul.innerHTML = ''
+  let payload = null
+  try {
+    payload = await window.api.store.filesListFolders()
+  } catch {}
+  const folders = payload?.folders || []
+  if (folders.length === 0) {
+    const li = document.createElement('li')
+    li.textContent = '아직 추가한 폴더가 없습니다.'
+    li.style.padding = '4px 0'
+    ul.appendChild(li)
+    return
+  }
+  for (const folder of folders) {
+    const li = document.createElement('li')
+    li.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 0;'
+    const label = document.createElement('span')
+    label.textContent = folder.path
+    label.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;'
+    label.title = folder.path
+    const actions = document.createElement('span')
+    actions.style.cssText = 'display:flex;gap:4px;flex-shrink:0;'
+    const reindex = document.createElement('button')
+    reindex.type = 'button'
+    reindex.className = 'btn btn-ghost'
+    reindex.textContent = '재인덱싱'
+    reindex.addEventListener('click', async () => {
+      reindex.disabled = true
+      try {
+        const result = await window.api.store.filesReindex(folder.path, false)
+        if (result) {
+          showToast(`인덱싱 끝: 파일 ${result.files_indexed}/${result.files_seen}, 청크 +${result.chunks_added}`, 'info', 3500)
+        } else {
+          showToast('재인덱싱 실패', 'error', 3500)
+        }
+      } finally {
+        reindex.disabled = false
+        refreshFilesPanel()
+      }
+    })
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'btn btn-red'
+    remove.textContent = '삭제'
+    remove.addEventListener('click', async () => {
+      remove.disabled = true
+      try {
+        const result = await window.api.store.filesRemoveFolder(folder.path)
+        const deleted = result?.chunks_deleted ?? 0
+        showToast('폴더 제거 · 정리된 청크 ' + deleted, 'info', 2800)
+      } finally {
+        remove.disabled = false
+        refreshFilesPanel()
+      }
+    })
+    actions.appendChild(reindex)
+    actions.appendChild(remove)
+    li.appendChild(label)
+    li.appendChild(actions)
+    ul.appendChild(li)
+  }
+}
+
+async function refreshWebPanel() {
+  const el = document.getElementById('web-stats-text')
+  if (!el) return
+  try {
+    const stats = await window.api.store.webStats()
+    if (!stats) { el.textContent = '백엔드 응답 없음'; return }
+    const label = stats.enabled ? '사용 가능' : '비활성'
+    const reason = stats.last_error ? ` · ${stats.last_error}` : ''
+    el.textContent = `${label} · 공급자 ${stats.provider}` + reason
+  } catch {
+    el.textContent = '읽기 실패'
+  }
+}
+
+async function refreshEmbeddingPanel() {
+  const result = await window.api.store.embeddingStatus().catch(() => null)
+  renderEmbeddingStatus(result)
+}
+
+function renderEmbeddingStatus(payload) {
+  const el = document.getElementById('embedding-status-text')
+  if (!el) return
+  if (!payload) { el.textContent = '백엔드 응답 없음'; return }
+  if (payload.error) {
+    el.textContent = '오류: ' + payload.error
+    return
+  }
+  if (payload.loaded) {
+    el.textContent = `준비됨 (${payload.model_name}, dim ${payload.dim})`
+  } else if (payload.loading) {
+    el.textContent = '받는 중…'
+  } else {
+    el.textContent = '아직 안 받음 — 첫 사용 시 자동으로 시작합니다'
+  }
+}
+
+async function syncDataPanelEnvFromBackend() {
+  if (typeof window.api.getBackendEnvKeys !== 'function') return
+  let payload = null
+  try {
+    payload = await window.api.getBackendEnvKeys()
+  } catch { return }
+  const keys = payload?.keys || {}
+
+  // Default semantics mirror backend/ai_config.py defaults: enabled=true if
+  // backend.env doesn't yet have the key written.
+  const memEntry = keys['APIA_MEMORY_ENABLED']
+  const memValue = memEntry?.value
+  const memOn = memValue ? memValue.toLowerCase() !== 'false' : true
+  document.getElementById('memory-enabled-toggle').checked = memOn
+  dataPanel.initialMemoryEnabled = memOn ? 'true' : 'false'
+
+  const filesEntry = keys['APIA_FILES_ENABLED']
+  const filesValue = filesEntry?.value
+  const filesOn = filesValue ? filesValue.toLowerCase() !== 'false' : true
+  document.getElementById('files-enabled-toggle').checked = filesOn
+  dataPanel.initialFilesEnabled = filesOn ? 'true' : 'false'
+
+  const webEntry = keys['APIA_WEB_PROVIDER']
+  const webProvider = (webEntry?.value || 'none').toLowerCase()
+  const validProviders = ['none', 'tavily', 'brave']
+  const selectValue = validProviders.includes(webProvider) ? webProvider : 'none'
+  document.getElementById('web-provider-select').value = selectValue
+  dataPanel.initialWebProvider = selectValue
+}
+
+// Called by persistBackendEnvUpdates to merge data-panel toggle/select changes
+// into the same atomic env write. Returns the updates dict; an unchanged value
+// produces no key in the dict so persistBackendEnvUpdates' "no-op" detection
+// is preserved.
+//
+// Codex MUST-FIX (frontend integration round 2): when `initial*` is still
+// `null` (sync from backend didn't complete or failed), DO NOT diff. Otherwise
+// a fresh-install user that hits Save before the IPC returns would write
+// `APIA_MEMORY_ENABLED=false` to backend.env from the unchecked default
+// checkbox state and silently disable memory.
+function collectDataPanelEnvUpdates() {
+  const updates = {}
+
+  if (dataPanel.initialMemoryEnabled !== null) {
+    const memOn = document.getElementById('memory-enabled-toggle').checked
+    const memStr = memOn ? 'true' : 'false'
+    if (memStr !== dataPanel.initialMemoryEnabled) updates['APIA_MEMORY_ENABLED'] = memStr
+  }
+
+  if (dataPanel.initialFilesEnabled !== null) {
+    const filesOn = document.getElementById('files-enabled-toggle').checked
+    const filesStr = filesOn ? 'true' : 'false'
+    if (filesStr !== dataPanel.initialFilesEnabled) updates['APIA_FILES_ENABLED'] = filesStr
+  }
+
+  if (dataPanel.initialWebProvider !== null) {
+    const provider = document.getElementById('web-provider-select').value
+    if (provider !== dataPanel.initialWebProvider) updates['APIA_WEB_PROVIDER'] = provider
+  }
+
+  return updates
 }
 
 init()

@@ -4,7 +4,9 @@ contextBridge.exposeInMainWorld('api', {
   // 기존 기능
   setIgnoreMouse: (v) => ipcRenderer.send('set-ignore-mouse', v),
   checkBackend: () => ipcRenderer.invoke('check-backend'),
-  sendMessage: (msg, hist) => ipcRenderer.invoke('send-message', { message: msg, history: hist }),
+  sendMessage: (msg, hist, opts) => ipcRenderer.invoke('send-message', {
+    message: msg, history: hist, useWeb: opts?.useWeb
+  }),
   tts: (text, voice_id) => ipcRenderer.invoke('tts', { text, voice_id }),
   getVoices: () => ipcRenderer.invoke('get-voices'),
   warmup: () => ipcRenderer.invoke('warmup'),
@@ -21,6 +23,29 @@ contextBridge.exposeInMainWorld('api', {
   getBackendEnvKeys: () => ipcRenderer.invoke('settings:getBackendEnvKeys'),
   saveBackendEnvKeys: (updates) => ipcRenderer.invoke('settings:saveBackendEnvKeys', updates),
   restartBackend: () => ipcRenderer.invoke('settings:restartBackend'),
+
+  // citation chip click — main process enforces http/https only.
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
+  // step 2-4: /store/* surface. Grouped under `store` to keep the global
+  // window.api flat while still being self-documenting in renderer code.
+  store: {
+    embeddingStatus: () => ipcRenderer.invoke('store:embeddingStatus'),
+    embeddingWarmup: () => ipcRenderer.invoke('store:embeddingWarmup'),
+    memoryStats: () => ipcRenderer.invoke('store:memoryStats'),
+    memorySummarize: () => ipcRenderer.invoke('store:memorySummarize'),
+    filesListFolders: () => ipcRenderer.invoke('store:filesListFolders'),
+    filesAddFolder: (path) => ipcRenderer.invoke('store:filesAddFolder', { path }),
+    filesRemoveFolder: (path) => ipcRenderer.invoke('store:filesRemoveFolder', { path }),
+    filesReindex: (path, force) =>
+      ipcRenderer.invoke('store:filesReindex', { path, force: !!force }),
+    filesIngestText: (label, text) =>
+      ipcRenderer.invoke('store:filesIngestText', { label, text }),
+    filesStats: () => ipcRenderer.invoke('store:filesStats'),
+    webStats: () => ipcRenderer.invoke('store:webStats'),
+    webSearch: (query) => ipcRenderer.invoke('store:webSearch', { query }),
+    pickFolder: () => ipcRenderer.invoke('store:pickFolder')
+  },
 
   // 🔥 캐릭터 시스템
   listCharacters: () => ipcRenderer.invoke('characters:list'),

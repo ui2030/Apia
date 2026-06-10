@@ -31,8 +31,35 @@
 const fs = require('fs')
 const path = require('path')
 
-const ALLOWED_KEYS = Object.freeze(['APIA_GROQ_KEY', 'APIA_ANTHROPIC_KEY', 'APIA_HF_TOKEN'])
+// Codex MUST-FIX (frontend integration round 1): step 2-4 backend features
+// expose three new env knobs the settings UI must be able to flip:
+//   - APIA_WEB_PROVIDER ∈ {none, tavily, brave} (default "none")
+//   - APIA_WEB_API_KEY (the secret matching the provider; presence-only)
+//   - APIA_FILES_ENABLED / APIA_MEMORY_ENABLED ∈ {true,false} toggles
+// Keeping them in the same allowlist + presence model means renderers stay
+// structurally unable to read secrets back and accidental keys are silently
+// dropped at write time. UI booleans (FILES/MEMORY) are exposed as keys here
+// too so the user can flip them without editing backend.env by hand.
+const ALLOWED_KEYS = Object.freeze([
+  'APIA_GROQ_KEY',
+  'APIA_ANTHROPIC_KEY',
+  'APIA_HF_TOKEN',
+  'APIA_WEB_PROVIDER',
+  'APIA_WEB_API_KEY',
+  'APIA_MEMORY_ENABLED',
+  'APIA_FILES_ENABLED'
+])
 const ALLOWED_KEY_SET = new Set(ALLOWED_KEYS)
+// Keys whose value should be returned to the renderer (not just presence).
+// API keys / secrets stay in PRESENCE_ONLY_KEYS. Non-secret toggles are
+// safe to round-trip so the UI can show the current selection without
+// a server probe.
+const READABLE_KEYS = Object.freeze([
+  'APIA_WEB_PROVIDER',
+  'APIA_MEMORY_ENABLED',
+  'APIA_FILES_ENABLED'
+])
+const READABLE_KEY_SET = new Set(READABLE_KEYS)
 const ENV_FILENAME = 'backend.env'
 
 /**
@@ -148,7 +175,16 @@ class BackendEnvRepository {
     const out = {}
     for (const key of ALLOWED_KEYS) {
       const value = byName.get(key)
-      out[key] = { present: typeof value === 'string' && value.length > 0 }
+      const present = typeof value === 'string' && value.length > 0
+      const entry = { present }
+      // Non-secret toggles (provider name, boolean strings) are echoed back so
+      // the settings UI can show "currently: tavily" without round-tripping
+      // through warmup. API keys are NEVER echoed — devtools snooping on the
+      // IPC payload would otherwise leak them.
+      if (present && READABLE_KEY_SET.has(key)) {
+        entry.value = value
+      }
+      out[key] = entry
     }
     return out
   }
@@ -261,5 +297,6 @@ class BackendEnvRepository {
 module.exports = {
   BackendEnvRepository,
   ALLOWED_KEYS,
+  READABLE_KEYS,
   ENV_FILENAME
 }

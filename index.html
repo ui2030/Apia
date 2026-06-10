@@ -38,11 +38,38 @@
 
     #world-layer { position:fixed; inset:0; pointer-events:none; }
     .world-object {
-      position:absolute; pointer-events:auto; cursor:pointer;
-      transition:transform 0.2s;
+      position:absolute; display:none; align-items:center; gap:8px;
+      padding:8px 12px; border-radius:999px; border:1px solid rgba(167,139,250,0.28);
+      background:linear-gradient(135deg, rgba(17,16,34,0.88), rgba(28,22,53,0.92));
+      color:var(--text); pointer-events:auto; cursor:pointer;
+      transform:translate(-50%, -100%);
+      transition:transform 0.2s, border-color 0.2s, background 0.2s, opacity 0.2s;
       filter:drop-shadow(0 2px 8px rgba(124,58,237,0.3));
     }
-    .world-object:hover { transform:scale(1.08); }
+    .world-object:hover {
+      transform:translate(-50%, -100%) scale(1.04);
+      border-color:rgba(167,139,250,0.52);
+      background:linear-gradient(135deg, rgba(32,24,61,0.94), rgba(51,33,88,0.96));
+    }
+    .world-object-badge {
+      display:inline-flex; align-items:center; justify-content:center;
+      min-width:46px; padding:4px 8px; border-radius:999px;
+      font-size:9px; font-weight:700; letter-spacing:0.08em;
+      color:rgba(255,255,255,0.86); background:rgba(255,255,255,0.08);
+    }
+    .world-object-label {
+      font-size:12px; font-weight:600; white-space:nowrap;
+      color:rgba(255,255,255,0.94);
+    }
+    .world-object.type-chair .world-object-badge {
+      background:rgba(59,130,246,0.18); color:#bfdbfe;
+    }
+    .world-object.type-point .world-object-badge {
+      background:rgba(16,185,129,0.18); color:#bbf7d0;
+    }
+    .world-object.type-decoration .world-object-badge {
+      background:rgba(245,158,11,0.16); color:#fde68a;
+    }
 
     #chat-toggle, #settings-btn {
       position:fixed; bottom:14px;
@@ -97,6 +124,21 @@
       background:rgba(255,255,255,0.08); color:var(--text);
       border-radius:12px 4px 12px 12px;
     }
+    /* step 4: citation chips under the AI bubble. Chips reuse the panel
+       palette and degrade gracefully (disabled state) when the source has
+       no clickable URL (e.g. memory / file recall in future). */
+    .msg-citations {
+      display:flex; flex-wrap:wrap; gap:4px; margin:4px 0 0 4px; max-width:85%;
+    }
+    .citation-chip {
+      font-size:10px; padding:3px 7px; border-radius:10px;
+      background:rgba(124,58,237,0.16); color:var(--text);
+      border:1px solid rgba(124,58,237,0.3); cursor:pointer;
+      font-family:inherit; max-width:240px; overflow:hidden;
+      text-overflow:ellipsis; white-space:nowrap;
+    }
+    .citation-chip:hover { background:rgba(124,58,237,0.28); }
+    .citation-chip:disabled { opacity:0.55; cursor:default; }
 
     #input-area {
       padding:8px 10px; border-top:1px solid rgba(255,255,255,0.07);
@@ -155,6 +197,10 @@
         <div class="status-dot"></div>
         Apia
       </div>
+      <label id="chat-web-toggle-wrap" title="이 대화에서 웹 검색을 켭니다. 답변에 [1] [2] 같은 출처 표시가 붙어요." style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-dim);cursor:pointer;">
+        <input id="chat-web-toggle" type="checkbox" style="margin:0;width:11px;height:11px;cursor:pointer;">
+        웹
+      </label>
       <div style="font-size:10px;color:var(--text-dim)" id="voice-label">기본 목소리</div>
     </div>
     <div id="messages">
