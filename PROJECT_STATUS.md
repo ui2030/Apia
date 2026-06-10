@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-10 (room + face-camera pass)
+Last updated: 2026-06-10 (warm room + furniture pass)
 
 ## Goal
 
@@ -368,7 +368,39 @@ Key files:
 - [src/sceneRuntime.js](src/sceneRuntime.js) (CAM_DEFAULT 어항 시점, ROOM 상수 export, buildRoom)
 - [src/chat.js](src/chat.js) (sendMessage 진입 시 requestFaceCamera)
 
-### 21. Dependency security pass
+### 21. Warm room palette + furniture set (Phase D)
+
+Phase B의 방은 단조로운 회색 시멘트 박스로 보였다는 사용자 피드백 + 두 영상 reference(블루아카 "선생님, 잠깐 시간 좀 내주세요" 시리즈) → 따뜻한 학교 카페 톤 + 창문 + 가구 set으로 한 번 더 손봤다.
+
+- `src/furnitureLayout.js` 신설: `FURNITURE_DEFAULT`가 가구별 `id/type/label/position/size/color/interaction/bubbleText`의 단일 source of truth. `sceneRuntime`의 가시 메시와 `world.js`의 상호작용 객체가 같은 좌표·라벨을 share — Codex MUST-FIX (Phase D round 1): 두 곳에 좌표 복제가 있으면 사용자가 한 쪽 옮길 때 시각/클릭이 분리됨.
+- 톤 변경 (`src/sceneRuntime.js`):
+  - 벽 `0xeae3d8 → 0xfff5e1`, 바닥 `0xd8cdb8 → 0xc9956a`(월넛 우드), 천장 `0xf2ecdf → 0xfff8ea`.
+  - AmbientLight `0xffffff 0.8 → 0xfff3d8 0.7` (앰버 톤).
+  - 메인 sun `0xffffff 0.9 → 0xffe9a8 1.2`, 위치 `(2,5,4) → (-3,4,0.6)` (좌상, 창문 쪽), `dir.target.position(0,1,3)` + `scene.add(dir.target)` 명시 (Codex MUST-FIX: target 없으면 (0,0,0)=뒷벽 모서리로 쏨).
+  - rim `0xa78bfa → 0xff9ec4` (블러시 핑크), fill 위치 카메라 쪽으로 후퇴.
+- 창문 (`buildRoom` 안): 뒷벽에 `MeshStandardMaterial({emissive,emissiveIntensity})` 페인 + 네 개 우드 frame. Codex MUST-FIX round 1: `MeshBasicMaterial`엔 emissive 없음.
+- 가구 (`buildFurniture`, scene 직접 add — character group과 독립):
+  - 책상(데스크 위 책 더미·노트북), 침대(매트리스+베개), 창가 의자, 화분(흙+잎 2단), 러그(평면).
+  - 모두 `BoxGeometry`/`SphereGeometry` + 파스텔/우드 팔레트. 외부 GLTF 의존 0.
+- `world.js`:
+  - `DEFAULT_WORLD_OBJECTS = FURNITURE_DEFAULT.map(...)` — 좌표·라벨·상호작용 데이터를 furnitureLayout에서 직접 받음.
+  - `triggerAutoBehavior(options)`가 `getInteractiveObjects({ includeDecor: options.includeDecor === true })`로 옵션 전달 (Codex MUST-FIX round 1: 기존에 options를 안 넘겨서 includeDecor가 dead flag였음).
+- `main.js` `scheduleAutoBehavior`가 `triggerAutoBehavior({ chairBias, includeDecor: true })`. 러그는 `autoBehavior:false`라 후보엔 안 잡히지만, 향후 decoration 추가 시 자동 후보가 됨.
+
+캐릭터 click → 가구 클릭 트리거(click-through DOM 셀렉터에 canvas hover 통합) + 의자 시각 크기/sitOffset 모델별 조정은 다음 패스로 명시 deferral.
+
+**검증**
+- `npm run verify` 181/181 통과.
+- Codex round 2 사후 검증 APPROVE: yes.
+
+Key files:
+
+- [src/furnitureLayout.js](src/furnitureLayout.js) (신설 — 가구 단일 source of truth)
+- [src/sceneRuntime.js](src/sceneRuntime.js) (warm palette, 창문, buildFurniture, dir.target)
+- [src/world.js](src/world.js) (DEFAULT_WORLD_OBJECTS가 furnitureLayout 사용, triggerAutoBehavior includeDecor)
+- [src/main.js](src/main.js) (scheduleAutoBehavior includeDecor:true)
+
+### 22. Dependency security pass
 
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".

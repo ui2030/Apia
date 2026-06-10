@@ -157,7 +157,12 @@ function scheduleAutoBehavior() {
       if (!handled) {
         handled =
           worldManager?.triggerAutoBehavior?.({
-            chairBias: behaviorConfig.chairBias
+            chairBias: behaviorConfig.chairBias,
+            // Phase D: every default piece in furnitureLayout is now a
+            // visible mesh in sceneRuntime, so decoration-only pieces (rug)
+            // can still ride the click path. autoBehavior:false on the rug
+            // keeps it out of *random* picks; this flag only opens the gate.
+            includeDecor: true
           }) === true
       }
       if (!handled) {
