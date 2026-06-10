@@ -742,7 +742,18 @@ function updateVRMBody(t) {
 // This is a stopgap for users who keep their PMX models. Real BlueArchive-
 // quality motion still needs `.vmd` clips — see vrma/README.md for the
 // Mixamo→VMD route.
+// Phase H1 round 3 — PMX usually skins the mesh to display/deform bones
+// (`左足D`, `左ひざD`) that get their pose from the logical bones via a
+// transform-passthrough rig. When the model has both, the LOGICAL bones
+// (`左足`, `左ひざ`) are the input — but if a model author only ships the
+// D bones, those are what actually move pixels. Tries D-suffixed first
+// because user's console dump showed both, and the D-bones are guaranteed
+// to drive the mesh.
 const _MMD_BONE_CANDIDATES = {
+  // Lower-body anchors that make a noticeable difference even when leg
+  // bones are stuck. `腰`/`下半身` wobble drags the legs visually.
+  hip:       ['腰', 'グルーブ', 'Hip', 'hip', 'Pelvis', 'Bip01_Pelvis'],
+  lowerBody: ['下半身', 'LowerBody', 'lowerBody', 'Bip01'],
   spine:     ['上半身', 'Spine', 'spine', 'UpperBody', 'Bip01_Spine'],
   chest:     ['上半身2', 'Chest', 'chest', 'UpperBody2', 'Bip01_Spine1'],
   neck:      ['首', 'Neck', 'neck', 'Bip01_Neck'],
@@ -751,14 +762,18 @@ const _MMD_BONE_CANDIDATES = {
               'LeftUpperArm', 'UpperArm_L', 'Bip01_L_UpperArm'],
   rArm:      ['右腕', 'R_Arm', 'arm_R', 'rightArm', 'RightArm', 'R_UpperArm',
               'RightUpperArm', 'UpperArm_R', 'Bip01_R_UpperArm'],
-  lLeg:      ['左足', 'L_Leg', 'leg_L', 'leftLeg', 'LeftLeg', 'L_UpperLeg',
-              'LeftUpperLeg', 'UpperLeg_L', 'L_Thigh', 'Bip01_L_Thigh'],
-  rLeg:      ['右足', 'R_Leg', 'leg_R', 'rightLeg', 'RightLeg', 'R_UpperLeg',
-              'RightUpperLeg', 'UpperLeg_R', 'R_Thigh', 'Bip01_R_Thigh'],
-  lKnee:     ['左ひざ', '左膝', 'L_Knee', 'knee_L', 'leftKnee', 'LeftKnee',
-              'L_LowerLeg', 'LeftLowerLeg', 'LowerLeg_L', 'L_Calf', 'Bip01_L_Calf'],
-  rKnee:     ['右ひざ', '右膝', 'R_Knee', 'knee_R', 'rightKnee', 'RightKnee',
-              'R_LowerLeg', 'RightLowerLeg', 'LowerLeg_R', 'R_Calf', 'Bip01_R_Calf'],
+  lLeg:      ['左足D', '左足', 'L_Leg', 'leg_L', 'leftLeg', 'LeftLeg',
+              'L_UpperLeg', 'LeftUpperLeg', 'UpperLeg_L', 'L_Thigh',
+              'Bip01_L_Thigh'],
+  rLeg:      ['右足D', '右足', 'R_Leg', 'leg_R', 'rightLeg', 'RightLeg',
+              'R_UpperLeg', 'RightUpperLeg', 'UpperLeg_R', 'R_Thigh',
+              'Bip01_R_Thigh'],
+  lKnee:     ['左ひざD', '左ひざ', '左膝', 'L_Knee', 'knee_L', 'leftKnee',
+              'LeftKnee', 'L_LowerLeg', 'LeftLowerLeg', 'LowerLeg_L',
+              'L_Calf', 'Bip01_L_Calf'],
+  rKnee:     ['右ひざD', '右ひざ', '右膝', 'R_Knee', 'knee_R', 'rightKnee',
+              'RightKnee', 'R_LowerLeg', 'RightLowerLeg', 'LowerLeg_R',
+              'R_Calf', 'Bip01_R_Calf'],
 }
 
 function _findMmdBone(mesh, candidates) {
@@ -872,24 +887,30 @@ function updateMMDBody(t) {
       bones.head.rotation.y += Math.sin(stride * 0.5) * 0.035 * intensity
     }
   } else {
-    // Phase H1 round 2 — user feedback "legs still frozen". Pure 0 every
-    // frame made the idle pose look like a statue. Now we layer a slow
-    // weight shift (lateral sway transferring between the planted leg)
-    // plus a breath bend, both small enough that a real `.vmd` clip would
-    // still dominate when present. lateral z roll because PMX leg bones
-    // hinge forward on rotation.x (same convention as VRM0).
-    const idleBreath = breath * 0.018 * intensity
-    const weightShift = sway * 0.035 * intensity
+    // Phase H1 round 3 — user reported "legs still frozen" after round 2.
+    // Two causes addressed here: (a) amplitudes were < 1° so motion was
+    // imperceptible, (b) hip/lowerBody wasn't moving so even leg rotation
+    // wouldn't read as "shifting weight". Cranked the idle amplitudes ~3x
+    // and added a gentle hip rock that drags the whole lower body.
+    const idleBreath = breath * 0.04 * intensity   // ~2.3°
+    const weightShift = sway * 0.10 * intensity    // ~5.7°
+    if (bones.hip) {
+      bones.hip.rotation.z = sway * 0.025 * intensity
+      bones.hip.rotation.x = breath * 0.012 * intensity
+    }
+    if (bones.lowerBody) {
+      bones.lowerBody.rotation.z = sway * 0.018 * intensity
+    }
     if (bones.lLeg) {
       bones.lLeg.rotation.x = idleBreath
       bones.lLeg.rotation.z = weightShift
     }
     if (bones.rLeg) {
       bones.rLeg.rotation.x = idleBreath
-      bones.rLeg.rotation.z = weightShift * 0.7  // less than left for asymmetry
+      bones.rLeg.rotation.z = weightShift * 0.7
     }
-    if (bones.lKnee) bones.lKnee.rotation.x = Math.max(0, weightShift) * 0.45
-    if (bones.rKnee) bones.rKnee.rotation.x = Math.max(0, -weightShift) * 0.45
+    if (bones.lKnee) bones.lKnee.rotation.x = Math.max(0, weightShift) * 0.55
+    if (bones.rKnee) bones.rKnee.rotation.x = Math.max(0, -weightShift) * 0.55
   }
 }
 
