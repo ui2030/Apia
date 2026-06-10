@@ -1,6 +1,6 @@
 // src/chat.js - 채팅, STT, TTS
 import { setState, getState } from './characterController.js'
-import { setEmotion } from './characterController.js'
+import { setEmotion, requestFaceCamera } from './characterController.js'
 let _showBubble, _startSpeaking, _stopSpeaking, _applyEmotion
 let _getTalkMotion, _getIdleMotion
 
@@ -201,6 +201,13 @@ async function sendMessage(text) {
   const inp = document.getElementById('chat-input')
   if (inp) inp.value = ''
   const loading = appendMessage('ai', '● ● ●', true)
+
+  // Phase C: ask the character to face the user (and walk a step closer to
+  // the 4th wall) for the duration of the exchange. ~12s covers most LLM
+  // replies; if a longer reply runs over, the next sendMessage extends the
+  // timer automatically. _onArrive/idleTurn honor this override so the
+  // character stays oriented at the monitor.
+  requestFaceCamera({ durationMs: 12000, approach: true })
 
   try {
     let reply = '백엔드가 연결되지 않아 오프라인 모드예요. 백엔드를 실행해주세요! 🔧'

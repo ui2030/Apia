@@ -1,19 +1,24 @@
 // src/characterController.js
-import * as THREE from 'three'
+import { Vector3 } from 'three'
 
 const STATE = { IDLE: 'idle', WALK: 'walk', SIT: 'sit', TALK: 'talk' }
 
 // ── 이동 가능 범위 ─────────────────────────────────────
+// Phase B: matches the room footprint declared in sceneRuntime.js
+// (width 8, depth 6). 0.5 inset on every wall so the character never
+// clips into a wall mesh; minZ also keeps a buffer so they don't push
+// into the 4th wall (= the camera glass).
 const BOUNDS = {
   minX: -3.5, maxX: 3.5,
-  minZ: 0.5,  maxZ: 6.0,
+  minZ: 0.7,  maxZ: 5.5,
 }
 
 let state = STATE.IDLE
-let target = new THREE.Vector3()
-let sitConfig = null
+let target = new Vector3()
+let moveConfig = null
+let activeSitPose = null
 let mesh3D = null
-let sitTimer = null
+let sitUntil = 0
 let emotion = 'neutral'
 
 let pose = {
@@ -33,6 +38,21 @@ let blink = {
 let lookTargetX = 0
 let lookTargetY = 0
 
+// Phase C: temporary "face the camera" override. While `faceCameraUntil > Date.now()`
+// every state's body yaw and lookTargetY get nudged toward the user. Codex
+// MUST-FIX: _onArrive/idleTurn must NOT touch mesh.rotation.y while this is active.
+let faceCameraUntil = 0
+let faceCameraApproachTarget = null
+// Match the existing CAM_LOOK_ROT below — that's what sit/_onArrive already
+// use as "facing the user". Treating it as the source of truth means we
+// don't have to guess each model's forward axis again here.
+const FACE_CAMERA_PITCH_BIAS = -0.35 // negative `lookTargetY` looks up
+
+// dummy 모델의 머리 메시 참조 캐시. main.js loadDummy()에서 setDummyBlinkTarget으로
+// 주입한다. 캐시가 비어 있을 때만 한 번 getObjectByName으로 폴백 검색하므로,
+// _applyBlink가 매 프레임 씬 그래프를 워킹하지 않는다.
+let dummyBlinkTarget = null
+
 let idleTurn = {
   nextAt: 0,
   targetYaw: 0
@@ -43,21 +63,74 @@ const WALK_SPEED = 1.6
 const ARRIVE_DIST = 0.22
 const SIT_DURATION = 8000
 
-export function walkTo({ x, z, sitOffset = null, sitRotY = 0, onArrive = null }) {
-  if (sitTimer) {
-    clearTimeout(sitTimer)
-    sitTimer = null
+/**
+ * Phase A — pick a random spot inside BOUNDS that is at least `minDistance`
+ * away from the current position, then walk to it. Used by world.js's free
+ * roam path so the character doesn't trace a left/right line between fixed
+ * furniture targets all day.
+ *
+ * Returns `false` if the character isn't placed yet (no mesh3D) or no
+ * suitable spot was found in N tries (rare — BOUNDS are roomy).
+ */
+export function walkToRandomSpot({ minDistance = 1.2, onArrive = null } = {}) {
+  if (!mesh3D) return false
+  const cx = mesh3D.position.x
+  const cz = mesh3D.position.z
+  for (let i = 0; i < 8; i += 1) {
+    const x = BOUNDS.minX + Math.random() * (BOUNDS.maxX - BOUNDS.minX)
+    const z = BOUNDS.minZ + Math.random() * (BOUNDS.maxZ - BOUNDS.minZ)
+    if (Math.hypot(x - cx, z - cz) >= minDistance) {
+      walkTo({ x, z, onArrive })
+      return true
+    }
   }
+  return false
+}
+
+/**
+ * Phase C — request the character to face the user for `durationMs`.
+ * Honored by every state's body-yaw blend in this module. When
+ * `approach = true`, also walk to a fixed spot near the 4th wall (low z)
+ * so the character feels like it's coming closer to the monitor glass.
+ */
+export function requestFaceCamera({ durationMs = 8000, approach = true } = {}) {
+  faceCameraUntil = Date.now() + Math.max(1000, durationMs)
+  if (approach && mesh3D) {
+    // Codex MUST-FIX (Phase C round 2): the camera sits at +z, so "approach"
+    // must walk TOWARD higher z values, not lower. We park the character
+    // near the front edge of the room (close to the aquarium glass) so it
+    // reads as "she stepped up to the monitor to talk to you".
+    const x = mesh3D.position.x * 0.5
+    const z = Math.min(BOUNDS.maxZ - 0.3, 5.0)
+    faceCameraApproachTarget = { x, z }
+    walkTo({ x, z })
+  } else {
+    faceCameraApproachTarget = null
+  }
+}
+
+export function isFacingCamera() {
+  return _isFacingCameraActive()
+}
+
+function _isFacingCameraActive() {
+  return faceCameraUntil > 0 && Date.now() < faceCameraUntil
+}
+
+export function walkTo({ x, z, sitOffset = null, sitRotY = 0, onArrive = null }) {
+  sitUntil = 0
 
   if (mesh3D && state === STATE.SIT) {
     mesh3D.position.y = 0
   }
 
+  activeSitPose = null
+
   const clampedX = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, x))
   const clampedZ = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, z))
 
   target.set(clampedX, 0, clampedZ)
-  sitConfig = { offset: sitOffset, rotY: sitRotY, onArrive }
+  moveConfig = { offset: sitOffset, rotY: sitRotY, onArrive }
   setState(STATE.WALK)
 }
 
@@ -75,6 +148,18 @@ export function onMouseMove(x, y) {
 
   lookTargetX = Math.max(-1, Math.min(1, nx))
   lookTargetY = Math.max(-1, Math.min(1, ny))
+}
+
+export function getLookTarget() {
+  return { x: lookTargetX, y: lookTargetY }
+}
+
+export function setDummyBlinkTarget(node) {
+  dummyBlinkTarget = node || null
+}
+
+export function clearDummyBlinkTarget() {
+  dummyBlinkTarget = null
 }
 
 export function setEmotion(e) {
@@ -162,8 +247,11 @@ function _idle(mesh, t) {
     mesh.rotation.z += Math.sin(t * 1.3) * 0.01
   }
 
-  const bodyYawTarget = idleTurn.targetYaw + lookYaw
-  mesh.rotation.y += _shortAngle(bodyYawTarget, mesh.rotation.y) * 0.03
+  // Codex MUST-FIX (Phase C): facing override beats idleTurn while active.
+  const bodyYawTarget = _isFacingCameraActive()
+    ? CAM_LOOK_ROT
+    : idleTurn.targetYaw + lookYaw
+  mesh.rotation.y += _shortAngle(bodyYawTarget, mesh.rotation.y) * 0.05
 }
 
 function _walk(mesh, t, dt) {
@@ -183,20 +271,44 @@ function _walk(mesh, t, dt) {
   mesh.position.x = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, mesh.position.x + nx * spd))
   mesh.position.z = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, mesh.position.z + nz * spd))
 
-  mesh.rotation.y += _shortAngle(Math.atan2(nx, nz), mesh.rotation.y) * 0.18
-  mesh.position.y = Math.abs(Math.sin(t * 6.2)) * 0.025
+  // Codex MUST-FIX (Phase A): the previous bob of 0.025 made the whole body
+  // pogo-stick, which combined with a T-pose looked like the character was
+  // jumping in place. Bone-level gait now drives the visible movement (see
+  // `updateVRMBody`); the residual root bob is just the footfall impact.
+  // Honor the facing override (Phase C): turn body toward camera instead of
+  // the heading vector when active.
+  const yawTarget = _isFacingCameraActive() ? CAM_LOOK_ROT : Math.atan2(nx, nz)
+  mesh.rotation.y += _shortAngle(yawTarget, mesh.rotation.y) * 0.18
+  mesh.position.y = Math.abs(Math.sin(t * 6.2)) * 0.008
   mesh.rotation.z = Math.sin(t * 6.2) * 0.01
 }
 
 function _sit(mesh, t) {
-  const baseY = sitConfig?.offset?.y ?? 0
+  if (sitUntil > 0 && Date.now() >= sitUntil) {
+    activeSitPose = null
+    sitUntil = 0
+    mesh.position.y = 0
+    setState(STATE.IDLE)
+    return
+  }
+
+  const sitPose = activeSitPose
+  const baseY = sitPose?.y ?? 0
   const lookYaw = _getLookYaw()
   const lookPitch = _getLookPitch()
+
+  if (sitPose) {
+    mesh.position.x = sitPose.x
+    mesh.position.z = sitPose.z
+  }
 
   mesh.position.y = baseY + Math.sin(t * 0.9) * 0.003
   mesh.rotation.x = pose.tiltX * 0.5 + lookPitch * 0.6
   mesh.rotation.z = pose.tiltZ * 0.4
-  mesh.rotation.y += _shortAngle(lookYaw, mesh.rotation.y) * 0.04
+  const sitYaw = _isFacingCameraActive()
+    ? CAM_LOOK_ROT
+    : (sitPose?.rotY ?? CAM_LOOK_ROT) + lookYaw * 0.35
+  mesh.rotation.y += _shortAngle(sitYaw, mesh.rotation.y) * 0.06
 
   if (emotion === 'sad') {
     mesh.rotation.x += 0.02
@@ -211,7 +323,8 @@ function _talk(mesh, t) {
   mesh.position.y = Math.sin(t * 1.6) * (0.01 * motionPower)
   mesh.rotation.x = pose.tiltX + Math.sin(t * 4.5) * 0.015 + lookPitch
   mesh.rotation.z = pose.tiltZ + Math.sin(t * 1.7 + pose.swaySeed) * 0.01
-  mesh.rotation.y += _shortAngle(lookYaw, mesh.rotation.y) * 0.08
+  const talkYaw = _isFacingCameraActive() ? CAM_LOOK_ROT : lookYaw
+  mesh.rotation.y += _shortAngle(talkYaw, mesh.rotation.y) * 0.08
 
   if (emotion === 'happy') {
     mesh.rotation.z += 0.035
@@ -238,35 +351,41 @@ function _talk(mesh, t) {
 }
 
 function _onArrive(mesh) {
-  if (!sitConfig) {
+  if (!moveConfig) {
     setState(STATE.IDLE)
     return
   }
 
-  const { offset, rotY, onArrive } = sitConfig
+  const { offset, rotY, onArrive } = moveConfig
 
   if (offset) {
-    mesh.position.set(target.x + offset.x, offset.y, target.z + offset.z)
-    mesh.rotation.y = rotY ?? 0
-    setState(STATE.SIT)
+    activeSitPose = {
+      x: target.x + offset.x,
+      y: offset.y,
+      z: target.z + offset.z,
+      rotY: rotY ?? CAM_LOOK_ROT
+    }
 
-    if (sitTimer) clearTimeout(sitTimer)
-    sitTimer = setTimeout(() => {
-      if (state === STATE.SIT) {
-        mesh.position.y = 0
-        setState(STATE.IDLE)
-        sitTimer = null
-      }
-    }, SIT_DURATION)
+    mesh.position.set(activeSitPose.x, activeSitPose.y, activeSitPose.z)
+    mesh.rotation.y = activeSitPose.rotY
+    setState(STATE.SIT)
+    sitUntil = Date.now() + SIT_DURATION
   } else {
+    activeSitPose = null
+    sitUntil = 0
     mesh.position.x = target.x
     mesh.position.z = target.z
-    mesh.rotation.y = CAM_LOOK_ROT
+    // Codex MUST-FIX (Phase C): when facing override is active, don't snap
+    // back to CAM_LOOK_ROT (=PI, away from user) on arrival — keep facing
+    // the camera so the idle/sit blend below picks up the override cleanly.
+    if (!_isFacingCameraActive()) {
+      mesh.rotation.y = CAM_LOOK_ROT
+    }
     setState(STATE.IDLE)
   }
 
   onArrive?.()
-  sitConfig = null
+  moveConfig = null
 }
 
 function _updateNaturalPose(t) {
@@ -315,10 +434,16 @@ function _updateBlink(t, dt) {
 function _applyBlink(mesh) {
   if (!mesh) return
 
-  const head = mesh.children?.find((c) => c.position && c.position.y > 1.3)
-  if (!head) return
+  // VRM은 idleVRM(main.js)이 expressionManager로 깜빡임 처리, MMD는 모프 기반.
+  // dummy 모델일 때만 동작. 캐시 우선, 없으면 한 번만 폴백 스캔하고 채워둔다.
+  // (loadDummy가 항상 setDummyBlinkTarget을 부르지만 dev-only 진입 경로를 대비한 belt-and-suspenders.)
+  if (!dummyBlinkTarget) {
+    const found = mesh.getObjectByName?.('dummy-head')
+    if (!found) return
+    dummyBlinkTarget = found
+  }
 
-  head.scale.y = 1 - blink.value * 0.06
+  dummyBlinkTarget.scale.y = 1 - blink.value * 0.06
 }
 
 function _updateIdleTurn(t) {
@@ -335,6 +460,12 @@ function _getLookYaw() {
 }
 
 function _getLookPitch() {
+  // While facing the camera, bias the look pitch upward so the character
+  // appears to be looking up at the user's eye level rather than straight
+  // ahead — that's the "peering through glass" feel.
+  if (_isFacingCameraActive()) {
+    return FACE_CAMERA_PITCH_BIAS * 0.08
+  }
   return -lookTargetY * 0.08
 }
 

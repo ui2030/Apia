@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-10 (frontend integration pass)
+Last updated: 2026-06-10 (room + face-camera pass)
 
 ## Goal
 
@@ -329,7 +329,46 @@ Key files:
 - [tests/backendEnvRepository.test.js](tests/backendEnvRepository.test.js) (allowlist + 값 노출 정책)
 - [tests/settingsAggregate.test.js](tests/settingsAggregate.test.js) (useWebDefault)
 
-### 20. Dependency security pass
+### 20. Room + walk gait + face-camera (Phase A/B/C)
+
+기존 캐릭터가 "T자 콩콩 + 좌우만 이동"이었고, 3D 씬에 방이 없어 캐릭터만 떠다녔다. 사용자의 비전(바탕화면에 방 + 캐릭터가 방 안 활동 + 마주 볼 때 모니터 너머 들여다보는 느낌)에 맞춰 세 단계로 손봤다.
+
+**Phase A — walk procedural + 자유 산책**
+- `updateVRMBody` walk 분기 추가 (`src/main.js`): leftUpperLeg/rightUpperLeg 다리 swing(±0.35 rad, 보수적 시작), leftLowerLeg/rightLowerLeg 무릎이 한 방향으로만 굽힘, 팔이 다리 반대 위상으로 swing. 같은 함수에서 절대값 덮어쓰기 패턴 그대로 (Codex MUST-FIX round 1: 별도 후처리로 빼면 sit/talk과 충돌).
+- `_walk()` 루트 bob 0.025 → 0.008 (`src/characterController.js`): T자 캐릭터가 통째로 들썩이는 "콩콩" 효과 제거.
+- `walkToRandomSpot()` 신설 + `scheduleAutoBehavior`가 자유 산책 50% : 가구 인터랙션 50% 가중치로 섞음 (`src/main.js`). 좌우 일직선 산책 패턴 해소.
+- `BOUNDS`를 방 footprint에 맞춰 `minZ 0.5→0.7`, `maxZ 6.0→5.5`.
+
+**Phase B — 어항 카메라 + 3면 방**
+- `createSceneRuntime`가 `buildRoom()`으로 floor + 3면 벽 + 천장 뒷절반 생성 (`src/sceneRuntime.js`). 4번째 벽(카메라쪽)은 일부러 비워둬 사용자 모니터가 "유리창" 역할.
+- 좌표 정합 (Codex MUST-FIX round 2):
+  - 카메라 z=+7.6, target z=+2.8, fov 30 — 박스를 약간 위에서 들여다보는 시점.
+  - 뒷벽 z=0 (가장 멀리), 좌/우 벽은 x=±halfW 위치, 천장은 z=0..ROOM.depth/2 (back half only) — 카메라 시야 안 가림.
+  - 좌/우 벽 회전(Codex MUST-FIX round 3): `left.rotation.y=-π/2`, `right.rotation.y=+π/2`. BackSide 재질의 보이는 면이 방 내부 향함.
+- `frameCharacterCamera()` 비활성 (`src/main.js`): 모델 로드마다 CAM_DEFAULT 덮어쓰던 흐름이 어항 카메라를 무력화했음. 이제 단순히 `applyCameraDefault()`만 다시 적용 (디버그 카메라 등이 흔들어도 방 시점으로 복귀).
+- DirectionalLight shadow camera frustum을 방 footprint로 clamp — 그림자 quality 향상.
+
+**Phase C — 마주보기 메타 인식**
+- `requestFaceCamera({durationMs, approach})` 신설 (`src/characterController.js`). 일시 override 패턴:
+  - 활성 동안 `_idle`/`_walk`/`_sit`/`_talk` 모두 body yaw target을 `CAM_LOOK_ROT`(=π, 기존 "카메라 향함" 신호와 일원화 — Codex round 2)으로 lerp.
+  - `_onArrive`가 facing 활성 동안 `mesh.rotation.y` 스냅 안 함.
+  - `_getLookPitch`가 활성 동안 음수 bias (모니터를 살짝 올려다보는 느낌).
+  - approach=true면 `walkTo({x: half jitter, z: BOUNDS.maxZ-0.3})` — 카메라 쪽 가까이 다가옴.
+- `src/chat.js`의 `sendMessage()` 진입 시 `requestFaceCamera({durationMs:12000, approach:true})` 자동 호출. 다음 메시지가 오면 타이머 갱신.
+- 캐릭터 클릭 트리거는 click-through DOM 셀렉터 통합이 필요해 다음 패스로 명시 deferral. decoration peek 자동 행동도 동일.
+
+**검증**
+- `npm run verify` 181/181 통과 (vite build + node check + vitest).
+- Codex round 3 사후 검증: 코드 변경 의도대로 반영 확인 (Codex 환경의 `spawn EPERM`은 환경 권한 이슈).
+
+Key files:
+
+- [src/characterController.js](src/characterController.js) (BOUNDS, walkToRandomSpot, requestFaceCamera, facing override in _idle/_walk/_sit/_talk/_onArrive)
+- [src/main.js](src/main.js) (updateVRMBody walk 분기, frameCharacterCamera 비활성, scheduleAutoBehavior free roam 가중)
+- [src/sceneRuntime.js](src/sceneRuntime.js) (CAM_DEFAULT 어항 시점, ROOM 상수 export, buildRoom)
+- [src/chat.js](src/chat.js) (sendMessage 진입 시 requestFaceCamera)
+
+### 21. Dependency security pass
 
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".
