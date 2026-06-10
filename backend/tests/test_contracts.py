@@ -17,12 +17,23 @@ from io import BytesIO
 from schemas import (
     ChatResponse,
     EmbeddingStatusResponse,
+    FileFolderAddResponse,
+    FileFolderReindexResponse,
+    FileFolderRemoveResponse,
+    FileFoldersResponse,
+    FileIngestTextResponse,
+    FileStatsResponse,
     HealthResponse,
+    MemoryStatsResponse,
+    MemorySummarizeResponse,
     STTResponse,
+    TurnCitationsResponse,
     VoicesResponse,
     WarmupReadyResponse,
     WarmupStatusResponse,
     WarmupWarmingResponse,
+    WebSearchResponse,
+    WebStatsResponse,
 )
 
 
@@ -179,3 +190,167 @@ def test_embedding_warmup_returns_200_with_error_on_load_failure(client, monkeyp
     assert data["loaded"] is False
     assert data["error"] is not None
     assert "simulated missing torch" in data["error"]
+
+
+def test_memory_stats_shape(client):
+    response = client.get("/store/memory/stats")
+    assert response.status_code == 200
+    data = response.json()
+    MemoryStatsResponse.model_validate(data)
+    # Memory is enabled by default in the test environment.
+    assert data["enabled"] is True
+    assert isinstance(data["turn_count"], int)
+    assert isinstance(data["summary_count"], int)
+    assert isinstance(data["summary_every"], int)
+
+
+def test_memory_summarize_shape_below_threshold(client):
+    """Contract: forcing summarize on an empty DB returns 200 with
+    `summary_id: null`. The renderer reads this to mean "nothing happened",
+    not an error."""
+    response = client.post("/store/memory/summarize")
+    assert response.status_code == 200
+    data = response.json()
+    MemorySummarizeResponse.model_validate(data)
+    assert data["summary_id"] is None
+    MemoryStatsResponse.model_validate(data["stats"])
+
+
+def test_files_folders_list_shape(client):
+    response = client.get("/store/files/folders")
+    assert response.status_code == 200
+    FileFoldersResponse.model_validate(response.json())
+
+
+def test_files_add_folder_rejects_invalid_path_with_200_payload(client):
+    """Bad input lands on a 200 with status='rejected' + reason so the renderer
+    surfaces the message inline instead of needing a 4xx error path."""
+    response = client.post(
+        "/store/files/folders",
+        json={"path": "C:/this/folder/definitely/does/not/exist/apia-test"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    FileFolderAddResponse.model_validate(data)
+    assert data["status"] == "rejected"
+    assert data["reason"]
+
+
+def test_files_remove_folder_returns_zero_when_unknown(client):
+    response = client.request(
+        "DELETE", "/store/files/folders",
+        json={"path": "C:/never-registered"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    FileFolderRemoveResponse.model_validate(data)
+    assert data["removed"] is False
+    assert data["chunks_deleted"] == 0
+
+
+def test_files_ingest_text_empty_returns_zero(client):
+    response = client.post(
+        "/store/files/ingest_text",
+        json={"label": "test", "text": "   "},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    FileIngestTextResponse.model_validate(data)
+    assert data["chunks_added"] == 0
+
+
+def test_files_stats_shape(client):
+    response = client.get("/store/files/stats")
+    assert response.status_code == 200
+    data = response.json()
+    FileStatsResponse.model_validate(data)
+    assert data["enabled"] is True
+
+
+def test_web_stats_shape(client):
+    response = client.get("/store/web/stats")
+    assert response.status_code == 200
+    data = response.json()
+    WebStatsResponse.model_validate(data)
+    # Test env doesn't set APIA_WEB_PROVIDER → default "none" → disabled.
+    assert data["enabled"] is False
+    assert data["provider"] == "none"
+
+
+def test_web_search_returns_empty_when_disabled(client):
+    response = client.post("/store/web/search", json={"query": "anything"})
+    assert response.status_code == 200
+    data = response.json()
+    WebSearchResponse.model_validate(data)
+    assert data["enabled"] is False
+    assert data["results"] == []
+    assert data["last_error"]
+
+
+def test_web_citations_for_unknown_turn_returns_empty(client):
+    response = client.get("/store/web/citations/999999")
+    assert response.status_code == 200
+    data = response.json()
+    TurnCitationsResponse.model_validate(data)
+    assert data["citations"] == []
+
+
+def test_chat_response_includes_citations_field(client):
+    """Step 4: ChatResponse always has a `citations` list (possibly empty).
+    The renderer reads it unconditionally so it must never be missing."""
+    response = client.post("/chat", json={"message": "hi", "history": []})
+    assert response.status_code == 200
+    data = response.json()
+    ChatResponse.model_validate(data)
+    assert "citations" in data
+    assert isinstance(data["citations"], list)
+
+
+def test_chat_use_web_happy_path_fills_citations(client, fake_claude, monkeypatch):
+    """Codex NICE-TO-HAVE round 4: end-to-end /chat use_web=true with a
+    stubbed web provider + a reply that contains `[1]` and `[2]` markers.
+    The response must surface ChatCitation entries for each valid marker.
+    """
+    from services.web_search_service import WebResult
+
+    async def fake_search(query: str):
+        return [
+            WebResult(title="첫 결과", url="https://example.com/a",
+                      snippet="첫 발췌", score=0.9),
+            WebResult(title="두번째 결과", url="https://example.com/b",
+                      snippet="둘째 발췌", score=0.7),
+        ]
+
+    web = client.app.state.web
+    monkeypatch.setattr(web, "_search_fn", fake_search)
+    # `enabled`는 search_fn 주입 시 True가 되므로 추가 monkeypatch 불필요.
+    fake_claude.chat.return_value = (
+        "본문에 [1] 인용하고 또 [2] 인용. [EMOTION:happy]",
+        "happy",
+    )
+
+    response = client.post(
+        "/chat",
+        json={"message": "외부 출처가 필요한 질문", "history": [], "use_web": True},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    ChatResponse.model_validate(data)
+    assert len(data["citations"]) == 2
+    by_marker = {c["marker_number"]: c for c in data["citations"]}
+    assert by_marker[1]["source_path"] == "https://example.com/a"
+    assert by_marker[2]["source_path"] == "https://example.com/b"
+    assert by_marker[1]["source_kind"] == "web"
+
+
+def test_files_reindex_rejects_unregistered_folder_with_400(client):
+    """Reindex on a non-allowlisted folder is a 400 (client error) — the only
+    way to get here is a UI bug, since folders are added through the allowlist
+    endpoint first. Pinning the status code catches a regression where the
+    server starts silently scanning arbitrary paths."""
+    response = client.post(
+        "/store/files/reindex",
+        json={"path": "C:/never-registered", "force": False},
+    )
+    assert response.status_code == 400
+    assert "allowlist" in response.json()["detail"].lower()
