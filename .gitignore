@@ -1,4 +1,14 @@
 node_modules/
 dist/
+release/
+backend-dist/
+backend-build/
 *.log
 .env
+
+# Step 6 — Mixamo .fbx clips are user-supplied. Adobe TOS allows personal
+# use but redistribution is grey, so keep user-side .fbx out of git.
+# manifest.json + README.md inside the folder are tracked (they describe
+# the contract); only the binaries are excluded.
+src/assets/motions/fbx/**/*.fbx
+src/assets/motions/fbx/**/*.FBX

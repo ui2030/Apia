@@ -33,6 +33,7 @@ import {
 import {
   playVRMAnimation as playVRMAnimationRaw,
   playMMDAnimation as playMMDAnimationRaw,
+  playFBXAnimation as playFBXAnimationRaw,
   clearVRMFadeHandlers
 } from './animationRuntime.js'
 
@@ -49,6 +50,10 @@ export function playVRMAnimation(url, opts) {
 
 export function playMMDAnimation(url, opts) {
   return playMMDAnimationRaw(url, opts, animationCtx)
+}
+
+export function playFBXAnimation(url, opts) {
+  return playFBXAnimationRaw(url, opts, animationCtx)
 }
 
 // Motion pipeline: procedural (applyMotion) + clip. 활성 모델 타입에 따라 VRMA/VMD
@@ -72,8 +77,17 @@ function playMotion(motion) {
   if (type === 'vrm') {
     const asset = resolveMotionAsset(motion.name)
     if (!asset) return
-    playVRMAnimation(asset.url, { loop: asset.loop, fadeIn: asset.fadeIn })
-      .catch((err) => console.warn('[playMotion] vrma clip failed', motion.name, err))
+    // Step 6: resolveMotionAsset now returns `kind: 'vrma' | 'fbx'`. FBX
+    // clips run through the Mixamo retargeter; VRMA is the native VRM
+    // animation format and plays directly. Same race-guard pattern, same
+    // fadeIn semantics; only the loader changes.
+    if (asset.kind === 'fbx') {
+      playFBXAnimation(asset.url, { loop: asset.loop, fadeIn: asset.fadeIn })
+        .catch((err) => console.warn('[playMotion] fbx clip failed', motion.name, err))
+    } else {
+      playVRMAnimation(asset.url, { loop: asset.loop, fadeIn: asset.fadeIn })
+        .catch((err) => console.warn('[playMotion] vrma clip failed', motion.name, err))
+    }
     return
   }
   // dummy / null / 미지원 type — 절차적 layer만 돌리고 종료.
@@ -500,6 +514,8 @@ function clearModel() {
   if (currentModel.type === 'vrm') {
     clearVRMFadeHandlers(currentModel)
     currentModel.mixer?.stopAllAction()
+    // Step 6: any in-flight FBX clip is gone with the model.
+    currentModel._fbxClipActive = false
     getVRMUtils()?.deepDispose(currentModel.root)
   }
 
@@ -1020,7 +1036,14 @@ function animate() {
     if (currentModel.type === 'vrm') {
       currentModel.obj.update(delta)
       currentModel.mixer?.update(delta)
-      updateVRMBody(t)
+      // Step 6: while a Mixamo FBX clip is driving the rig (set by
+      // playFBXAnimation), skip the procedural body layer. The clip's
+      // keyframes own spine/arms/legs/hips; running updateVRMBody after
+      // mixer.update() would overwrite them every frame and the user
+      // sees the procedural "T-pose with arm sway" instead of the clip.
+      if (!currentModel._fbxClipActive) {
+        updateVRMBody(t)
+      }
       lipsyncVRM()
       updateCharacter(root, t, delta)
     } else if (currentModel.type === 'mmd') {

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "basePath": "src/assets/motions/fbx",
+  "defaultFadeIn": 0.3,
+  "_comment": "Mixamo FBX clips for VRM targets. animationRuntime.playFBXAnimation retargets mixamorig:* bones onto the VRM humanoid + scales hips translation cm→m. MMD/PMX models silently skip — they don't share Mixamo's bone topology. Drop files into <category>/<name>.fbx, register here with the same motion-name keys as the VRMA/VMD manifests. Empty by default — licensing-safe.",
+  "clips": {
+  }
+}
