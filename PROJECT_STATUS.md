@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-11 (생동감 round 3 — ammo.js wired in for PMX hair/skirt physics)
+Last updated: 2026-06-11 (poseRig 통합 + Deedee524 idle pack 도입 — Deedee524 모션 권한: 게임 사용 OK / 원본 재배포 X / 크레딧 필수)
 
 ## Goal
 

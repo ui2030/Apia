@@ -12,3 +12,10 @@ backend-build/
 # the contract); only the binaries are excluded.
 src/assets/motions/fbx/**/*.fbx
 src/assets/motions/fbx/**/*.FBX
+
+# /goal Step 5 — .vmd idle pack from Deedee524 (DeviantArt) ships under
+# "use freely, credit me, do NOT redistribute original motions". The
+# LICENSE-<author>.txt files inside the folder are tracked (they carry
+# the author's permission statement); the .vmd binaries are not.
+src/assets/motions/vmd/**/*.vmd
+src/assets/motions/vmd/**/*.VMD
