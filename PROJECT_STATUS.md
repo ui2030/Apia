@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-11 (personality + click toggle + release guards)
+Last updated: 2026-06-11 (생동감 round 3 — ammo.js wired in for PMX hair/skirt physics)
 
 ## Goal
 
@@ -578,6 +578,38 @@ Codex round 1에서 6 MUST-FIX (Mixamo prefix 정규화 / rest pose 축 보정 /
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".
 - `engines.node: ">=20"` added so future installs fail clearly on unsupported Node.
+
+### 32. 생동감 round 3 — ammo.js wired in for MMDPhysics
+
+이전 round 2에서 어깨/팔꿈치/twist 본을 매핑하고 procedural 진폭을 personality vector로 조절해도 PMX 머리카락·스커트·꼬리는 여전히 정지 상태였음. 직접 검증(launchApia + 콘솔 캡처)으로 진짜 원인을 잡았다:
+
+- 본 매핑은 정상 (`missing: []`, 481개 본, 모든 candidate가 첫 시도에 매칭).
+- `helper.add(mesh, { physics: true })`이 `THREE.MMDPhysics: Import ammo.js` 에러로 catch에 잡혀 physics가 한 번도 켜진 적이 없었음. PMX는 rigid body + joint 데이터를 모델 자체에 갖고 있는데 시뮬레이터가 안 돌아가니 흔들 게 없었던 것.
+
+수정:
+- `src/modelRuntime.js`에 `getAmmoRuntime()` lazy promise 추가. three.js에 번들된 `ammo.wasm.js` + `ammo.wasm.wasm`을 사용.
+- `src/main.js`의 `loadMMDRuntimeModel` 진입 시 `await getAmmoRuntime()`. PMX 모델 들어올 때 ammo가 글로벌에 세팅된 다음 `helper.add({physics:true})` 호출.
+
+도중 잡은 함정 3개:
+1. **Vite가 wasm 파일을 dist에 emit 안 함** — emscripten의 `import.meta.url` 기반 fetch는 Vite 정적 분석에 안 잡힘. `?url` import로 명시 등록.
+2. **Electron file:// 컨텍스트에서 emscripten 내부 fetch 실패** — 우리가 직접 `fetch(wasmUrl).arrayBuffer()`로 받아서 `wasmBinary` 옵션으로 전달.
+3. **ESM strict mode에서 `this` undefined** — ammo.wasm.js 끝줄이 `this.Ammo = b;`라 직접 호출하면 throw. `AmmoFactory.call(globalThis, opts)`로 해결.
+
+직접 검증(격리 환경, `APIA_E2E_DISABLE_WALLPAPER=1`로 사용자 데스크탑 보호):
+```
+[Apia MMD physics + morphs] {
+  rigidBodyCount: 364,
+  constraintCount: 583,
+  physicsEnabled: true,
+  morphCount: 170
+}
+```
+0이었던 강체가 364개, 583개 관절 제약이 시뮬레이터에 등록됨. 시각 떨림 확인은 정지 프레임으로는 못 잡아 사용자 측 직접 확인 단계.
+
+Key files:
+
+- [src/modelRuntime.js](C:/Users/ui2030/Documents/Apia/src/modelRuntime.js)
+- [src/main.js](C:/Users/ui2030/Documents/Apia/src/main.js)
 
 ## Remaining Cleanup, Not Current Breakage
 

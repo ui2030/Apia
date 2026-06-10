@@ -25,6 +25,7 @@ import {
   getVRMUtils,
   getMmdRuntime,
   getMmdHelper,
+  getAmmoRuntime,
   normalizeUrlToFetchable,
   loadOptionalJson,
   loadManifestByPath,
@@ -316,6 +317,21 @@ async function loadVRMRuntimeModel(url, loadToken) {
 
 async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
   const { MMDLoader, helper } = await getMmdRuntime()
+  // 생동감 round 2 — preload ammo.js (bundled with three) so that
+  // helper.add({physics:true}) inside the loader callback doesn't throw
+  // "Import ammo.js" and freeze every hair/skirt/tail bone. Cached
+  // promise; only the first PMX load pays the wasm fetch cost.
+  try {
+    await getAmmoRuntime()
+  } catch (err) {
+    console.warn('[Apia MMD] ammo.js load failed; physics will be skipped', err)
+  }
+  // Codex NICE-TO-HAVE: ammo fetch can take 100ms+ on first PMX load.
+  // If the user switched characters during that wait, abandon now
+  // instead of fetching the (stale) PMX + textures.
+  if (loadToken !== activeModelLoadToken) {
+    return false
+  }
   // Per-load LoadingManager — MMDLoader defaults to THREE.DefaultLoadingManager,
   // which is shared process-wide. Setting setURLModifier on that would leak
   // into any subsequent loader (or stomp an in-flight one) — exactly the
