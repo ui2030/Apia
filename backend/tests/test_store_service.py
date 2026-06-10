@@ -32,12 +32,11 @@ async def test_initialize_creates_db_and_applies_migrations(db_path: Path) -> No
     await store.initialize()
     assert db_path.exists()
 
-    # The 001 migration creates schema_version + the five feature tables. We
-    # don't assert all column lists (those are SQL-owned); we assert the row
-    # for the migration was inserted so re-runs are idempotent.
+    # Migration 001 creates schema_version + the feature tables; 002 adds a
+    # UNIQUE index on file_chunks. Each lands its own row in schema_version.
     rows = await store.fetchall("SELECT version FROM schema_version ORDER BY version")
     versions = [row["version"] for row in rows]
-    assert versions == [1]
+    assert versions == [1, 2]
 
     # Spot-check one feature table exists and is empty.
     rows = await store.fetchall("SELECT count(*) AS n FROM chat_turns")
@@ -55,7 +54,7 @@ async def test_initialize_is_idempotent(db_path: Path) -> None:
     await store.initialize()
     await store.initialize()
     rows = await store.fetchall("SELECT version FROM schema_version")
-    assert len(rows) == 1
+    assert len(rows) == 2
     await store.close()
 
 

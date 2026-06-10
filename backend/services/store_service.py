@@ -214,6 +214,46 @@ class StoreService:
         finally:
             cur.close()
 
+    async def execute_script(
+        self, statements: Iterable[tuple[str, Sequence[Any]]]
+    ) -> None:
+        """Run multiple parameterized SQL statements atomically.
+
+        Used by per-file reindex: DELETE stale chunks for a path, then INSERT
+        the new chunks, all-or-nothing. If any statement raises, ROLLBACK is
+        attempted and the original error bubbles up.
+
+        Codex MUST-FIX (step 3 round 2): MUST run inside `_write_lock` so a
+        concurrent caller can't slip an unrelated commit between our BEGIN and
+        COMMIT (sqlite3's autocommit boundary). Also MUST use explicit
+        `BEGIN` + statement-by-statement execute + `COMMIT`/`ROLLBACK` —
+        `executescript` strips parameters, so we can't shove `(?, ?, ?)` args
+        through it; the textual concatenation fallback was a SQL-injection
+        magnet that we are not introducing.
+        """
+        await self.initialize()
+        statements_list = list(statements)
+        async with self._write_lock:
+            await asyncio.to_thread(self._execute_script_sync, statements_list)
+
+    def _execute_script_sync(
+        self, statements_list: list[tuple[str, Sequence[Any]]]
+    ) -> None:
+        assert self._conn is not None
+        self._conn.execute("BEGIN")
+        try:
+            for sql, params in statements_list:
+                cur = self._conn.execute(sql, params)
+                cur.close()
+        except Exception:
+            try:
+                self._conn.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass
+            raise
+        else:
+            self._conn.commit()
+
     # ── lifecycle ───────────────────────────────────────────────────────────
 
     async def close(self) -> None:
