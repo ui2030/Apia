@@ -714,6 +714,21 @@ function syncWallpaperMode() {
   if (!main || main.isDestroyed()) return
   const want = loadSettings().useWallpaperMode !== false
   if (want) {
+    // User-reported bug: desktop icons were not clickable when wallpaper
+    // mode was on. Two BrowserWindow defaults were the cause:
+    //   (1) `alwaysOnTop: s.alwaysOnTop !== false` from createMainWindow
+    //       kept the window floating above the desktop even after
+    //       SetParent → WorkerW. Icons were physically behind it.
+    //   (2) `setIgnoreMouseEvents(false)` made the overlay swallow every
+    //       click in its rect, so even when icons were under cursor the
+    //       click never propagated down to SHELLDLL_DefView.
+    // The wallpaper layer has to BOTH stop floating AND stop intercepting
+    // input. The first is `setAlwaysOnTop(false)`; the second is
+    // `setIgnoreMouseEvents(true, { forward: false })` — `forward:true`
+    // keeps mousemove events for hover effects, but `false` is right here
+    // because the user's intent is "this is just background".
+    try { main.setAlwaysOnTop(false) } catch {}
+    try { main.setIgnoreMouseEvents(true, { forward: false }) } catch {}
     const ready = main.isVisible() ? Promise.resolve() : new Promise((resolve) => {
       main.once('ready-to-show', resolve)
     })
@@ -727,8 +742,13 @@ function syncWallpaperMode() {
       if (loadSettings().useWallpaperMode === false) return
       wallpaperMode.enableWallpaper(live, { info: logInfo, warn: logWarn })
     })
-  } else if (wallpaperMode.isAttached()) {
-    wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn })
+  } else {
+    if (wallpaperMode.isAttached()) {
+      wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn })
+    }
+    // Restore the normal overlay behavior (floating, accepts clicks).
+    try { main.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
+    try { main.setIgnoreMouseEvents(false) } catch {}
   }
 }
 
