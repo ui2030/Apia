@@ -13,7 +13,7 @@ import {
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
-import { updateCharacter, onMouseMove, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, setDummyBlinkTarget, clearDummyBlinkTarget } from './characterController.js'
+import { updateCharacter, onMouseMove, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector } from './characterController.js'
 import { initWorld, updateWorldLabels } from './world.js'
 import { initChat } from './chat.js'
 import { MotionManager } from './motionManager.js'
@@ -115,12 +115,24 @@ function getAutoBehaviorConfig() {
   }
 }
 
+// Codex MUST-FIX (step 1 round 2): tracking the active character id so the
+// IPC broadcast for persona slider edits can ignore stale messages aimed at
+// a previously-active character.
+let currentCharacterId = null
+
 function applyCharacterProfileBundle(bundle = null) {
   if (bundle) {
     motionManager.setCharacterProfile(bundle)
+    currentCharacterId = bundle.characterId || null
   } else {
     motionManager.clearCharacterProfile()
+    currentCharacterId = null
   }
+  // Codex MUST-FIX (step 1): characterController must see the new vector
+  // every time the profile (including dummy/clear path) changes, otherwise
+  // a previous character's walk speed / sit duration / look strength bleeds
+  // into the next one.
+  setPersonalityVector(motionManager.getPersonalityVector?.() || null)
 
   scheduleAutoBehavior()
 }
@@ -637,29 +649,35 @@ function updateVRMBody(t) {
   }
 
   // ── 팔 (A-포즈 기준 + 생동감) ────────────────────
-  const breathArm = breath * 0.013 * intensity
-  const talkSwayL =  isTalk ? Math.sin(t * 2.2)         * 0.05 * intensity : 0
-  const talkSwayR =  isTalk ? Math.sin(t * 2.2 + 1.1)   * 0.05 * intensity : 0
+  // Step 1: amplitudes route through _amp() so the user's expressiveness /
+  // energy slider rescales every gesture together. `intensity` from
+  // motionManager still rides on top for per-motion variance.
+  const breathArm = breath * _amp(0.013, { energy: 0.6, warmth: 0.4 }) * intensity
+  const talkSwingAmp = _amp(0.05, { expr: 1.0, talkSpeed: 0.4 })
+  const talkSwayL =  isTalk ? Math.sin(t * 2.2)         * talkSwingAmp * intensity : 0
+  const talkSwayR =  isTalk ? Math.sin(t * 2.2 + 1.1)   * talkSwingAmp * intensity : 0
+  const armSwayAmp = _amp(0.014, { fidget: 0.6, energy: 0.4 })
 
   const lUA = h.getRawBoneNode('leftUpperArm')
   if (lUA) {
     lUA.rotation.z = 0.9 + breathArm
-    lUA.rotation.x = sway * 0.014 * intensity + talkSwayL
+    lUA.rotation.x = sway * armSwayAmp * intensity + talkSwayL
   }
   const rUA = h.getRawBoneNode('rightUpperArm')
   if (rUA) {
     rUA.rotation.z = -0.9 - breathArm
-    rUA.rotation.x = -sway * 0.014 * intensity - talkSwayR * 0.6
+    rUA.rotation.x = -sway * armSwayAmp * intensity - talkSwayR * 0.6
   }
+  const elbowAmp = _amp(0.035, { expr: 0.8, talkSpeed: 0.3 })
   const lLA = h.getRawBoneNode('leftLowerArm')
   if (lLA) {
     lLA.rotation.z = 0.2
-    lLA.rotation.x = isTalk ? Math.sin(t * 1.8)        * 0.035 * intensity : 0
+    lLA.rotation.x = isTalk ? Math.sin(t * 1.8)        * elbowAmp * intensity : 0
   }
   const rLA = h.getRawBoneNode('rightLowerArm')
   if (rLA) {
     rLA.rotation.z = -0.2
-    rLA.rotation.x = isTalk ? Math.sin(t * 1.8 + 1.3)  * 0.035 * intensity : 0
+    rLA.rotation.x = isTalk ? Math.sin(t * 1.8 + 1.3)  * elbowAmp * intensity : 0
   }
 
   // ── 다리: 앉기 / 걷기 / 서기 ──────────────────────
@@ -682,27 +700,27 @@ function updateVRMBody(t) {
     if (rLL) rLL.rotation.x =  1.70 - sitBreath
   } else if (state === 'walk') {
     // VRM0: leftUpperLeg.rotation.x positive = leg forward swing.
-    // Conservative swing amplitude (Codex NICE-TO-HAVE round 1): some models
-    // have different axis conventions; 0.35 rad ≈ 20° keeps the gait obvious
-    // but never wraps around if the axis turns out reversed.
-    const stride = t * 7.5
-    const swing = 0.35 * intensity
+    // Step 1: stride amp + swing amp now scale with energy/movementRange so
+    // a "shy" character takes shorter steps and "active" one swings wider.
+    const stride = t * (6.5 + (_ampFactor({ energy: 0.6 }) - 1) * 2)
+    const swing = _amp(0.35, { energy: 0.6, range: 0.4 }) * intensity
     const phase = Math.sin(stride)
     if (lUL) lUL.rotation.x =  phase * swing
     if (rUL) rUL.rotation.x = -phase * swing
-    // Knees only bend in one direction. Use the leading-leg half of the
-    // gait so the trailing leg straightens, the leading leg flexes.
-    if (lLL) lLL.rotation.x = Math.max(0,  Math.sin(stride + 0.4)) * 0.3
-    if (rLL) rLL.rotation.x = Math.max(0, -Math.sin(stride + 0.4)) * 0.3
+    // Knee bend tracks the gait. Knee amplitude also scaled.
+    const kneeAmp = _amp(0.3, { energy: 0.5, range: 0.4 })
+    if (lLL) lLL.rotation.x = Math.max(0,  Math.sin(stride + 0.4)) * kneeAmp
+    if (rLL) rLL.rotation.x = Math.max(0, -Math.sin(stride + 0.4)) * kneeAmp
     // Arms swing opposite phase for natural walking. This OVERRIDES the
     // earlier breathArm + talkSway assignments above on purpose.
+    const armWalkAmp = _amp(0.32, { energy: 0.6, expr: 0.4 })
     if (lUA) {
       lUA.rotation.z = 0.9 + breathArm
-      lUA.rotation.x = -phase * 0.32
+      lUA.rotation.x = -phase * armWalkAmp
     }
     if (rUA) {
       rUA.rotation.z = -0.9 - breathArm
-      rUA.rotation.x =  phase * 0.32
+      rUA.rotation.x =  phase * armWalkAmp
     }
     // Phase G — natural walk extras layered on top of the breathing spine/
     // chest values set earlier. Each adds a small twice-per-stride signal:
@@ -728,6 +746,39 @@ function updateVRMBody(t) {
     if (lLL) lLL.rotation.x = 0
     if (rLL) rLL.rotation.x = 0
   }
+}
+
+// ── Personality-driven amplitude helpers (step 1) ─────────────────────────
+// One place where the personality vector decides "how big" any procedural
+// gesture is. Both updateVRMBody and updateMMDBody read through these so
+// changing a vector signal (e.g. user drags the "expressiveness" slider)
+// rescales arms, legs, spine, head together — no per-bone editing needed.
+//
+// `_amp(baseline, { expr, energy, gaze, fidget, range, talkSpeed })`
+//   returns `baseline * factor` where factor is a weighted sum of the
+//   selected signals around 1.0 (default vector reproduces the old
+//   constant). Each weight is the SHARE of the signal in the multiplier,
+//   capped so a single signal at 1.0 can roughly *double* the gesture but
+//   not blow it up. Falls back to baseline when no vector is set.
+
+function _ampFactor(weights) {
+  const v = motionManager.getPersonalityVector?.()
+  if (!v) return 1
+  let factor = 1
+  if (weights.expr)      factor += (v.expressiveness - 0.45) * weights.expr
+  if (weights.energy)    factor += (v.energy - 0.5)        * weights.energy
+  if (weights.gaze)      factor += (v.gazeStrength - 0.45) * weights.gaze
+  if (weights.fidget)    factor += (v.fidgetiness - 0.3)   * weights.fidget
+  if (weights.range)     factor += (v.movementRange - 0.2) * weights.range
+  if (weights.talkSpeed) factor += (v.talkSpeed - 0.5)     * weights.talkSpeed
+  if (weights.warmth)    factor += (v.warmth - 0.5)        * weights.warmth
+  // Clamp the final factor: 0.4x .. 1.9x of the baseline. Stops a maxed-out
+  // expressive slider from making elbows clip the head.
+  return Math.max(0.4, Math.min(1.9, factor))
+}
+
+function _amp(baseline, weights) {
+  return baseline * _ampFactor(weights)
 }
 
 // ── PMX/MMD procedural body (Phase H1) ─────────────────────────────────────
@@ -853,8 +904,12 @@ function updateMMDBody(t) {
   // Arms — PMX rest is usually T-pose so we layer small motion only.
   // No forced A-pose drop here: model authors stretch arms differently and a
   // forced 0.9 rad rotation can fold the sleeves through the body.
-  const talkSwayL = isTalk ? Math.sin(t * 2.2) * 0.05 * intensity : sway * 0.014 * intensity
-  const talkSwayR = isTalk ? Math.sin(t * 2.2 + 1.1) * 0.05 * intensity : -sway * 0.014 * intensity
+  // Step 1: amplitudes routed through _amp() so the same expressiveness /
+  // energy / fidgetiness slider that scales the VRM rig scales the PMX rig.
+  const armTalkAmp = _amp(0.05, { expr: 1.0, talkSpeed: 0.4 })
+  const armSwayAmp = _amp(0.014, { fidget: 0.6, energy: 0.4 })
+  const talkSwayL = isTalk ? Math.sin(t * 2.2) * armTalkAmp * intensity : sway * armSwayAmp * intensity
+  const talkSwayR = isTalk ? Math.sin(t * 2.2 + 1.1) * armTalkAmp * intensity : -sway * armSwayAmp * intensity
   if (bones.lArm) bones.lArm.rotation.x = talkSwayL
   if (bones.rArm) bones.rArm.rotation.x = talkSwayR
 
@@ -866,15 +921,20 @@ function updateMMDBody(t) {
     if (bones.lKnee) bones.lKnee.rotation.x = 1.70 - sitBreath
     if (bones.rKnee) bones.rKnee.rotation.x = 1.70 - sitBreath
   } else if (state === 'walk') {
-    const stride = t * 7.5
-    const swing = 0.35 * intensity
+    // Step 1: stride speed + swing scale with energy/movementRange. Same
+    // vector signals updateVRMBody uses, so a personality applied to a PMX
+    // model reads identically to the same personality on a VRM model.
+    const stride = t * (6.5 + (_ampFactor({ energy: 0.6 }) - 1) * 2)
+    const swing = _amp(0.35, { energy: 0.6, range: 0.4 }) * intensity
     const phase = Math.sin(stride)
+    const kneeAmp = _amp(0.3, { energy: 0.5, range: 0.4 })
+    const armWalkAmp = _amp(0.30, { energy: 0.6, expr: 0.4 })
     if (bones.lLeg) bones.lLeg.rotation.x = phase * swing
     if (bones.rLeg) bones.rLeg.rotation.x = -phase * swing
-    if (bones.lKnee) bones.lKnee.rotation.x = Math.max(0, Math.sin(stride + 0.4)) * 0.3
-    if (bones.rKnee) bones.rKnee.rotation.x = Math.max(0, -Math.sin(stride + 0.4)) * 0.3
-    if (bones.lArm) bones.lArm.rotation.x = -phase * 0.30
-    if (bones.rArm) bones.rArm.rotation.x = phase * 0.30
+    if (bones.lKnee) bones.lKnee.rotation.x = Math.max(0, Math.sin(stride + 0.4)) * kneeAmp
+    if (bones.rKnee) bones.rKnee.rotation.x = Math.max(0, -Math.sin(stride + 0.4)) * kneeAmp
+    if (bones.lArm) bones.lArm.rotation.x = -phase * armWalkAmp
+    if (bones.rArm) bones.rArm.rotation.x = phase * armWalkAmp
     // Spine weight-shift + chest counter-yaw (matches updateVRMBody pattern)
     if (bones.spine) {
       bones.spine.rotation.z = phase * 0.045 * intensity
@@ -892,8 +952,10 @@ function updateMMDBody(t) {
     // imperceptible, (b) hip/lowerBody wasn't moving so even leg rotation
     // wouldn't read as "shifting weight". Cranked the idle amplitudes ~3x
     // and added a gentle hip rock that drags the whole lower body.
-    const idleBreath = breath * 0.04 * intensity   // ~2.3°
-    const weightShift = sway * 0.10 * intensity    // ~5.7°
+    // Step 1: idle scale follows fidgetiness + energy. Shy character
+    // barely shifts, active one rocks side to side noticeably.
+    const idleBreath = breath * _amp(0.04, { energy: 0.6, warmth: 0.3 }) * intensity
+    const weightShift = sway * _amp(0.10, { fidget: 0.7, energy: 0.4 }) * intensity
     if (bones.hip) {
       bones.hip.rotation.z = sway * 0.025 * intensity
       bones.hip.rotation.x = breath * 0.012 * intensity
@@ -1069,6 +1131,20 @@ if (window.api) {
       }
     }
   }).catch(() => {})
+
+  // Step 1: settings UI slider edits arrive via this broadcast. motionManager
+  // patches the active profile + refreshes the cached vector; the next
+  // frame of updateVRMBody / updateMMDBody picks up the new amplitudes
+  // automatically — no character reload needed.
+  // Codex MUST-FIX (round 2): verify the broadcast targets the *currently
+  // active* character. A user dragging slider A then quickly switching to
+  // character B could otherwise have A's late IPC reply rewrite B's vector.
+  window.api.onCharacterPersonalityUpdated?.(({ characterId, overrides }) => {
+    if (!overrides || typeof overrides !== 'object') return
+    if (characterId && currentCharacterId && characterId !== currentCharacterId) return
+    motionManager.setPersonalityOverrides?.(overrides)
+    setPersonalityVector(motionManager.getPersonalityVector?.() || null)
+  })
 
   window.api.onSettingsApplied(async (s) => {
     currentUserScale = (s.charScale || 100) / 100

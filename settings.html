@@ -483,6 +483,73 @@
   </div>
 
   <!-- ─────────────────────────────────────────────────────────────
+       "캐릭터 컨셉" — 활성 캐릭터의 성격을 슬라이더로 조절.
+       슬라이더 변경 시 실시간으로 캐릭터 동작이 변함(저장은 즉시,
+       다음 reload 때도 유지). Step 1.
+       ───────────────────────────────────────────────────────────── -->
+  <div class="section" id="persona-section">
+    <div class="section-title">캐릭터 컨셉</div>
+    <div class="helper-text" id="persona-active-label" style="margin-bottom:8px;">
+      활성 캐릭터: 없음
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">활발함</div>
+        <div class="row-sub">걸음 빠르기·팔 swing·체중 이동 크기</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="range" id="persona-energy" min="0" max="100" value="50">
+        <span class="range-val" id="persona-energy-val">50</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">표현력</div>
+        <div class="row-sub">말할 때 손짓·표정·반응 크기</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="range" id="persona-expressiveness" min="0" max="100" value="45">
+        <span class="range-val" id="persona-expressiveness-val">45</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">시선 강도</div>
+        <div class="row-sub">마우스/유저를 얼마나 또렷이 응시</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="range" id="persona-gaze" min="0" max="100" value="45">
+        <span class="range-val" id="persona-gaze-val">45</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">움직임 범위</div>
+        <div class="row-sub">방 안에서 활동하는 폭과 보폭</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="range" id="persona-range" min="0" max="100" value="20">
+        <span class="range-val" id="persona-range-val">20</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">잔동작</div>
+        <div class="row-sub">두리번거림·앉아있는 시간 짧아짐</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="range" id="persona-fidget" min="0" max="100" value="30">
+        <span class="range-val" id="persona-fidget-val">30</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────
        "정보 활용" 데이터 패널 — 백엔드 2~4단계(장기 기억/파일/웹)
        기능을 사용자가 실제로 켜고 끄고 관리할 수 있는 UI.
        모든 toggle/select는 backend.env 키로 저장되고 저장 시 자동
@@ -629,6 +696,22 @@ async function init() {
   refreshProviderStatus()
   bindBackendEnvControls()
   refreshBackendEnvPresence()
+  bindPersonaPanel()
+  await refreshPersonaPanel()
+  // Codex MUST-FIX (step 1 round 2): re-resolve the active character when
+  // it changes externally (import, delete, switch). Pending slider save
+  // for the old character is cleared so a delayed save can't write to a
+  // now-stale id.
+  window.api?.onCharacterChanged?.((payload) => {
+    clearTimeout(personaSaveTimer)
+    personaSaveTimer = null
+    refreshPersonaPanel()
+  })
+  window.api?.onCharacterImported?.(() => {
+    clearTimeout(personaSaveTimer)
+    personaSaveTimer = null
+    refreshPersonaPanel()
+  })
   bindDataPanelControls()
   // syncDataPanelEnvFromBackend runs ONCE at init so user edits aren't
   // overwritten by later refreshes. Stats panels poll separately via
@@ -1794,6 +1877,89 @@ function collectDataPanelEnvUpdates() {
   }
 
   return updates
+}
+
+// ── Persona panel (Step 1) ─────────────────────────────────────────────
+const PERSONA_KEYS = [
+  ['energy',         'persona-energy',         'persona-energy-val'],
+  ['expressiveness', 'persona-expressiveness', 'persona-expressiveness-val'],
+  ['gazeStrength',   'persona-gaze',           'persona-gaze-val'],
+  ['movementRange',  'persona-range',          'persona-range-val'],
+  ['fidgetiness',    'persona-fidget',         'persona-fidget-val'],
+]
+
+let personaActiveCharacterId = null
+let personaSaveTimer = null
+
+function bindPersonaPanel() {
+  for (const [, sliderId, valId] of PERSONA_KEYS) {
+    const slider = document.getElementById(sliderId)
+    const out = document.getElementById(valId)
+    if (!slider) continue
+    slider.addEventListener('input', () => {
+      if (out) out.textContent = slider.value
+      clearTimeout(personaSaveTimer)
+      personaSaveTimer = setTimeout(persistPersonaOverrides, 220)
+    })
+  }
+}
+
+async function refreshPersonaPanel() {
+  const label = document.getElementById('persona-active-label')
+  if (!window.api?.getActiveCharacter) {
+    if (label) label.textContent = '활성 캐릭터를 불러올 수 없음'
+    return
+  }
+  let active = null
+  try { active = await window.api.getActiveCharacter() } catch {}
+  if (!active?.character) {
+    personaActiveCharacterId = null
+    if (label) label.textContent = '활성 캐릭터: 없음 (캐릭터 import 후 다시 열어주세요)'
+    for (const [, sliderId] of PERSONA_KEYS) {
+      const slider = document.getElementById(sliderId)
+      if (slider) slider.disabled = true
+    }
+    return
+  }
+  personaActiveCharacterId = active.character.id
+  const name = active.character.customName || active.character.displayName || active.character.id
+  if (label) label.textContent = `활성 캐릭터: ${name}`
+  for (const [, sliderId] of PERSONA_KEYS) {
+    const slider = document.getElementById(sliderId)
+    if (slider) slider.disabled = false
+  }
+
+  const result = await window.api.getCharacterPersonalityOverrides(personaActiveCharacterId).catch(() => null)
+  const overrides = result?.overrides || {}
+  for (const [key, sliderId, valId] of PERSONA_KEYS) {
+    const slider = document.getElementById(sliderId)
+    const out = document.getElementById(valId)
+    if (!slider) continue
+    if (Number.isFinite(overrides[key])) {
+      const value = Math.round(overrides[key] * 100)
+      slider.value = String(value)
+      if (out) out.textContent = String(value)
+    }
+  }
+}
+
+async function persistPersonaOverrides() {
+  if (!personaActiveCharacterId || !window.api?.setCharacterPersonalityOverrides) return
+  const overrides = {}
+  for (const [key, sliderId] of PERSONA_KEYS) {
+    const slider = document.getElementById(sliderId)
+    if (!slider) continue
+    const value = parseInt(slider.value, 10)
+    if (!Number.isFinite(value)) continue
+    overrides[key] = Math.max(0, Math.min(1, value / 100))
+  }
+  try {
+    await window.api.setCharacterPersonalityOverrides(personaActiveCharacterId, overrides)
+  } catch (error) {
+    if (typeof showToast === 'function') {
+      showToast('컨셉 저장 실패: ' + (error?.message || error), 'error', 4000)
+    }
+  }
 }
 
 init()

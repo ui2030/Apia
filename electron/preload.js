@@ -62,6 +62,14 @@ contextBridge.exposeInMainWorld('api', {
   setActiveCharacter: (characterId) =>
     ipcRenderer.invoke('characters:setActive', { characterId }),
 
+  // Step 1 — settings UI slider live updates.
+  setCharacterPersonalityOverrides: (characterId, overrides) =>
+    ipcRenderer.invoke('characters:setPersonalityOverrides', { characterId, overrides }),
+  getCharacterPersonalityOverrides: (characterId) =>
+    ipcRenderer.invoke('characters:getPersonalityOverrides', { characterId }),
+  onCharacterPersonalityUpdated: (cb) =>
+    ipcRenderer.on('character-personality-updated', (e, payload) => cb(payload)),
+
   importCharacterZip: (payload) =>
     ipcRenderer.invoke('characters:importZip', payload),
 

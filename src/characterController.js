@@ -59,9 +59,54 @@ let idleTurn = {
 }
 
 const CAM_LOOK_ROT = Math.PI
-const WALK_SPEED = 1.6
+// Codex MUST-FIX (step 1 round 1): WALK_SPEED / SIT_DURATION are no longer
+// constants. They derive from the active personality vector so a "shy"
+// character walks slower and stays seated longer than an "active" one.
+// Defaults reproduce the pre-Phase-H baseline (1.6 / 8000) when no vector
+// is set yet (dummy model or first frame).
 const ARRIVE_DIST = 0.22
-const SIT_DURATION = 8000
+let _personalityVector = null
+
+function _vec() {
+  return _personalityVector
+}
+
+function _walkSpeed() {
+  const v = _vec()
+  if (!v) return 1.6
+  // 0.8 .. 2.2 range. Energy is the headline driver, movementRange adds a
+  // tail. Clamped so an out-of-range slider can't make the character glide.
+  return Math.max(0.8, Math.min(2.2, 1.0 + v.energy * 0.9 + v.movementRange * 0.3))
+}
+
+function _sitDuration() {
+  const v = _vec()
+  if (!v) return 8000
+  // fidgetiness ↑ → sit shorter. 4_500 .. 13_000 ms.
+  return Math.round(Math.max(4500, Math.min(13000,
+    13000 - v.fidgetiness * 8500
+  )))
+}
+
+function _idleTurnInterval() {
+  const v = _vec()
+  if (!v) return [4, 9]
+  // Codex MUST-FIX: fidgetiness ↑ should make the *interval* shorter (the
+  // character glances around more often). Old draft had it inverted.
+  // 2 .. 6 seconds min, +3 .. 7 random tail.
+  const minSecs = Math.max(1.5, 6 - v.fidgetiness * 4)
+  const tailSecs = Math.max(2, 7 - v.curiosity * 4)
+  return [minSecs, tailSecs]
+}
+
+export function setPersonalityVector(vector) {
+  // Stable ref accepted (recommended) or null to reset to defaults.
+  _personalityVector = vector || null
+}
+
+export function getPersonalityVector() {
+  return _personalityVector
+}
 
 /**
  * Phase A — pick a random spot inside BOUNDS that is at least `minDistance`
@@ -264,7 +309,7 @@ function _walk(mesh, t, dt) {
     return
   }
 
-  const spd = WALK_SPEED * dt
+  const spd = _walkSpeed() * dt
   const nx = dx / dist
   const nz = dz / dist
 
@@ -369,7 +414,7 @@ function _onArrive(mesh) {
     mesh.position.set(activeSitPose.x, activeSitPose.y, activeSitPose.z)
     mesh.rotation.y = activeSitPose.rotY
     setState(STATE.SIT)
-    sitUntil = Date.now() + SIT_DURATION
+    sitUntil = Date.now() + _sitDuration()
   } else {
     activeSitPose = null
     sitUntil = 0
@@ -450,13 +495,24 @@ function _updateIdleTurn(t) {
   if (state !== STATE.IDLE && state !== STATE.SIT) return
 
   if (idleTurn.nextAt === 0 || t >= idleTurn.nextAt) {
-    idleTurn.nextAt = t + 4 + Math.random() * 5
-    idleTurn.targetYaw = (Math.random() - 0.5) * 0.7
+    // Codex MUST-FIX (step 1 round 1): fidgetiness/curiosity now drive how
+    // often the character glances around. Range tightens as fidgetiness goes
+    // up; default vector reproduces the old [4, 9] window.
+    const [minSecs, tailSecs] = _idleTurnInterval()
+    idleTurn.nextAt = t + minSecs + Math.random() * tailSecs
+    // Active personalities look further; calm sticks closer to center.
+    const v = _vec()
+    const range = v ? 0.45 + v.movementRange * 0.5 : 0.7
+    idleTurn.targetYaw = (Math.random() - 0.5) * range
   }
 }
 
 function _getLookYaw() {
-  return lookTargetX * 0.18
+  const v = _vec()
+  // gazeStrength tunes how committedly the character tracks the cursor.
+  // Default (0.45) hits the old 0.18 baseline within 0.005.
+  const strength = v ? 0.10 + v.gazeStrength * 0.18 : 0.18
+  return lookTargetX * strength
 }
 
 function _getLookPitch() {
