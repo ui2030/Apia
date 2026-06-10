@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Apia 채팅</title>
+  <style>
+    :root {
+      --bg: rgba(20, 18, 28, 0.92);
+      --text: #f3eee6;
+      --text-dim: rgba(243, 238, 230, 0.6);
+      --accent: rgba(167, 139, 250, 0.85);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: transparent; overflow: hidden;
+      -webkit-user-select: none; user-select: none;
+    }
+    /* The single chat panel takes the whole window. The window itself is
+       360x520 frameless+transparent so the rounded panel reads as a
+       floating card. */
+    #chat-panel {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      background: var(--bg);
+      border-radius: 16px;
+      border: 1px solid rgba(124, 58, 237, 0.25);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      overflow: hidden;
+      color: var(--text);
+    }
+    .panel-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.07);
+      -webkit-app-region: drag;
+    }
+    .panel-title {
+      flex: 1; font-size: 13px; font-weight: 600;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--accent);
+    }
+    .panel-header label, .panel-header button {
+      -webkit-app-region: no-drag;
+    }
+    #voice-label { font-size: 10px; color: var(--text-dim); }
+    #close-btn {
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text-dim); font-size: 16px; width: 24px; height: 24px;
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    }
+    #close-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+
+    #messages {
+      flex: 1; padding: 10px 12px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 8px;
+      scrollbar-width: thin; scrollbar-color: rgba(124,58,237,0.4) transparent;
+    }
+    .msg-row { display: flex; flex-direction: column; }
+    .msg-row.user { align-items: flex-end; }
+    .msg-label { font-size: 9px; color: var(--text-dim); margin-bottom: 2px; padding: 0 4px; }
+    .msg-bubble {
+      max-width: 85%; padding: 7px 11px; font-size: 12px; line-height: 1.5;
+      border-radius: 12px; -webkit-user-select: text; user-select: text;
+    }
+    .msg-row.ai .msg-bubble {
+      background: rgba(124,58,237,0.2); border: 1px solid rgba(124,58,237,0.25);
+      color: var(--text); border-radius: 4px 12px 12px 12px;
+    }
+    .msg-row.user .msg-bubble {
+      background: rgba(255,255,255,0.08); color: var(--text);
+      border-radius: 12px 4px 12px 12px;
+    }
+    .msg-citations {
+      display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0 4px; max-width: 85%;
+    }
+    .citation-chip {
+      font-size: 10px; padding: 3px 7px; border-radius: 10px;
+      background: rgba(124,58,237,0.16); color: var(--text);
+      border: 1px solid rgba(124,58,237,0.3); cursor: pointer;
+      font-family: inherit; max-width: 240px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    .citation-chip:hover { background: rgba(124,58,237,0.28); }
+    .citation-chip:disabled { opacity: 0.55; cursor: default; }
+
+    #input-area {
+      padding: 8px 10px; border-top: 1px solid rgba(255,255,255,0.07);
+      display: flex; gap: 6px; align-items: center;
+    }
+    #chat-input {
+      flex: 1; background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+      padding: 7px 10px; font-size: 12px; color: var(--text);
+      outline: none; font-family: inherit;
+    }
+    #chat-input:focus { border-color: rgba(124,58,237,0.5); }
+    #chat-input::placeholder { color: var(--text-dim); }
+    .icon-btn {
+      width: 30px; height: 30px; border-radius: 50%; border: none;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      background: rgba(124,58,237,0.35); border: 1px solid rgba(124,58,237,0.45);
+      color: white; font-size: 12px;
+    }
+    .icon-btn:hover { background: rgba(124,58,237,0.55); }
+    .icon-btn:active { transform: scale(0.95); }
+    .icon-btn:disabled { opacity: 0.45; cursor: default; }
+  </style>
+</head>
+<body>
+  <div id="chat-panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <div class="status-dot"></div>
+        Apia
+      </div>
+      <label id="chat-web-toggle-wrap" title="이 대화에서 웹 검색 사용" style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-dim);cursor:pointer;">
+        <input id="chat-web-toggle" type="checkbox" style="margin:0;width:11px;height:11px;cursor:pointer;">
+        웹
+      </label>
+      <span id="voice-label">기본 목소리</span>
+      <button id="close-btn" type="button" title="채팅 닫기 (다시 열기: 트레이 좌클릭 / Ctrl+Alt+A)">×</button>
+    </div>
+    <div id="messages">
+      <div class="msg-row ai">
+        <div class="msg-label">Apia</div>
+        <div class="msg-bubble">안녕하세요! 메시지 보내면 캐릭터가 모니터 너머에서 응답해요.</div>
+      </div>
+    </div>
+    <div id="input-area">
+      <input id="chat-input" type="text" placeholder="메시지 입력... (Enter)">
+      <button class="icon-btn" id="send-btn" type="button" title="보내기">↵</button>
+    </div>
+  </div>
+  <script type="module" src="/src/chatRenderer.js"></script>
+</body>
+</html>

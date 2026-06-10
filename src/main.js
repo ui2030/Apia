@@ -13,7 +13,7 @@ import {
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
-import { updateCharacter, onMouseMove, walkTo, walkToRandomSpot, setEmotion, applyMotion, getState, getLookTarget, getCurrentMotion, setDummyBlinkTarget, clearDummyBlinkTarget } from './characterController.js'
+import { updateCharacter, onMouseMove, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, setDummyBlinkTarget, clearDummyBlinkTarget } from './characterController.js'
 import { initWorld, updateWorldLabels } from './world.js'
 import { initChat } from './chat.js'
 import { MotionManager } from './motionManager.js'
@@ -914,6 +914,66 @@ initChat({
   },
   getIdleMotion: () => {
     return motionManager.pickIdleMotion()
+  }
+})
+
+// Phase F2: listen for character actions forwarded from the standalone chat
+// window. Each action is a plain object — main process already validated it
+// against an allowlist, so this side just routes by name. Codex MUST-FIX:
+// `lipsync-start` enters talk state via setState('talk') + saves the prior
+// state, `lipsync-stop` restores. Otherwise the body stays in idle pose
+// while the mouth animates, and Phase A walk gait keeps overwriting the
+// talk-arm sway.
+let _preLipsyncState = null
+window.api?.onCharacterAction?.((payload) => {
+  if (!payload || typeof payload !== 'object') return
+  switch (payload.action) {
+    case 'emotion': {
+      const emotion = payload.value || 'neutral'
+      setEmotion(emotion)
+      const reactMotion = motionManager.pickReactMotion({ emotion })
+      playMotion(reactMotion)
+      break
+    }
+    case 'bubble':
+      if (typeof payload.text === 'string') showBubble(payload.text, 4000)
+      break
+    case 'face-camera':
+      requestFaceCamera({ durationMs: payload.durationMs || 12000, approach: true })
+      break
+    case 'lipsync-start': {
+      // Codex MUST-FIX (F2 round 1): save prior state and switch to 'talk' so
+      // updateVRMBody's talk branch (arm sway + breath) actually fires; just
+      // toggling lipsync.active animates the mouth but leaves the body in
+      // idle pose.
+      const prior = getState?.()
+      if (prior && prior !== 'talk') _preLipsyncState = prior
+      setState('talk')
+      startSpeaking()
+      break
+    }
+    case 'lipsync-stop':
+      stopSpeaking()
+      // Restore the state the character was in before talking. If it was
+      // walking/sitting we go back there; otherwise idle.
+      if (_preLipsyncState) {
+        setState(_preLipsyncState)
+        _preLipsyncState = null
+      } else {
+        setState('idle')
+      }
+      break
+    case 'show-main-chat': {
+      // Wallpaper-off path: chatWindow yielded, surface the panel inside the
+      // main overlay so the user can keep typing without going through tray.
+      const panel = document.getElementById('chat-panel')
+      const toggle = document.getElementById('chat-toggle')
+      if (panel) panel.classList.add('visible')
+      if (toggle) toggle.style.display = ''
+      break
+    }
+    default:
+      break
   }
 })
 

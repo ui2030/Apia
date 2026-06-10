@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-10 (live wallpaper mode F1)
+Last updated: 2026-06-11 (wallpaper click bug + F2 chat split)
 
 ## Goal
 
@@ -436,7 +436,54 @@ Key files:
 - [settings.html](settings.html) (토글 row + 안내)
 - [package.json](package.json) (electron-as-wallpaper@1.0.8)
 
-### 23. Dependency security pass
+### 23. F1 click-through bug fix
+
+사용자 보고: "라이브 wallpaper인데 데스크탑 아이콘이 안 눌린다, 말이 안 되는데". 정확. WorkerW attach 자체는 OK였지만 BrowserWindow 두 속성이 그 위로 떠올라 클릭을 가로챔.
+
+- `electron/main.js` `syncWallpaperMode()`: wallpaper attach 직전에 `main.setAlwaysOnTop(false)` + `main.setIgnoreMouseEvents(true, { forward: false })`. wallpaper off 시 둘 다 원복.
+  - `alwaysOnTop`은 createMainWindow가 settings에서 true로 잡아 attach 후에도 윈도우가 floating 상태였음.
+  - `setIgnoreMouseEvents(false)`는 wallpaper layer가 모든 클릭을 swallow → SHELLDLL_DefView(데스크탑 아이콘)에 클릭이 안 전달.
+
+### 24. Phase F2 — 채팅 분리 floating window + 트레이/단축키 토글
+
+F1에서 wallpaper 모드는 클릭/타이핑이 OS를 통과해 데스크탑으로 가니까 채팅 인터랙션이 불가. F2는 채팅을 별도 작은 BrowserWindow로 분리하고 wallpaper 캐릭터에는 IPC로 신호만 전달.
+
+- **신설 파일**
+  - `chat.html` (root): 360x520 frameless+transparent 채팅 패널. messages/chat-input/send-btn/voice-label/chat-web-toggle/close-btn DOM.
+  - `src/chatRenderer.js`: chat 윈도우 전용 entry. characterController 의존 X. emotion/bubble/face-camera/lipsync-{start,stop}을 `window.api.notifyCharacter` IPC로 메인 wallpaper에 전달. TTS는 chat 윈도우에서 재생 (Audio element).
+- **변경**
+  - `vite.config.mjs`: `rollupOptions.input`에 `chat` 엔트리 추가.
+  - `electron/preload.js`: `notifyCharacter`, `onCharacterAction`, `chatHide`, `chatToggle` 노출 (메인/채팅 두 윈도우가 동일 preload share).
+  - `electron/main.js`:
+    - `ensureChatWindow()` + `toggleChatWindow()`: wallpaper on이면 chatWindow show/hide, off면 hide + 메인에 `'show-main-chat'` send (기존 chat panel 사용).
+    - chatWindow close 이벤트 `preventDefault()+hide()` (재오픈 즉시).
+    - `character:notify` IPC: `CHARACTER_ACTION_ALLOWLIST`(emotion/bubble/face-camera/lipsync-start/lipsync-stop/show-main-chat)로 검증 후 `mainWindow.webContents.send`. 메인 윈도우 미존재 시 fail (Codex MUST-FIX: 무조건 send 금지).
+    - tray `click` = `toggleChatWindow`, context menu에 "채팅 열기/닫기" 추가, tooltip 갱신.
+    - `globalShortcut` `Ctrl+Alt+A` = `toggleChatWindow`. busy 시 로깅.
+    - `quitApia`에 chatWindow destroy.
+  - `src/main.js`: `requestFaceCamera`, `setState` import 추가. `window.api.onCharacterAction` listen → emotion(설정+react motion+play), bubble(showBubble), face-camera(requestFaceCamera), lipsync-start(이전 state 저장 + `setState('talk')` + startSpeaking), lipsync-stop(stopSpeaking + 이전 state 복원 또는 idle), show-main-chat(메인 chat panel visible class 추가).
+- **TTS 안전성** (Codex MUST-FIX round 2):
+  - `speakWithLipsync()`에 `started` 플래그. lipsync-start 직후 true. `finally`에서 `started`일 때만 lipsync-stop. TTS disabled/no audio/error early return은 stop 안 보내서 face-camera 보행 중이거나 sit 중인 캐릭터 state가 idle로 강제 리셋되지 않음.
+- **인터랙션 흐름** (wallpaper on)
+  - 사용자 트레이 좌클릭 또는 Ctrl+Alt+A → chatWindow show
+  - 메시지 입력 → `window.api.sendMessage` → 백엔드
+  - 응답 → chat 윈도우에 표시 + IPC 3건(emotion/bubble/face-camera) + TTS 재생 + lipsync IPC start/stop
+  - wallpaper 캐릭터: 이모션 표정 변화 + 말풍선 + 모니터 정면 응시 + 입 움직임
+
+**검증**
+- `npm run verify` 181/181 통과.
+- Codex round 2 사후 검증 APPROVE: yes.
+
+Key files (F1 fix + F2):
+
+- [electron/main.js](electron/main.js) (syncWallpaperMode click 가드, ensureChatWindow, toggleChatWindow, character:notify allowlist, tray click, Ctrl+Alt+A)
+- [chat.html](chat.html) (신설)
+- [src/chatRenderer.js](src/chatRenderer.js) (신설, started flag TTS lifecycle)
+- [src/main.js](src/main.js) (onCharacterAction listen, lipsync prior-state restore)
+- [vite.config.mjs](vite.config.mjs) (chat multi-entry)
+- [electron/preload.js](electron/preload.js) (notifyCharacter/onCharacterAction/chatHide/chatToggle)
+
+### 25. Dependency security pass
 
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".

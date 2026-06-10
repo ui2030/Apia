@@ -793,13 +793,18 @@ function setupTrayAndShortcuts() {
     tray = null
   }
   if (tray) {
-    tray.setToolTip('Apia — 우클릭 메뉴 / Ctrl+Alt+Q 종료')
+    tray.setToolTip(
+      'Apia — 좌클릭 채팅 / 우클릭 메뉴 / Ctrl+Alt+A 채팅 / Ctrl+Alt+Q 종료'
+    )
     const buildMenu = () => Menu.buildFromTemplate([
+      { label: '채팅 열기/닫기', click: () => toggleChatWindow() },
       { label: '설정 열기', click: () => windows.openSettings() },
       { type: 'separator' },
       { label: 'Apia 종료', click: () => quitApia() }
     ])
     tray.setContextMenu(buildMenu())
+    // Phase F2: left-click → chat toggle (Windows convention).
+    tray.on('click', () => toggleChatWindow())
     tray.on('double-click', () => windows.openSettings())
   }
 
@@ -813,7 +818,134 @@ function setupTrayAndShortcuts() {
   } catch (error) {
     logWarn('[GLOBAL_SHORTCUT_REGISTER_WARN]', error?.message || error)
   }
+  // Ctrl+Alt+A = chat toggle.
+  try {
+    if (!globalShortcut.isRegistered('CommandOrControl+Alt+A')) {
+      const ok = globalShortcut.register('CommandOrControl+Alt+A', () => toggleChatWindow())
+      if (!ok) logWarn('[GLOBAL_SHORTCUT_REGISTER_BUSY]', 'Ctrl+Alt+A already in use by another app')
+    }
+  } catch (error) {
+    logWarn('[GLOBAL_SHORTCUT_REGISTER_WARN]', error?.message || error)
+  }
 }
+
+// ── Phase F2 — chatWindow + IPC routing ─────────────────────────────────
+
+let chatWindow = null
+function ensureChatWindow() {
+  if (chatWindow && !chatWindow.isDestroyed()) return chatWindow
+  const display = screen.getPrimaryDisplay()
+  const { x, y, width, height } = display.workArea
+  // Codex NICE-TO-HAVE: use workArea (not workAreaSize) so a taskbar on the
+  // left/top of a non-primary monitor or DPI offsets still place the window
+  // correctly. 360x520 in the bottom-right with 24px gutter.
+  const chatW = 360
+  const chatH = 520
+  const gutter = 24
+  chatWindow = new BrowserWindow({
+    width: chatW,
+    height: chatH,
+    x: x + width - chatW - gutter,
+    y: y + height - chatH - gutter,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    hasShadow: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: false
+    }
+  })
+
+  // Closing the X button should hide, not destroy — keeps reopen instant.
+  chatWindow.on('close', (event) => {
+    if (!quittingApia && chatWindow && !chatWindow.isDestroyed()) {
+      event.preventDefault()
+      chatWindow.hide()
+    }
+  })
+
+  const loadChat = async () => {
+    try {
+      if (isDev) {
+        await chatWindow.loadURL('http://localhost:5173/chat.html')
+      } else {
+        await chatWindow.loadFile(path.join(app.getAppPath(), 'dist', 'chat.html'))
+      }
+    } catch (error) {
+      logWarn('[CHAT_WINDOW_LOAD_FAIL]', error?.message || error)
+    }
+  }
+  loadChat()
+
+  return chatWindow
+}
+
+function toggleChatWindow() {
+  // Codex MUST-FIX (F2 round 1): branch on wallpaper mode. When wallpaper is
+  // OFF the main BrowserWindow's own chat panel is the right surface and a
+  // floating chat window would just duplicate it.
+  const wallpaperOn = loadSettings().useWallpaperMode !== false
+  if (!wallpaperOn) {
+    if (chatWindow && !chatWindow.isDestroyed() && chatWindow.isVisible()) {
+      chatWindow.hide()
+    }
+    // Tell the main window to surface its own chat panel — best-effort.
+    const main = windows.getMain()
+    if (main && !main.isDestroyed()) {
+      main.webContents.send('character:action', { action: 'show-main-chat' })
+    }
+    return
+  }
+  const win = ensureChatWindow()
+  if (win.isVisible()) {
+    win.hide()
+  } else {
+    win.show()
+    win.focus()
+  }
+}
+
+// Action allowlist for character:notify forwarding. Adding a new action MUST
+// land in this set and in the renderer-side routeCharacterAction. The guard
+// keeps a compromised chat renderer from triggering arbitrary IPC channels
+// against the main window.
+const CHARACTER_ACTION_ALLOWLIST = new Set([
+  'emotion', 'bubble', 'face-camera', 'lipsync-start', 'lipsync-stop',
+  'show-main-chat'
+])
+
+ipcMain.handle('character:notify', (event, payload) => {
+  if (!payload || typeof payload !== 'object') return { ok: false }
+  if (!CHARACTER_ACTION_ALLOWLIST.has(payload.action)) {
+    logWarn('[CHARACTER_NOTIFY_REJECTED]', payload.action)
+    return { ok: false, reason: 'unknown action' }
+  }
+  const main = windows.getMain()
+  if (!main || main.isDestroyed()) return { ok: false, reason: 'no main window' }
+  try {
+    main.webContents.send('character:action', payload)
+    return { ok: true }
+  } catch (error) {
+    logWarn('[CHARACTER_NOTIFY_SEND_FAIL]', error?.message || error)
+    return { ok: false, reason: error?.message || String(error) }
+  }
+})
+
+ipcMain.handle('chat:hide', () => {
+  if (chatWindow && !chatWindow.isDestroyed()) chatWindow.hide()
+  return { ok: true }
+})
+
+ipcMain.handle('chat:toggle', () => {
+  toggleChatWindow()
+  return { ok: true }
+})
 
 let quittingApia = false
 function quitApia() {
@@ -826,6 +958,12 @@ function quitApia() {
   }
   try { globalShortcut.unregisterAll() } catch {}
   try { tray?.destroy?.(); tray = null } catch {}
+  // Phase F2: destroy chatWindow on real quit so it doesn't keep the process
+  // alive after backend stop.
+  try {
+    if (chatWindow && !chatWindow.isDestroyed()) chatWindow.destroy()
+    chatWindow = null
+  } catch {}
   if (backend.isStartedByApp()) backend.stop()
   app.quit()
 }

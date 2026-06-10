@@ -27,6 +27,15 @@ contextBridge.exposeInMainWorld('api', {
   // citation chip click — main process enforces http/https only.
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
+  // Phase F2 — chat window IPC. `notifyCharacter` lets the standalone chat
+  // window forward emotion/face-camera/bubble/lipsync actions to the
+  // wallpaper main window. Main process applies an action allowlist before
+  // forwarding; this surface is just the renderer-side sugar.
+  notifyCharacter: (payload) => ipcRenderer.invoke('character:notify', payload),
+  onCharacterAction: (cb) => ipcRenderer.on('character:action', (_e, payload) => cb(payload)),
+  chatHide: () => ipcRenderer.invoke('chat:hide'),
+  chatToggle: () => ipcRenderer.invoke('chat:toggle'),
+
   // step 2-4: /store/* surface. Grouped under `store` to keep the global
   // window.api flat while still being self-documenting in renderer code.
   store: {
