@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-11 (PMX procedural fallback)
+Last updated: 2026-06-11 (personality + click toggle + release guards)
 
 ## Goal
 
@@ -515,7 +515,65 @@ Key files (F1 fix + F2):
 - 라이센스: Mixamo asset = Adobe TOS (개인/상업 OK, 재배포 비권장 → `.gitignore`로 사용자 .vmd가 Apia git에 묻히지 않게).
 - Apia settings UI에 "모션 가져오기" 체크리스트형 import assistant — 외부 링크 + 파일 드롭 → user-data 런타임 경로에 저장.
 
-### 27. Dependency security pass
+### 27. Personality-driven procedural automation (/goal step 1)
+
+이 패스의 사용자 의도: 부위별 코드 수정이 아니라 *컨셉 입력 한 줄로 캐릭터 전체 동작*이 일괄 조절. 한 캐릭터는 조신하게, 한 캐릭터는 통통 튀듯 — 같은 코드로.
+
+**인프라**
+- `motionManager` (`src/motionManager.js`):
+  - Stable cached `_vector` (Codex MUST-FIX round 1 — `getPersonalityVector()`가 매 프레임 새 객체 반환 X). `refreshVector()`가 in-place로 필드 갱신.
+  - `setPersonalityOverrides(overrides)` API — 슬라이더 라이브 변경 통로. `_mergePersonaOverrides` + `inferPersonality` 재추론 + `refreshVector`.
+  - `setCharacterProfile(bundle)` 안에서 `bundle.user.personalityOverrides`를 자동 merge 후 personality 재추론 (Codex round 2: profile reload 시 personality preset가 stale이 됐던 버그 fix).
+- `characterController` (`src/characterController.js`):
+  - `WALK_SPEED`/`SIT_DURATION` 상수 → `_walkSpeed()`/`_sitDuration()` getter. vector 신호로 0.8..2.2 / 4500..13000 ms.
+  - `_updateIdleTurn`에 `_idleTurnInterval()` — fidgetiness ↑ → 둘러보는 빈도 ↑ (Codex round 1 부호 fix).
+  - `idleTurn.targetYaw` range가 `movementRange`로 0.45..0.95.
+  - `_getLookYaw()` 강도가 `gazeStrength`로 0.10..0.28 (기본값 0.45가 기존 0.18 베이스라인 유지).
+  - `setPersonalityVector(vector)` / `getPersonalityVector()` export.
+- `src/main.js`:
+  - `_amp(baseline, weights)` + `_ampFactor(weights)` — `expressiveness/energy/gazeStrength/fidgetiness/movementRange/talkSpeed/warmth` 가중치로 baseline 0.4..1.9x 스케일. 기본 vector에서 정확히 1.0 = 기존 amplitude.
+  - `updateVRMBody`/`updateMMDBody` 핵심 amplitude (팔 swing/팔꿈치/walk gait/idle 호흡/체중 이동) 전부 `_amp()` 통과.
+  - `applyCharacterProfileBundle` 안에서 `setPersonalityVector` 호출 + `currentCharacterId` 추적 (Codex round 2: IPC broadcast가 stale 캐릭터에 적용되지 않게).
+  - `onCharacterPersonalityUpdated` listener: 메시지의 `characterId`가 현재 활성 캐릭터와 일치할 때만 적용.
+
+**IPC + 영구화**
+- `registryService.setCharacterPersonalityOverrides(id, overrides)` — `profile.user.json`에 `personalityOverrides` 필드 merge (0..1 clamp).
+- `registryService.getCharacterPersonalityOverrides(id)` — 패널 로드 시.
+- `registerCharacterIpc`: `characters:setPersonalityOverrides` + `characters:getPersonalityOverrides` 핸들러. 성공 시 main window로 `character-personality-updated` 브로드캐스트.
+- `preload.js`: `setCharacterPersonalityOverrides` / `getCharacterPersonalityOverrides` / `onCharacterPersonalityUpdated` 노출.
+
+**Settings UI** (`settings.html`):
+- 새 섹션 "캐릭터 컨셉" — 활성 캐릭터 이름 + 슬라이더 5개 (활발함/표현력/시선 강도/움직임 범위/잔동작).
+- 220 ms 디바운스 저장. 슬라이더 움직이는 즉시 IPC → main 윈도우 캐릭터 동작 반영.
+- `character-changed`/`character-imported` 브로드캐스트 시 패널 refresh + pending timer 클리어 (Codex round 2: 캐릭터 전환 race 방지).
+
+### 28. Click-to-chat + release guards (/goal step 3 + 4)
+
+- **Step 3** (`src/chat.js` + `src/main.js`): 일반 overlay 모드일 때 *캐릭터 mesh 위를 마우스가 지나면* setIgnoreMouseEvents(false), 클릭하면 chat panel toggle. wallpaper 모드는 OS가 클릭을 데스크탑으로 routing해서 의도적으로 비활성 (Codex round 1에서 `forwardMouseInput` 시도 deferral).
+  - `THREE.Raycaster` + `Vector2`, `currentModel.root`에 재귀 raycast.
+  - `chat.js`의 click-through 매니저에 `characterRaycaster` 콜백 + window pointerdown listener.
+  - `main.js`가 `onSettingsApplied`로 wallpaper 토글 시 실시간 raycaster set/null.
+- **Step 4** — packaged release wallpaper attach 검증:
+  - `electron-builder.yml`: `asarUnpack: node_modules/electron-as-wallpaper/**/*` 추가. native `.node` 바인딩이 `.asar` 외부에 풀려야 `require('electron-as-wallpaper')` 동작.
+  - `files`에도 같은 path 포함.
+  - `scripts/smoke-release.mjs` `failureMarkers`에 `[WALLPAPER_ATTACH_FAIL]` + `[WALLPAPER_UNAVAILABLE]` 추가. asarUnpack 누락 / native binary 미동봉이 release-blocking 회귀로 잡힘.
+
+### 29. 사용자 가시 변화 (이번 /goal 패스 한 번에 다 켜짐)
+
+다시 켜시면(`Apia 시작.cmd`) 즉시 보이는 변화 목록:
+
+| 어디서 | 무엇이 | 어떻게 확인 |
+|---|---|---|
+| 트레이 우클릭 → 설정 → 캐릭터 컨셉 | 슬라이더 5개 (활발함/표현력/시선/움직임/잔동작) | 슬라이더 끝까지 끌어 캐릭터 동작 즉시 변화 보임 |
+| Wallpaper 캐릭터 | 슬라이더 따라 팔 swing 진폭·걸음 빠르기·체중 이동 크기 변화 | "활발함" 0→100으로 끌어보면 명확 |
+| 일반 overlay 모드 (설정에서 "바탕화면에 박기" 끄기) | 캐릭터 mesh 위 클릭으로 chat panel 토글 | 캐릭터 위에 마우스 → 클릭하면 채팅창 열림 |
+| 트레이 / Ctrl+Alt+A / Ctrl+Alt+Q | 그대로 (변화 없음) | 기존 흐름 유지 |
+
+### 30. /goal step 2 + 6 — Mixamo .fbx 정밀 retargeting (별도 패스 대기)
+
+Codex round 1에서 6 MUST-FIX (Mixamo prefix 정규화 / rest pose 축 보정 / hips translation scale / user-data IPC+file-protocol / 라이센스 가드 번들 X / MMD .fbx 우회)가 한 라운드로 못 마치는 깊이여서 별도 /goal 패스로 deferral. step 6 task 등록 + 사용자 동의 받은 deferral. 인프라 (`animationRuntime.js`의 race-guard + manifest)는 그대로 재사용 예정.
+
+### 31. Dependency security pass
 
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".
