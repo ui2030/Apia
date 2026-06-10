@@ -37,7 +37,14 @@ const SETTINGS_DEFAULTS = Object.freeze({
   // can still be added at the renderer layer later. Default false because
   // a user without a configured provider should not see "we searched but
   // got nothing" on every reply.
-  useWebDefault: false
+  useWebDefault: false,
+  // Phase F: when true, the main overlay attaches itself as a Windows
+  // wallpaper layer (behind desktop icons). Default true on the assumption
+  // that anyone who installs Apia wants the "lives in your desktop"
+  // experience; if `wallpaperMode.isAvailable()` returns false at boot
+  // (non-Windows, native load failure), Electron silently falls back to
+  // the old transparent-overlay path.
+  useWallpaperMode: true
 })
 
 const BACKEND_ENV_EXAMPLE_FILENAME = 'backend.env.example'
@@ -115,6 +122,11 @@ class SettingsRepository {
     settings.alwaysOnTop = settings.alwaysOnTop !== false
     settings.ttsEnabled = settings.ttsEnabled !== false
     settings.useWebDefault = settings.useWebDefault === true
+    // Phase F: default true means new installs land in wallpaper mode. A
+    // pre-Phase-F settings.json (no key set) hydrates as true too — same
+    // intent. Coerce non-boolean to true so a hand-edited "yes"/null
+    // doesn't accidentally turn the mode off.
+    settings.useWallpaperMode = settings.useWallpaperMode !== false
     settings.models = Array.isArray(settings.models) ? settings.models : []
     settings.voiceId = typeof settings.voiceId === 'string' && settings.voiceId ? settings.voiceId : null
     // Anchor: normalize through the policy module — non-finite, missing, or

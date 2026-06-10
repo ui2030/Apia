@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-10 (warm room + furniture pass)
+Last updated: 2026-06-10 (live wallpaper mode F1)
 
 ## Goal
 
@@ -400,7 +400,43 @@ Key files:
 - [src/world.js](src/world.js) (DEFAULT_WORLD_OBJECTS가 furnitureLayout 사용, triggerAutoBehavior includeDecor)
 - [src/main.js](src/main.js) (scheduleAutoBehavior includeDecor:true)
 
-### 22. Dependency security pass
+### 22. Live wallpaper mode — Phase F1 (Wallpaper Engine 식)
+
+사용자 피드백 "방을 추가하면 바탕화면을 가리니까 그냥 바탕화면 자리 대체로 만들어달라" + 후속 확인 "진짜 라이브 바탕화면 (Wallpaper Engine·Lively 식)" 옵션 선택. 메인 BrowserWindow를 Windows의 Progman/WorkerW 자식으로 주입해 데스크탑 아이콘 뒤에 위치.
+
+- 의존성: `electron-as-wallpaper@1.0.8` (C++ node-gyp 빌드). 2.x는 Rust(cargo) 필요해서 사용자 환경 호환성 위해 1.x 시리즈 pin. **packaging 주의**: 이 native 모듈은 `electron-builder` `asarUnpack`에 추가해야 dist에서 require 가능 — 다음 release 패스에서 확인.
+- `electron/services/wallpaperMode.js` 신설: lazy require + `isAvailable/enableWallpaper/disableWallpaper/isAttached/getLoadError`. 비-Windows / native load 실패 시 graceful (앱 startup crash X). detach 실패 시 `reset()` fallback. `APIA_E2E_DISABLE_WALLPAPER=1` seam.
+- `electron/main.js`:
+  - app.whenReady 후 `syncWallpaperMode()` (설정 따라 attach/detach) + `setupTrayAndShortcuts()`.
+  - Tray: `build/icon.ico` → `public/favicon.ico` → 인라인 보라 16x16 base64 → 1x1 fallback 4단계. (Codex MUST-FIX round 2-3: 두 path 모두 존재하지 않거나 invalid해도 시각적 트레이 보장).
+  - Tray 메뉴: "설정 열기" / "Apia 종료". double-click도 설정.
+  - GlobalShortcut: `Ctrl+Alt+Q` = quitApia. `register()` 반환 false면 busy 로그.
+  - `quitApia()`: detach + globalShortcut.unregisterAll + tray.destroy + backend.stop + app.quit. 외부 진입점 (트레이/단축키)만이 진짜 종료를 트리거.
+  - `apply-settings`: wallpaper 모드면 `windows.applySettings({...settings, alwaysOnTop:false})`로 호출 (Codex MUST-FIX: setAlwaysOnTop이 WorkerW attach를 깸). 직후 `syncWallpaperMode`로 토글 반영.
+  - `window-all-closed`: wallpaper 모드 + 사용자 명시 quit 아니면 quit 안 함 (트레이가 유일한 진입점).
+  - `before-quit`: detach. `will-quit`: globalShortcut.unregisterAll.
+  - `display-metrics-changed/added/removed`에 detach + sync (WorkerW 핸들이 모니터 변경 시 무효화될 수 있음).
+- `syncWallpaperMode().then()` 안에서 settings + window 다시 평가 (Codex MUST-FIX round 2: 사용자가 ready-to-show 이전에 토글을 끄면 stale promise가 attach 호출했음).
+- `electron/schemas.js` + `electron/services/settingsAggregate.js` + `settings.html`: `useWallpaperMode: boolean` default true. settings 패널에 "바탕화면에 박기" 토글 + 사용자 인터랙션 한계 안내문.
+
+**한계 (F2 별도 패스로 deferral)**
+- Wallpaper 모드 중 캐릭터/UI 클릭 불가 — OS가 데스크탑으로 인식. 사용자는 settings 토글을 끄거나 트레이/단축키 사용.
+- 채팅 패널이 메인 윈도우 안에 살아 있어 wallpaper 모드에선 안 보임. F2에서 별도 BrowserWindow(`chatWindow`) + tray 좌클릭 = 채팅 토글로 분리 예정.
+
+**검증**
+- `npm run verify` 181/181 통과.
+- Codex round 3 사후 검증: tray fallback 정합 + ready-to-show stale 가드 + 안내문/로깅 NICE-TO-HAVE 반영. Codex 환경 `spawn EPERM`은 환경 권한 이슈.
+
+Key files:
+
+- [electron/services/wallpaperMode.js](electron/services/wallpaperMode.js) (신설 — lazy attach/detach 래퍼)
+- [electron/main.js](electron/main.js) (syncWallpaperMode + setupTrayAndShortcuts + quitApia + apply-settings 분기 + window-all-closed 분기 + display 이벤트)
+- [electron/schemas.js](electron/schemas.js) (useWallpaperMode)
+- [electron/services/settingsAggregate.js](electron/services/settingsAggregate.js) (useWallpaperMode default true + coercion)
+- [settings.html](settings.html) (토글 row + 안내)
+- [package.json](package.json) (electron-as-wallpaper@1.0.8)
+
+### 23. Dependency security pass
 
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".

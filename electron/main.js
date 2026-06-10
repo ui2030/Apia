@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require('electron')
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } = require('electron')
 app.commandLine.appendSwitch('allow-file-access-from-files')
 
 const path = require('path')
@@ -40,6 +40,7 @@ const { BackendLifecycle } = require('./services/backendLifecycle')
 const { SettingsRepository } = require('./services/settingsAggregate')
 const { BackendEnvRepository } = require('./services/backendEnvRepository')
 const { WindowManager } = require('./services/windowManager')
+const wallpaperMode = require('./services/wallpaperMode')
 
 const isDev = process.argv.includes('--dev')
 const CONFIGURED_BACKEND_URL = process.env.APIA_BACKEND_URL || DEFAULT_BACKEND_URL
@@ -503,7 +504,17 @@ ipcMain.handle('open-settings', () => {
 
 ipcMain.handle('apply-settings', (e, s) => {
   const settings = saveSettings(s)
-  windows.applySettings(settings)
+  // Phase F Codex MUST-FIX: WindowManager.applySettings still calls
+  // setAlwaysOnTop. In wallpaper mode that would yank the BrowserWindow
+  // out of the WorkerW layer and back to overlay, defeating the mode.
+  // Guard the always-on-top side effect to overlay mode only.
+  if (settings.useWallpaperMode === false) {
+    windows.applySettings(settings)
+  } else {
+    windows.applySettings({ ...settings, alwaysOnTop: false })
+  }
+  // Re-sync the attach/detach in case the user just flipped the toggle.
+  syncWallpaperMode()
   return { ok: true, settings }
 })
 
@@ -630,6 +641,23 @@ app.on('child-process-gone', (event, details) => {
   logWarn('[CHILD_PROCESS_GONE]', details)
 })
 
+// Phase F1: when monitors are added/removed/rearranged, Windows may invalidate
+// the WorkerW handle we attached to. Re-syncing the wallpaper mode forces a
+// detach + re-attach against the current Progman state. Codex NICE-TO-HAVE.
+function rewallpaperOnDisplayChange() {
+  const settings = loadSettings()
+  if (settings.useWallpaperMode === false) return
+  try {
+    wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
+  } catch {}
+  syncWallpaperMode()
+}
+app.whenReady().then(() => {
+  screen.on('display-metrics-changed', rewallpaperOnDisplayChange)
+  screen.on('display-added', rewallpaperOnDisplayChange)
+  screen.on('display-removed', rewallpaperOnDisplayChange)
+})
+
 app.on('web-contents-created', (event, contents) => {
   contents.on('render-process-gone', (goneEvent, details) => {
     logError('[WEB_CONTENTS_RENDER_GONE]', { id: contents.id, details })
@@ -666,12 +694,133 @@ app.whenReady().then(async () => {
   })
 
   await windows.createMainWindow()
+
+  // Phase F1: drop the main overlay into the Windows wallpaper layer (behind
+  // desktop icons). Codex MUST-FIX: lazy + graceful — if the native module
+  // isn't available (non-Windows, build missing), fall back to the existing
+  // overlay path silently. The first paint hides behind icons; we wait for
+  // ready-to-show so attach() never runs against a partially constructed
+  // HWND.
+  syncWallpaperMode()
+  setupTrayAndShortcuts()
 }).catch(async (error) => {
   await windows.showStartupError('Apia failed during app initialization.', error)
 })
 
+// ── Phase F1 wallpaper mode integration ─────────────────────────────────────
+
+function syncWallpaperMode() {
+  const main = windows.getMain()
+  if (!main || main.isDestroyed()) return
+  const want = loadSettings().useWallpaperMode !== false
+  if (want) {
+    const ready = main.isVisible() ? Promise.resolve() : new Promise((resolve) => {
+      main.once('ready-to-show', resolve)
+    })
+    Promise.resolve(ready).then(() => {
+      // Codex MUST-FIX (round 2): a stale ready-to-show promise from an
+      // earlier sync can fire after the user has flipped the toggle off.
+      // Re-read settings + window state inside the .then() so the actual
+      // attach decision uses the current state, not the captured one.
+      const live = windows.getMain()
+      if (!live || live.isDestroyed()) return
+      if (loadSettings().useWallpaperMode === false) return
+      wallpaperMode.enableWallpaper(live, { info: logInfo, warn: logWarn })
+    })
+  } else if (wallpaperMode.isAttached()) {
+    wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn })
+  }
+}
+
+// 16x16 purple square PNG, used as a tray-icon fallback so a fresh install
+// without build/icon.ico still gets a visible system-tray entry. Codex
+// MUST-FIX (round 2): both icon paths were missing, so the unguarded
+// `new Tray(missingPath)` was the actual reason tray didn't show up.
+const TRAY_FALLBACK_ICON_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAOklEQVR42mNkYGD4z0AEYBxVSF' +
+  'WhFKEKqQqoCKgIqAhDFVAxUBFQEVARUBFQEVARUBFQEVDRwFcEAGoVAuJzfYUOAAAAAElFTkSuQmCC'
+
+let tray = null
+function setupTrayAndShortcuts() {
+  if (tray) return
+  try {
+    const iconPath = path.join(__dirname, '..', 'build', 'icon.ico')
+    const altPath = path.join(__dirname, '..', 'public', 'favicon.ico')
+    let image = null
+    if (fs.existsSync(iconPath)) {
+      image = nativeImage.createFromPath(iconPath)
+    } else if (fs.existsSync(altPath)) {
+      image = nativeImage.createFromPath(altPath)
+    } else {
+      image = nativeImage.createFromBuffer(Buffer.from(TRAY_FALLBACK_ICON_BASE64, 'base64'))
+    }
+    // Codex MUST-FIX (round 3): if the path existed but the file is
+    // corrupt/invalid, `image.isEmpty()` is true here but the user still
+    // gets the visible purple fallback before the last-ditch 1x1 — earlier
+    // code skipped straight to the transparent pixel and silently lost the
+    // tray icon visibility.
+    if (image.isEmpty()) {
+      image = nativeImage.createFromBuffer(Buffer.from(TRAY_FALLBACK_ICON_BASE64, 'base64'))
+    }
+    if (image.isEmpty()) {
+      image = nativeImage.createFromBuffer(
+        Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORk5CYII=', 'base64')
+      )
+    }
+    tray = new Tray(image)
+  } catch (error) {
+    logWarn('[TRAY_INIT_WARN]', error?.message || error)
+    tray = null
+  }
+  if (tray) {
+    tray.setToolTip('Apia — 우클릭 메뉴 / Ctrl+Alt+Q 종료')
+    const buildMenu = () => Menu.buildFromTemplate([
+      { label: '설정 열기', click: () => windows.openSettings() },
+      { type: 'separator' },
+      { label: 'Apia 종료', click: () => quitApia() }
+    ])
+    tray.setContextMenu(buildMenu())
+    tray.on('double-click', () => windows.openSettings())
+  }
+
+  // Ctrl+Alt+Q = quit. Quit shortcut comes first because a tray-less user
+  // can otherwise get stuck (wallpaper mode + no taskbar entry).
+  try {
+    if (!globalShortcut.isRegistered('CommandOrControl+Alt+Q')) {
+      const ok = globalShortcut.register('CommandOrControl+Alt+Q', () => quitApia())
+      if (!ok) logWarn('[GLOBAL_SHORTCUT_REGISTER_BUSY]', 'Ctrl+Alt+Q already in use by another app')
+    }
+  } catch (error) {
+    logWarn('[GLOBAL_SHORTCUT_REGISTER_WARN]', error?.message || error)
+  }
+}
+
+let quittingApia = false
+function quitApia() {
+  if (quittingApia) return
+  quittingApia = true
+  try {
+    wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
+  } catch (error) {
+    logWarn('[QUIT_DETACH_WARN]', error?.message || error)
+  }
+  try { globalShortcut.unregisterAll() } catch {}
+  try { tray?.destroy?.(); tray = null } catch {}
+  if (backend.isStartedByApp()) backend.stop()
+  app.quit()
+}
+
 app.on('window-all-closed', () => {
   logWarn('[WINDOW_ALL_CLOSED]', { processPlatform: process.platform, backendStartedByApp: backend.isStartedByApp() })
+  // Phase F1 Codex MUST-FIX: a tray-only / wallpaper-only app must NOT
+  // quit when every BrowserWindow is closed — the tray + global shortcut
+  // are the user's only remaining way back in. The explicit "Apia 종료"
+  // menu item or Ctrl+Alt+Q calls quitApia() which sets quittingApia.
+  // We still let macOS keep its standard Cmd+Q behavior.
+  const settings = loadSettings()
+  if (settings.useWallpaperMode !== false && !quittingApia) {
+    return
+  }
   if (backend.isStartedByApp()) {
     backend.stop()
   }
@@ -680,12 +829,21 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   logInfo('[BEFORE_QUIT]', { backendStartedByApp: backend.isStartedByApp() })
+  try {
+    wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
+  } catch (error) {
+    logWarn('[BEFORE_QUIT_DETACH_WARN]', error?.message || error)
+  }
   // Drain the debounced anchor save before the window is gone — otherwise
   // a quit during a drag loses the final position.
   windows.flushPendingAnchor()
   if (backend.isStartedByApp()) {
     backend.stop()
   }
+})
+
+app.on('will-quit', () => {
+  try { globalShortcut.unregisterAll() } catch {}
 })
 
 app.on('activate', () => {

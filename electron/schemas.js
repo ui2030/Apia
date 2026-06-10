@@ -47,7 +47,11 @@ const SettingsSchema = z.object({
   // step 4 — every /chat defaults to use_web=true when enabled. Optional in
   // the schema for backward compat: a settings.json written by an older
   // version will hydrate to `false` via SETTINGS_DEFAULTS.
-  useWebDefault: z.boolean().optional()
+  useWebDefault: z.boolean().optional(),
+  // Phase F — when true, the main BrowserWindow attaches as a Windows
+  // wallpaper layer (behind desktop icons). Optional/forward-compat: a
+  // settings.json from a pre-Phase-F build will hydrate to the default.
+  useWallpaperMode: z.boolean().optional()
 }).passthrough() // tolerate forward-compatible extra keys, but enforce known ones
 
 // ── World (apia-world.json) ──────────────────────────────────────────────

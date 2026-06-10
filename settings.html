@@ -449,6 +449,18 @@
         <span class="range-val" id="memory-val">10턴</span>
       </div>
     </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">바탕화면에 박기</div>
+        <div class="row-sub">켜면 캐릭터·방이 바탕화면 자리(데스크탑 아이콘 뒤)에 들어갑니다. 이 모드에선 캐릭터 클릭·채팅이 안 되니, 인터랙션이 필요하면 끄세요. 종료: 트레이 또는 Ctrl+Alt+Q</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="use-wallpaper-mode">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
   </div>
 
   <div class="section">
@@ -1010,6 +1022,7 @@ function applyToUI() {
   document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '턴'
   document.getElementById('tts-enabled').checked = settings.ttsEnabled !== false
   document.getElementById('use-web-default-toggle').checked = settings.useWebDefault === true
+  document.getElementById('use-wallpaper-mode').checked = settings.useWallpaperMode !== false
 }
 
 document.getElementById('char-scale').addEventListener('input', e => {
@@ -1228,6 +1241,7 @@ async function save() {
     ttsEnabled: document.getElementById('tts-enabled').checked,
     voiceId: document.getElementById('voice-select').value,
     useWebDefault: document.getElementById('use-web-default-toggle').checked,
+    useWallpaperMode: document.getElementById('use-wallpaper-mode').checked,
   }
 
   saveBusy.set('저장 중…')

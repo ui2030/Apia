@@ -21,6 +21,7 @@
     "@pixiv/three-vrm": "^3.5.1",
     "@pixiv/three-vrm-animation": "^3.5.2",
     "adm-zip": "^0.5.17",
+    "electron-as-wallpaper": "^1.0.8",
     "extract-zip": "^2.0.1",
     "three": "^0.164.1",
     "zod": "^3.23.8"
