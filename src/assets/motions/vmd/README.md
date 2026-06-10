@@ -48,8 +48,11 @@ MMD 캐릭터용 `.vmd` 모션 클립 드롭 위치. VRMA 매니페스트(`../ma
 - `idle_sway` — 팔/허리 좌우 흔들기
 - `idle_tidy` — 옷 털기
 - `idle_tracker` — 주변 살피기
-- `idle_impatient` — 발 동동
-- `idle_mermay` — 꼬리 모션 (인어 캐릭터용; 키사키 꼬리 본에도 자동 매핑)
+- `idle_impatient` — 발 동동 (캐릭터 몸이 옆으로 turn — *방 한가운데*에 캐릭터 두고 쓸 때 가장 자연스러움)
+
+> **Step 5 hotfix**: `mermay` (인어 꼬리 모션) 은 인간형 PMX에 적용 시 *팔이 등 뒤로 펼쳐지고 한쪽 다리가 옆으로 들리는* 인어 자세를 강제해서 제거함. 인어 모델용이지 일반 캐릭터용 X.
+>
+> 또한 `playMMDAnimation`에서 `.vmd` 클립의 **root + IK 본 position track**을 자동 제거 — `センター/グルーブ/腰/全ての親/左足IK/右足IK/左つま先IK/右つま先IK/左足IK親/右足IK親` (전각 ＩＫ 정규화). 회전·모프 트랙은 유지. 클립이 캐릭터를 방 밖으로 *걸어 보내는* 사고 방지.
 
 `.vmd` 바이너리는 `.gitignore`로 git에서 제외 (원본 재배포 금지 준수). 사용자가
 [원본 페이지](https://www.deviantart.com/deedee524/art/Idle-Animation-Pack-759426476)에서

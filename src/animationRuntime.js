@@ -394,6 +394,49 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
         (clip) => {
           if (ctx.getCurrentModel() !== model || myToken !== _vmdSequenceToken) { resolve(null); return }
 
+          // Strip ROOT + IK bone position tracks (Step 5 of /goal hotfix).
+          //
+          // Some .vmd idle clips keyframe POSITION on the central spine
+          // (センター/グルーブ/腰/全ての親) and the foot IK targets
+          // (左足ＩＫ/右足ＩＫ/etc.). Under MMDAnimationHelper's mixer
+          // those translations physically walk the character across the
+          // room. Apia keeps the character where the user placed them.
+          //
+          // We strip *only* root + IK position tracks — NOT every bone.
+          // Hair/skirt/clothing bones have legitimate position offsets
+          // that the physics simulator + bind pose depend on; stripping
+          // those collapses the model.
+          //
+          // Codex MUST-FIX round 2: PMX rigs ship with EITHER full-width
+          // (`ＩＫ`) OR half-width (`IK`) bone names depending on the
+          // model author. The canonical set lives in half-width form and
+          // we normalize every track's bone name before comparing.
+          const normalizeBoneName = (n) => n.replace(/[ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ]/g, (c) =>
+            String.fromCharCode(c.charCodeAt(0) - 0xFEE0)
+          )
+          const ROOT_BONES = new Set(
+            [
+              'センター', 'グルーブ', '腰', '全ての親',
+              '左足IK', '右足IK', '左つま先IK', '右つま先IK',
+              '左足IK親', '右足IK親',
+            ].map(normalizeBoneName)
+          )
+          const beforeCount = clip.tracks.length
+          clip.tracks = clip.tracks.filter((tr) => {
+            if (!tr.name.endsWith('.position')) return true
+            const m = tr.name.match(/(?:^|\.)bones\[([^\]]+)\]\.position$/)
+            const boneName = m ? m[1] : tr.name.replace(/\.position$/, '')
+            return !ROOT_BONES.has(normalizeBoneName(boneName))
+          })
+          if (clip.tracks.length !== beforeCount) {
+            console.info('[VMD] stripped root+IK position tracks', {
+              url: url.split('/').pop(),
+              before: beforeCount,
+              after: clip.tracks.length,
+              dropped: beforeCount - clip.tracks.length,
+            })
+          }
+
           // helper.add는 같은 mesh에 호출돼도 누적될 수 있다. remove 먼저 호출해서
           // 이전 animation / mixer state를 깔끔히 비우고 새 clip을 단다.
           // Codex MUST-FIX (생동감): physics: true so hair/skirt rigid

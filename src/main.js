@@ -756,6 +756,13 @@ function updateBody(t, delta) {
   // resolveMotionAsset / resolveMmdMotionAsset that targets only arm
   // bones (no torso/leg tracks).
 
+  // Root-position lock used to live here as a per-frame mesh.skeleton
+  // walk to copy restPos into 3 root bones. Codex round 2 pointed out
+  // it was incomplete (missing 全ての親 + IK + IK親 + half-width/full-
+  // width variants) and now redundant with the track-strip in
+  // animationRuntime's playMMDAnimation. Removed to avoid two sources
+  // of truth.
+
   const { summed } = computePoseTargets({
     registry,
     saccadeState: saccade,
