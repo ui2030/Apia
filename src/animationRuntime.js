@@ -227,10 +227,30 @@ function retargetMixamoToVRM(rawClip, vrm) {
     if (!boneNode) continue
 
     if (prop === 'quaternion') {
+      // Step 6 round 3 — rest pose axis correction. Mixamo records each
+      // bone's keyframe rotation in *its own* local space, where the rest
+      // pose is roughly T-pose with identity quaternions. The VRM has
+      // already been pushed into A-pose by setupVRMRestPose, so a raw
+      // copy makes the arms swing from the wrong baseline. Left-multiply
+      // by the VRM bone's rest quaternion so the clip's delta rotates
+      // *from* the A-pose anchor.
+      const restQuat = boneNode.quaternion // local rest, ref
+      const inVals = track.values
+      const outVals = new Float32Array(inVals.length)
+      const tq = new Quaternion()
+      const out = new Quaternion()
+      for (let i = 0; i + 3 < inVals.length; i += 4) {
+        tq.set(inVals[i], inVals[i + 1], inVals[i + 2], inVals[i + 3])
+        out.copy(restQuat).multiply(tq)
+        outVals[i]     = out.x
+        outVals[i + 1] = out.y
+        outVals[i + 2] = out.z
+        outVals[i + 3] = out.w
+      }
       tracks.push(new QuaternionKeyframeTrack(
         `${boneNode.name}.quaternion`,
         Array.from(track.times),
-        Array.from(track.values)
+        Array.from(outVals)
       ))
     } else if (prop === 'position' && vrmKey === 'hips') {
       // Codex MUST-FIX (step 6 round 2): take the first-frame Mixamo hips
