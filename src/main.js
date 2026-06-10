@@ -743,16 +743,22 @@ function updateVRMBody(t) {
 // quality motion still needs `.vmd` clips — see vrma/README.md for the
 // Mixamo→VMD route.
 const _MMD_BONE_CANDIDATES = {
-  spine:     ['上半身', 'Spine', 'spine'],
-  chest:     ['上半身2', 'Chest', 'chest'],
-  neck:      ['首', 'Neck', 'neck'],
-  head:      ['頭', 'Head', 'head'],
-  lArm:      ['左腕', 'L_Arm', 'arm_L', 'leftArm', 'LeftArm'],
-  rArm:      ['右腕', 'R_Arm', 'arm_R', 'rightArm', 'RightArm'],
-  lLeg:      ['左足', 'L_Leg', 'leg_L', 'leftLeg', 'LeftLeg'],
-  rLeg:      ['右足', 'R_Leg', 'leg_R', 'rightLeg', 'RightLeg'],
-  lKnee:     ['左ひざ', '左膝', 'L_Knee', 'knee_L', 'leftKnee', 'LeftKnee'],
-  rKnee:     ['右ひざ', '右膝', 'R_Knee', 'knee_R', 'rightKnee', 'RightKnee'],
+  spine:     ['上半身', 'Spine', 'spine', 'UpperBody', 'Bip01_Spine'],
+  chest:     ['上半身2', 'Chest', 'chest', 'UpperBody2', 'Bip01_Spine1'],
+  neck:      ['首', 'Neck', 'neck', 'Bip01_Neck'],
+  head:      ['頭', 'Head', 'head', 'Bip01_Head'],
+  lArm:      ['左腕', 'L_Arm', 'arm_L', 'leftArm', 'LeftArm', 'L_UpperArm',
+              'LeftUpperArm', 'UpperArm_L', 'Bip01_L_UpperArm'],
+  rArm:      ['右腕', 'R_Arm', 'arm_R', 'rightArm', 'RightArm', 'R_UpperArm',
+              'RightUpperArm', 'UpperArm_R', 'Bip01_R_UpperArm'],
+  lLeg:      ['左足', 'L_Leg', 'leg_L', 'leftLeg', 'LeftLeg', 'L_UpperLeg',
+              'LeftUpperLeg', 'UpperLeg_L', 'L_Thigh', 'Bip01_L_Thigh'],
+  rLeg:      ['右足', 'R_Leg', 'leg_R', 'rightLeg', 'RightLeg', 'R_UpperLeg',
+              'RightUpperLeg', 'UpperLeg_R', 'R_Thigh', 'Bip01_R_Thigh'],
+  lKnee:     ['左ひざ', '左膝', 'L_Knee', 'knee_L', 'leftKnee', 'LeftKnee',
+              'L_LowerLeg', 'LeftLowerLeg', 'LowerLeg_L', 'L_Calf', 'Bip01_L_Calf'],
+  rKnee:     ['右ひざ', '右膝', 'R_Knee', 'knee_R', 'rightKnee', 'RightKnee',
+              'R_LowerLeg', 'RightLowerLeg', 'LowerLeg_R', 'R_Calf', 'Bip01_R_Calf'],
 }
 
 function _findMmdBone(mesh, candidates) {
@@ -772,10 +778,24 @@ let _mmdBoneCacheKey = null
 function _getMmdBones(mesh) {
   if (_mmdBoneCacheKey === mesh && _mmdBoneCache) return _mmdBoneCache
   _mmdBoneCache = {}
+  const missing = []
   for (const [key, candidates] of Object.entries(_MMD_BONE_CANDIDATES)) {
     _mmdBoneCache[key] = _findMmdBone(mesh, candidates)
+    if (!_mmdBoneCache[key]) missing.push(key)
   }
   _mmdBoneCacheKey = mesh
+  // Phase H1 diagnostic: dump found bones + the full bone roster the model
+  // actually shipped with, so a user who reports "legs still frozen" can
+  // open the console (F12) and paste back the bone names. We add the
+  // missing aliases on the next pass instead of guessing.
+  const allBones = mesh.skeleton?.bones?.map((b) => b.name) || []
+  console.info('[Apia MMD bones]', {
+    found: Object.fromEntries(
+      Object.entries(_mmdBoneCache).map(([k, b]) => [k, b?.name || null])
+    ),
+    missing,
+    allBones,
+  })
   return _mmdBoneCache
 }
 
@@ -852,10 +872,24 @@ function updateMMDBody(t) {
       bones.head.rotation.y += Math.sin(stride * 0.5) * 0.035 * intensity
     }
   } else {
-    if (bones.lLeg) bones.lLeg.rotation.x = 0
-    if (bones.rLeg) bones.rLeg.rotation.x = 0
-    if (bones.lKnee) bones.lKnee.rotation.x = 0
-    if (bones.rKnee) bones.rKnee.rotation.x = 0
+    // Phase H1 round 2 — user feedback "legs still frozen". Pure 0 every
+    // frame made the idle pose look like a statue. Now we layer a slow
+    // weight shift (lateral sway transferring between the planted leg)
+    // plus a breath bend, both small enough that a real `.vmd` clip would
+    // still dominate when present. lateral z roll because PMX leg bones
+    // hinge forward on rotation.x (same convention as VRM0).
+    const idleBreath = breath * 0.018 * intensity
+    const weightShift = sway * 0.035 * intensity
+    if (bones.lLeg) {
+      bones.lLeg.rotation.x = idleBreath
+      bones.lLeg.rotation.z = weightShift
+    }
+    if (bones.rLeg) {
+      bones.rLeg.rotation.x = idleBreath
+      bones.rLeg.rotation.z = weightShift * 0.7  // less than left for asymmetry
+    }
+    if (bones.lKnee) bones.lKnee.rotation.x = Math.max(0, weightShift) * 0.45
+    if (bones.rKnee) bones.rKnee.rotation.x = Math.max(0, -weightShift) * 0.45
   }
 }
 
