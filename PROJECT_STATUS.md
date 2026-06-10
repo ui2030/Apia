@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-06-11 (wallpaper click bug + F2 chat split)
+Last updated: 2026-06-11 (motion clip sample + procedural walk/sit polish)
 
 ## Goal
 
@@ -483,7 +483,21 @@ Key files (F1 fix + F2):
 - [vite.config.mjs](vite.config.mjs) (chat multi-entry)
 - [electron/preload.js](electron/preload.js) (notifyCharacter/onCharacterAction/chatHide/chatToggle)
 
-### 25. Dependency security pass
+### 25. Phase G — motion clip sample + procedural walk/sit polish
+
+사용자 요청 "블루아카 영상처럼 자연스러운 걸음/앉기". 자연스러움의 9할은 키프레임 모션 클립(.vrma / .vmd) — procedural sine wave로는 한계 명확. 사용자 시간 박스를 위해 두 트랙 동시 진행: ① 인프라/디딤돌 클립 확보 + ② 클립 없을 때도 더 자연스러운 procedural.
+
+- **클립 인프라 확인**: 1개 sample `.vrma`를 `src/assets/motions/vrma/idle/breath_soft.vrma`에 배치 (pixiv/three-vrm의 `test.vrma`, MIT 라이센스). vite glob 자동 픽업 + `motionAssets.resolveMotionAsset()` 정상 resolve를 build 통과로 확인.
+- **공개 라이브러리 가이드 정리** (`src/assets/motions/vrma/README.md` 갱신):
+  - VRoid 공식 무료 7-pack (BOOTH 무료 결제) — Greeting/Squat/Spin 등
+  - Mixamo + Blender headless 파이프라인 (`scripts/convert-mixamo.mjs` 이미 준비됨)
+  - Quaternius CC0 120+ 클립 + `fbx2vrma-converter` 옵션
+- **procedural 정교화** (`src/main.js` `updateVRMBody`):
+  - sit 분기에 호흡 굴곡 (≤ 0.9°)을 다리 회전에 add → 동상 같은 정지감 해소
+  - walk 분기에 layered: spine.z = phase * 0.045 (체중 이동), chest.y = -phase * 0.06 (어깨 반대 위상), head.y += sin(stride/2) * 0.035 (머리 lag). 발걸음 한 사이클에 몸이 좌우로 미세하게 흔들리는 시각.
+- 자연스러움 풀세트를 원하면 사용자가 BOOTH/Mixamo로 받아 폴더에 드롭하면 자동 픽업.
+
+### 26. Dependency security pass
 
 - vite 5 → 6, vitest 2 → 4, electron-builder 24 → 26 (audit fix of 17 → 1).
 - electron 28 deferred — see REGRESSION_NOTES "Deferred: Electron 28 → 35+ security upgrade".

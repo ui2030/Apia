@@ -666,10 +666,15 @@ function updateVRMBody(t) {
   const lLL = h.getRawBoneNode('leftLowerLeg')
   const rLL = h.getRawBoneNode('rightLowerLeg')
   if (state === 'sit') {
-    if (lUL) lUL.rotation.x = -1.35
-    if (rUL) rUL.rotation.x = -1.35
-    if (lLL) lLL.rotation.x =  1.70
-    if (rLL) rLL.rotation.x =  1.70
+    // Phase G — sit gets a subtle breathing bend on top of the fixed pose
+    // so the silhouette doesn't read as a propped statue. Amplitudes stay
+    // tiny (≤ 0.015 rad ≈ 0.9°) so a model's actual sit clip can override
+    // these without fighting Phase A's absolute-write pattern.
+    const sitBreath = breath * 0.012 * intensity
+    if (lUL) lUL.rotation.x = -1.35 + sitBreath
+    if (rUL) rUL.rotation.x = -1.35 + sitBreath
+    if (lLL) lLL.rotation.x =  1.70 - sitBreath
+    if (rLL) rLL.rotation.x =  1.70 - sitBreath
   } else if (state === 'walk') {
     // VRM0: leftUpperLeg.rotation.x positive = leg forward swing.
     // Conservative swing amplitude (Codex NICE-TO-HAVE round 1): some models
@@ -693,6 +698,24 @@ function updateVRMBody(t) {
     if (rUA) {
       rUA.rotation.z = -0.9 - breathArm
       rUA.rotation.x =  phase * 0.32
+    }
+    // Phase G — natural walk extras layered on top of the breathing spine/
+    // chest values set earlier. Each adds a small twice-per-stride signal:
+    //   - spine roll = weight shift to the planted foot
+    //   - chest counter-yaw = shoulders rotate opposite to the hips
+    //   - head micro-yaw = head catches up to the body a beat late
+    // OVERRIDE (not add) on spine/chest because the earlier breath values
+    // here drown the gait signal; head uses += so mouse look-target stays.
+    if (spine) {
+      spine.rotation.z = phase * 0.045 * intensity
+      spine.rotation.x = breath * 0.005 * intensity + Math.abs(phase) * 0.01 * intensity
+    }
+    if (chest) {
+      chest.rotation.y = -phase * 0.06 * intensity
+      chest.rotation.z = phase * 0.025 * intensity
+    }
+    if (head) {
+      head.rotation.y += Math.sin(stride * 0.5) * 0.035 * intensity
     }
   } else {
     if (lUL) lUL.rotation.x = 0
