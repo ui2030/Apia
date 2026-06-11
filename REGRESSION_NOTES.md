@@ -268,6 +268,23 @@
   2. wasm-backed three.js libs need three handoffs we kept getting wrong: (a) Vite has to *see* the `.wasm` (use `import './path.wasm?url'`), (b) emscripten's internal fetch will fail under Electron file:// — pass `wasmBinary` ourselves, (c) the emscripten factory ends with `this.Ammo = b` and ESM strict-mode `this` is undefined — call via `factory.call(globalThis, opts)`.
   3. for any "X freezes" report on PMX, check the physics enable log first before suspecting bone mapping / retargeting; bones moving but physics off is a much more common shape than the inverse.
 
+### MMDPhysics RigidBody.reset()는 스케일을 무시한다 — reset은 반드시 unscale 상태에서
+- Symptom: 모든 idle 모션에서 치마가 텐트처럼 부풀거나 판자처럼 늘어나고, 꼬리가 톱니 모양으로 바닥에 폭주. 모션을 바꿀 때마다 재발.
+- Cause: three의 `MMDPhysics.update()`는 시뮬레이션 직전에 mesh.scale을 (1,1,1)로 임시 환원하지만, `RigidBody.reset()`은 *스케일이 포함된* 본 world 행렬의 translation으로 강체를 스냅한다 (basis에서만 스케일 제거). Apia는 PMX를 ~0.08배로 줄여 띄우므로 reset 직후 첫 스텝에서 kinematic 강체가 ×12.5 순간이동 → 제약(constraint) 슬램 → 옷/꼬리 폭발. reset은 물리 생성 시 + `resetPhysicsOnLoop`(기본 on)로 클립 루프마다 실행돼 영구 재발했다. 추가로 `playMMDAnimation`이 클립 전환마다 `helper.remove→add`로 물리 세계를 재생성해 같은 슬램 + ammo world 누수 + 블렌딩 0(이전 자세 스냅)을 만들었다.
+- Prevention:
+  1. 스케일된 SkinnedMesh에서 `physics.reset()`이 (직·간접으로) 불릴 수 있는 모든 경로는 `modelRuntime.stabilizeMmdPhysics()`의 scale-safe 패치를 거치게 한다 (인스턴스 단위 reset 몽키패치 + unscale 공간에서 reset→warmup).
+  2. VMD 클립 전환은 절대 `helper.remove→add`로 하지 않는다 — 첫 클립만 `_setupMeshAnimation`(mixer 생성), 이후엔 같은 mixer 위 crossfade. 물리 인스턴스는 모델 수명 동안 1개다.
+  3. helper.add에는 `warmup: 0`을 명시한다 — 내장 warmup은 scale-safe 패치가 깔리기 전 잘못된 공간에서 돈다.
+  4. 옷/머리 물리 이상은 3각도 스크린샷(`tests/gui/vmd-check.mjs`)으로 검증한다 — 정면에서는 안 보인다.
+
+### 자세 보정량은 rest *회전*만 보지 말고 본 *기하*도 측정해서 정한다
+- Symptom: mermay 모션을 삭제해도 휴식 자세에서 손이 등 뒤로 들어감.
+- Cause: Blender(mmd_tools)제 PMX(Kisaki)는 A자세를 rest 회전이 아닌 본 배치에만 굽는다(전 본 restQuat=identity). poseRig 지문이 rest 회전 0 → "T자세"로 오판하고 Layer 6이 고정 -1.0rad(57°)을 더 내림 → 기하 42° + 57° = 99°, 수직을 지나 손이 몸 뒤로.
+- Prevention:
+  1. 팔 처짐 보정은 팔꿈치 본 오프셋으로 실측한 기하 각(`fingerprint.armGeometryAngle`)의 부족분만 더한다 (`armHangCorrection`).
+  2. 모델별 자세 이상은 추측하지 말고 `tests/gui/dump-arm-rest.mjs`(rest 지문)·`dump-model-info.mjs`(본/모프/강체 목록)로 실측부터.
+  3. 모델 제작자가 넣은 보정 장치를 먼저 찾는다 — 貫通対策(뚫림 방지) 모프는 로드 시 자동 적용된다 (main.js).
+
 ### Verification checklist
 - Run `npm run verify`
 - Run `python -m compileall backend`

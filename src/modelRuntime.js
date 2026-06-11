@@ -143,6 +143,62 @@ export async function getAmmoRuntime() {
   return ammoPromise
 }
 
+// ── MMD physics scale-space stabilizer ──────────────────────────────────
+//
+// three's MMDPhysics simulates in UNSCALED space — update() temporarily
+// forces mesh.scale to (1,1,1) before stepping — but RigidBody.reset()
+// snaps bodies to the bones' CURRENT world transforms, which include
+// Apia's ~0.08 display scale. Every reset therefore parks the rigid
+// bodies ×12.5 off from where the next update() expects them; the first
+// sim step slams the skirt/tail/hair constraints and the cloth settles
+// tangled (tent-shaped skirt, panels stretched into boards, tail zigzag
+// on the floor — see test-results/vmd-check). reset() runs at physics
+// creation AND on every clip loop (helper's resetPhysicsOnLoop default),
+// so the slam used to repeat forever.
+//
+// Fix: patch the instance's reset() to run with the mesh temporarily
+// unscaled — the exact space update() simulates in — then settle the
+// cloth with a warmup. The patch survives for the physics instance's
+// lifetime, which also makes the helper's own per-loop reset scale-safe.
+
+function runWithUnscaledMesh(mesh, fn) {
+  const parent = mesh.parent
+  if (parent) mesh.parent = null
+  const scale = mesh.scale.clone()
+  mesh.scale.set(1, 1, 1)
+  mesh.updateMatrixWorld(true)
+  try {
+    return fn()
+  } finally {
+    if (parent) mesh.parent = parent
+    mesh.scale.copy(scale)
+    mesh.updateMatrixWorld(true)
+  }
+}
+
+export function stabilizeMmdPhysics(mesh, { warmupCycles = 60 } = {}) {
+  const helper = getMmdHelper()
+  const item = helper?.objects?.get?.(mesh)
+  const physics = item?.physics
+  if (!physics) return false
+
+  if (!physics.__apiaScaleSafeReset) {
+    const originalReset = physics.reset.bind(physics)
+    physics.reset = () => runWithUnscaledMesh(mesh, originalReset)
+    physics.__apiaScaleSafeReset = true
+  }
+
+  const t0 = performance.now()
+  physics.reset()
+  // warmup() goes through update(), which un-scales by itself — no wrapper.
+  physics.warmup(warmupCycles)
+  console.info('[Apia MMD physics] stabilized', {
+    warmupCycles,
+    ms: Math.round(performance.now() - t0)
+  })
+  return true
+}
+
 // ── URL / fetch helpers ─────────────────────────────────────────────────
 
 export function normalizeUrlToFetchable(url) {

@@ -36,6 +36,7 @@ import {
   getMmdRuntime,
   getMmdHelper,
   getAmmoRuntime,
+  stabilizeMmdPhysics,
   normalizeUrlToFetchable,
   loadOptionalJson,
   loadManifestByPath,
@@ -141,6 +142,9 @@ const CAM_DEFAULT = _sceneRuntime.CAM_DEFAULT
 // expose; it's just the Three.js scene graph, no secrets.
 if (typeof window !== 'undefined') {
   window.__apiaScene = scene
+  // Camera too — vmd-check.mjs orbits it (front/side/back) per motion so
+  // clipping that only shows from behind isn't missed. Same hatch rationale.
+  window.__apiaCamera = camera
 }
 const applyCameraDefault = _sceneRuntime.applyCameraDefault
 
@@ -148,6 +152,16 @@ let currentModel = null
 let currentUserScale = 1
 let autoBehaviorEnabled = true
 let autoBehaviorTimer = null
+// E2E hatch (same rationale as __apiaScene) — vmd-check orbits the camera
+// around a standing character; auto free-roam walks her behind furniture
+// mid-screenshot, so the test switches roaming off right after launch.
+if (typeof window !== 'undefined') {
+  window.__setAutoBehavior = (on) => {
+    autoBehaviorEnabled = on !== false
+    if (autoBehaviorEnabled) scheduleAutoBehavior()
+    else clearAutoBehaviorTimer()
+  }
+}
 let worldManager = null
 const lipsync = { active: false, phase: 0 }
 // VRM/MMD runtimes are owned by modelRuntime.js — the cached promises and
@@ -456,6 +470,39 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
             spring: createPoseSpring(registry),
             saccade: createSaccadeState(),
           }
+          // E2E hatch — vmd-check 계열 진단이 모델의 rest 지문(armAbduction
+          // 등)을 읽어 팔 보정값을 검증할 수 있게 한다. __apiaScene과 동일한
+          // 근거의 읽기 전용 창구.
+          if (typeof window !== 'undefined') {
+            window.__apiaPoseInfo = () => ({
+              fingerprint: registry.fingerprint,
+              restEuler: Object.fromEntries(
+                Array.from(registry.roles.entries()).map(([role, entry]) => [
+                  role,
+                  {
+                    x: +entry.restEuler.x.toFixed(4),
+                    y: +entry.restEuler.y.toFixed(4),
+                    z: +entry.restEuler.z.toFixed(4),
+                  },
+                ])
+              ),
+            })
+          }
+        }
+
+        // 모델 제작자가 넣어둔 뚫림 방지(貫通対策) 모프는 항상 켠다.
+        // MMD에서는 사용자가 수동으로 켜는 표준 장치(몸을 옷 안쪽으로
+        // 살짝 수축시키는 정점 모프)인데, Apia가 안 켜고 있어서 일부
+        // 자세에서 몸이 옷을 뚫고 나왔다. VMD 모프 트랙은 자신이 키한
+        // 모프만 쓰므로 이 값은 재생 중에도 유지된다.
+        {
+          const morphDict = mesh.morphTargetDictionary || {}
+          for (const [morphName, morphIdx] of Object.entries(morphDict)) {
+            if (morphName.includes('貫通対策')) {
+              mesh.morphTargetInfluences[morphIdx] = 1.0
+              console.info('[Apia MMD] anti-clipping morph enabled:', morphName)
+            }
+          }
         }
 
         // Codex MUST-FIX (생동감): turn the MMD physics simulator on so
@@ -467,7 +514,12 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
         // constraint counts so a user reporting "hair still fixed" can
         // tell whether the model itself shipped without physics data.
         try {
-          helper?.add?.(mesh, { physics: true })
+          // warmup: 0 — the helper's built-in warmup runs before the
+          // scale-safe reset patch is installed, so its 60 cycles would
+          // settle the cloth from wrong-space positions. The real settle
+          // happens in stabilizeMmdPhysics() below, after the final
+          // scale/ground transform is applied.
+          helper?.add?.(mesh, { physics: true, warmup: 0 })
           const physicsBody = mesh.geometry?.userData?.MMD
           const rigidBodyCount = physicsBody?.rigidBodies?.length ?? 0
           const constraintCount = physicsBody?.constraints?.length ?? 0
@@ -488,6 +540,12 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
         void helper
         applyCharacterScale()
         alignCharacterToGround()
+        // Settle skirt/tail/hair in the simulator's own (unscaled) space,
+        // AFTER the final user-scale + ground alignment so reset() snaps
+        // bodies to the transform the render loop will actually use.
+        try { stabilizeMmdPhysics(mesh) } catch (err) {
+          console.warn('[Apia MMD] physics stabilize failed', err)
+        }
         frameCharacterCamera()
         showBubble('안녕하세요! 모델을 불러왔어요 🎀', 3000)
         resolve(true)

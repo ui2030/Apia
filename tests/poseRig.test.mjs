@@ -16,12 +16,13 @@ import {
   applyPose,
 } from '../src/poseRig.js'
 
-function makeBone(name, eulerXYZ = [0, 0, 0]) {
+function makeBone(name, eulerXYZ = [0, 0, 0], position = null) {
   const q = new Quaternion().setFromEuler(new Euler(eulerXYZ[0], eulerXYZ[1], eulerXYZ[2], 'XYZ'))
   return {
     name,
     quaternion: q,
     rotation: new Euler(eulerXYZ[0], eulerXYZ[1], eulerXYZ[2], 'XYZ'),
+    position: position ? { x: position[0], y: position[1], z: position[2] } : undefined,
     userData: {},
   }
 }
@@ -29,7 +30,7 @@ function makeBone(name, eulerXYZ = [0, 0, 0]) {
 function fakeMmdMesh(boneSpecs) {
   return {
     skeleton: {
-      bones: boneSpecs.map(([n, e]) => makeBone(n, e || [0, 0, 0])),
+      bones: boneSpecs.map(([n, e, p]) => makeBone(n, e || [0, 0, 0], p || null)),
     },
   }
 }
@@ -92,6 +93,56 @@ describe('poseRig fingerprint — T-pose vs A-pose', () => {
     const rArmCorr = layers.abductionCorrection.get('rArm')
     expect(lArmCorr?.z).toBeCloseTo(-1.0, 2)
     expect(rArmCorr?.z).toBeCloseTo(+1.0, 2)
+  })
+
+  it('geometry-A-pose model (rest rotation 0, elbow offset 42°) → correction is the shortfall to ~85°, not a fixed 1.0', () => {
+    // Kisaki_1.0 (Blender/mmd_tools build): every rest quaternion is
+    // identity but the elbow bone offset (0.769, -0.698) bakes a 42° hang
+    // into the geometry. The old fixed -1.0 layer pushed the arms to
+    // 42°+57° = 99° — past vertical, hands behind the back at rest.
+    const mesh = fakeMmdMesh([
+      ['上半身', [0, 0, 0]],
+      ['上半身2', [0, 0, 0]],
+      ['首', [0, 0, 0]],
+      ['頭', [0, 0, 0]],
+      ['左腕', [0, 0, 0]],
+      ['右腕', [0, 0, 0]],
+      ['左ひじ', [0, 0, 0], [0.769, -0.698, -0.026]],
+      ['右ひじ', [0, 0, 0], [-0.769, -0.698, -0.026]],
+    ])
+    const registry = buildBoneRegistry(mesh, 'mmd')
+    expect(registry.fingerprint.needsAbductionCorrection).toBe(true)
+    // atan2(0.698, 0.769) ≈ 0.737rad; 1.48 - 0.737 ≈ 0.743
+    expect(registry.fingerprint.armGeometryAngle).toBeCloseTo(0.737, 2)
+    expect(registry.fingerprint.armHangCorrection).toBeCloseTo(0.743, 2)
+
+    const { layers } = computePoseTargets({
+      registry,
+      saccadeState: createSaccadeState(),
+      t: 0,
+      look: { x: 0, y: 0 },
+      state: 'idle',
+      motion: { intensity: 1 },
+      personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.5 },
+    })
+    expect(layers.abductionCorrection.get('lArm')?.z).toBeCloseTo(-0.743, 2)
+    expect(layers.abductionCorrection.get('rArm')?.z).toBeCloseTo(+0.743, 2)
+  })
+
+  it('true T-pose with measured horizontal elbows → full 1.48 correction (intentionally ≠ legacy 1.0)', () => {
+    const mesh = fakeMmdMesh([
+      ['上半身', [0, 0, 0]],
+      ['左腕', [0, 0, 0]],
+      ['右腕', [0, 0, 0]],
+      ['左ひじ', [0, 0, 0], [1.0, 0, 0]],
+      ['右ひじ', [0, 0, 0], [-1.0, 0, 0]],
+    ])
+    const registry = buildBoneRegistry(mesh, 'mmd')
+    expect(registry.fingerprint.armGeometryAngle).toBeCloseTo(0, 3)
+    // Geometry says the arms are truly horizontal, so the full hang is
+    // needed. Fixtures WITHOUT position data keep the legacy 1.0 — that
+    // split (null vs 0) is deliberate and locked in here.
+    expect(registry.fingerprint.armHangCorrection).toBeCloseTo(1.48, 2)
   })
 })
 

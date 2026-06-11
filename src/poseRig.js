@@ -160,7 +160,7 @@ export function buildBoneRegistry(meshOrRoot, type, vrmInstance = null) {
     }
   }
 
-  const fingerprint = computeFingerprint(roles)
+  const fingerprint = computeFingerprint(roles, type)
 
   console.info('[poseRig] registry built', {
     type,
@@ -178,7 +178,7 @@ export function buildBoneRegistry(meshOrRoot, type, vrmInstance = null) {
   return { roles, fingerprint, type }
 }
 
-function computeFingerprint(roles) {
+function computeFingerprint(roles, type) {
   const lArm = roles.get('lArm')
   const rArm = roles.get('rArm')
   const head = roles.get('head')
@@ -188,6 +188,30 @@ function computeFingerprint(roles) {
   const lZ = lArm ? Math.abs(lArm.restEuler.z) : 0
   const rZ = rArm ? Math.abs(rArm.restEuler.z) : 0
   const armAbductionBaked = (lZ + rZ) * 0.5
+
+  // Blender(mmd_tools)제 PMX — 예: Kisaki — 는 A자세를 rest *회전*이 아니라
+  // 본 *배치*(기하)에만 굽는다. restEuler.z가 0이라 위 지표로는 T자세로
+  // 보이지만, 팔꿈치 본의 로컬 오프셋 방향을 재면 진짜 처짐 각이 나온다:
+  // Kisaki lElbow pos (0.77, -0.70) → 42° 처짐. 이 각을 빼지 않고 고정
+  // -1.0rad(57°)을 더 내리면 42+57=99° — 수직을 지나 손이 등 뒤로 들어간다
+  // (사용자가 보고한 "손이 등 뒤" 버그의 실제 원인).
+  // VRM은 normalized rig 가정이 달라 기존 동작(고정 1.0)을 유지한다.
+  let armGeometryAngle = null
+  if (type === 'mmd') {
+    const angles = []
+    for (const role of ['lElbow', 'rElbow']) {
+      const p = roles.get(role)?.bone?.position
+      if (!p) continue
+      const horiz = Math.abs(p.x)
+      const drop = -p.y
+      if (horiz > 1e-6 || Math.abs(drop) > 1e-6) {
+        angles.push(Math.atan2(Math.max(0, drop), horiz))
+      }
+    }
+    if (angles.length) {
+      armGeometryAngle = angles.reduce((a, b) => a + b, 0) / angles.length
+    }
+  }
 
   // 0.3 < x < 1.0 is the ambiguous band — neither full T-pose nor full
   // A-pose. We log a warning so a user reporting "arms look off" can
@@ -200,13 +224,28 @@ function computeFingerprint(roles) {
       `Workaround: drop a model-specific .vmd idle clip that explicitly poses the arms.`
     )
   }
+  const needsAbductionCorrection = armAbductionBaked < 0.3
+
+  // 휴식 시 팔이 수평에서 ~85°(거의 수직, 약간 바깥) 처지도록 모자란
+  // 만큼만 보정한다. 기하 측정이 없으면(테스트 픽스처, VRM) 기존 고정
+  // 1.0rad을 유지.
+  const TARGET_HANG = 1.48
+  let armHangCorrection = 0
+  if (needsAbductionCorrection) {
+    armHangCorrection = armGeometryAngle === null
+      ? 1.0
+      : Math.min(Math.max(TARGET_HANG - armGeometryAngle, 0), TARGET_HANG)
+  }
+
   return {
     armAbductionBaked,
+    armGeometryAngle,
+    armHangCorrection,
     // ≥1rad of baked Z rotation on the upper arms means the model already
     // hangs them downward (A-pose / standing). ≤0.3rad means a true T-pose
     // and the per-frame layer should add a corrective abduction.
     isAPose: armAbductionBaked >= 1.0,
-    needsAbductionCorrection: armAbductionBaked < 0.3,
+    needsAbductionCorrection,
     headRestTilt: head?.restEuler || null,
     shoulderRestTilt: lShoulder?.restEuler || null,
     chestRestTilt: chest?.restEuler || null,
@@ -563,13 +602,19 @@ export function computePoseTargets({
   add('fidget', 'lWrist', Math.sin(t * 1.2 + 0.4) * fidgetAmp * 0.8, 0, 0)
   add('fidget', 'rWrist', Math.sin(t * 1.1 + 1.5) * fidgetAmp * 0.8, 0, 0)
 
-  // — Layer 6: abduction correction. ONLY for T-pose models. Kisaki and
-  // most A-pose PMX have armAbductionBaked ≥ 1rad → fingerprint.isAPose
-  // → no correction (the bug we were fixing).
+  // — Layer 6: abduction correction. ONLY for models whose rest rotation
+  // doesn't already hang the arms. The amount is per-model: fingerprint
+  // measures the hang already baked into the bone GEOMETRY (elbow offset
+  // direction) and adds only the shortfall to ~85°. A fixed -1.0 here
+  // used to over-rotate geometry-A-pose models (Kisaki: 42° baked + 57°
+  // fixed = 99° → hands drifted behind the back at rest).
   // Skipped if a clip owns the arms — the clip's pose is authoritative.
   if (fingerprint.needsAbductionCorrection && !clipMask?.arms) {
-    add('abductionCorrection', 'lArm', 0, 0, -1.0)
-    add('abductionCorrection', 'rArm', 0, 0, 1.0)
+    const hang = fingerprint.armHangCorrection ?? 1.0
+    if (hang > 0.001) {
+      add('abductionCorrection', 'lArm', 0, 0, -hang)
+      add('abductionCorrection', 'rArm', 0, 0, hang)
+    }
   }
 
   // — Layer 7: talk gesture. Kicks in only on talk state.

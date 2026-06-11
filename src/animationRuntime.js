@@ -19,7 +19,7 @@
  *   - the procedural updateVRMBody/lipsync layers (separate concern)
  */
 import { AnimationClip, LoopOnce, LoopRepeat, Quaternion, QuaternionKeyframeTrack, VectorKeyframeTrack } from 'three'
-import { getMmdRuntime, getMmdHelper, normalizeUrlToFetchable } from './modelRuntime.js'
+import { getMmdRuntime, getMmdHelper, stabilizeMmdPhysics, normalizeUrlToFetchable } from './modelRuntime.js'
 
 let _vrmAnimRuntime = null
 let _fbxLoader = null
@@ -437,25 +437,80 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
             })
           }
 
-          // helper.add는 같은 mesh에 호출돼도 누적될 수 있다. remove 먼저 호출해서
-          // 이전 animation / mixer state를 깔끔히 비우고 새 clip을 단다.
-          // Codex MUST-FIX (생동감): physics: true so hair/skirt rigid
-          // bodies keep swinging while the animation track plays. The
-          // initial helper.add (in main.js after MMDLoader.load) already
-          // turned physics on; re-adding with `physics:false` was killing
-          // the simulator the moment any clip played.
-          try { helper.remove(model.obj) } catch {}
-          helper.add(model.obj, { animation: clip, physics: true })
+          // 물리 보존 + 크로스페이드 (B단계 — 옷 폭발/손 자세 잔존의 본 수정).
+          //
+          // 예전 경로는 클립을 바꿀 때마다 helper.remove → helper.add로
+          // MMDPhysics + ammo world를 통째로 재생성했다. 그 재생성마다
+          // RigidBody.reset()이 스케일이 섞인 좌표계에서 실행돼 옷/꼬리
+          // 물리가 폭발했고(스케일 분석은 modelRuntime.stabilizeMmdPhysics
+          // 참조), 파괴된 ammo world는 해제 API가 없어 그대로 누적됐다.
+          // 게다가 mixer가 매번 새로 만들어져 클립 간 블렌딩이 0이었다 —
+          // 이전 모션의 마지막 팔 자세가 다음 모션 위로 스냅되는 원인.
+          //
+          // 새 경로: mesh는 로드 때 한 번만 helper에 등록된 상태를 유지하고,
+          //   - 첫 클립: helper._setupMeshAnimation으로 helper 소유 mixer만
+          //     생성 (physics는 건드리지 않음; three 버전 고정이라 private
+          //     호출 허용 — REGRESSION_NOTES에 기록)
+          //   - 이후 클립: 같은 mixer 위에서 fadeIn/fadeOut 크로스페이드.
+          //     물리 객체가 살아있으니 본이 연속적으로 움직이고 슬램이 없다.
+          const FADE_SEC = 0.45
+          const item = helper.objects?.get?.(model.obj) ?? helper.objects?.[model.obj.uuid]
+          let action = null
 
-          if (!loop) {
-            // MMDAnimationHelper가 mesh별로 내부 mixer를 만든다. helper.objects는
-            // three.js 버전마다 Map이거나 객체일 수 있어 양쪽 다 시도한다.
-            const item = helper.objects?.get?.(model.obj) ?? helper.objects?.[model.obj.uuid]
-            const mixer = item?.mixer
-            const action = mixer?.clipAction?.(clip)
+          if (!item) {
+            // 등록 안 된 mesh (정상 흐름에선 없음) — 마지막 수단으로 full add.
+            helper.add(model.obj, { animation: clip, physics: true, warmup: 0 })
+            stabilizeMmdPhysics(model.obj)
+            const fresh = helper.objects?.get?.(model.obj)
+            action = fresh?.mixer?.clipAction?.(clip) ?? null
+          } else if (!item.mixer) {
+            // 첫 클립: mixer + loop 리스너 생성. _setupMeshAnimation은 클립을
+            // weight 1로 즉시 play()하므로, 멈췄다가 fadeIn으로 다시 건다.
+            // (private API 가드 — three 버전이 바뀌어 사라지면 옛 경로로 폴백)
+            if (typeof helper._setupMeshAnimation !== 'function') {
+              console.warn('[VMD] helper._setupMeshAnimation missing — falling back to remove+add')
+              try { helper.remove(model.obj) } catch {}
+              helper.add(model.obj, { animation: clip, physics: true, warmup: 0 })
+              stabilizeMmdPhysics(model.obj)
+            } else {
+              helper._setupMeshAnimation(model.obj, clip)
+            }
+            action = item.mixer?.clipAction?.(clip) ?? null
             if (action) {
+              action.stop()
+              action.reset().fadeIn(FADE_SEC).play()
+            }
+          } else {
+            const mixer = item.mixer
+            const prevAction = model._activeVmdAction ?? null
+            const prevClip = model._activeVmdClip ?? null
+            action = mixer.clipAction(clip)
+            action.reset().setEffectiveTimeScale(1).setEffectiveWeight(1)
+            if (prevAction && prevAction !== action) prevAction.fadeOut(FADE_SEC)
+            action.fadeIn(FADE_SEC).play()
+            if (prevClip && prevClip !== clip) {
+              // 페이드가 끝난 뒤 옛 클립을 mixer 캐시에서 내린다. 그 사이에
+              // 같은 클립이 다시 활성화됐거나 모델이 교체됐으면 건너뜀.
+              setTimeout(() => {
+                if (model._activeVmdClip === prevClip) return
+                if (ctx.getCurrentModel() !== model) return
+                try {
+                  prevAction?.stop?.()
+                  mixer.uncacheClip(prevClip)
+                } catch {}
+              }, FADE_SEC * 1000 + 250)
+            }
+          }
+
+          model._activeVmdAction = action
+          model._activeVmdClip = clip
+
+          if (action) {
+            if (!loop) {
               action.setLoop(LoopOnce, Infinity)
               action.clampWhenFinished = true
+            } else {
+              action.setLoop(LoopRepeat, Infinity)
             }
           }
 

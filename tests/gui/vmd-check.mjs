@@ -5,11 +5,20 @@ import path from 'node:path'
 const outDir = path.resolve('test-results/vmd-check')
 mkdirSync(outDir, { recursive: true })
 
-// All 10 motions, multi-frame so we catch the "arm bent backwards" moment
+// All 9 motions (mermay removed from the pack — commit 098d184), multi-frame
+// so we catch the "arm bent backwards" moment.
 const motions = [
   'idle_confident', 'idle_air_scent', 'idle_fix_hair', 'idle_skywatch',
   'idle_stretch', 'idle_sway', 'idle_tidy', 'idle_tracker',
-  'idle_impatient', 'idle_mermay'
+  'idle_impatient'
+]
+
+// Clipping often only shows from the side/back, so each sample point is
+// captured from three yaw angles orbiting the character's upper body.
+const ANGLES = [
+  ['front', 0],
+  ['side', Math.PI / 2],
+  ['back', Math.PI]
 ]
 
 const { mainWindow, cleanup } = await launchApia({
@@ -30,8 +39,63 @@ mainWindow.on('console', (msg) => {
 
 await new Promise((r) => setTimeout(r, 4500))
 
+// Keep her planted at the spawn point — free-roam mid-test walks her behind
+// the desk and the screenshots show furniture instead of the motion.
+await mainWindow.evaluate(() => window.__setAutoBehavior?.(false))
+
+// Orbit the live camera around the character at the given yaw offset
+// (0 = the camera's own default bearing). Radius is clamped so side/back
+// positions stay inside the room geometry instead of behind a wall.
+async function setCameraAngle(yaw) {
+  await mainWindow.evaluate((yawOffset) => {
+    const cam = window.__apiaCamera
+    const scene = window.__apiaScene
+    if (!cam || !scene) return
+    if (!window.__vmdCheckCam) {
+      window.__vmdCheckCam = {
+        pos: cam.position.clone(),
+        quat: cam.quaternion.clone()
+      }
+    }
+    let mesh = null
+    scene.traverse((o) => { if (!mesh && o.skeleton) mesh = o })
+    if (!mesh) return
+    const map = new Map(mesh.skeleton.bones.map((b) => [b.name, b]))
+    const anchor = map.get('上半身') || map.get('センター') || mesh.skeleton.bones[0]
+    const V = cam.position.constructor
+    const center = anchor.getWorldPosition(new V())
+    const base = window.__vmdCheckCam.pos
+    const r = Math.min(
+      Math.hypot(base.x - center.x, base.z - center.z), 2.4)
+    const bearing = Math.atan2(base.x - center.x, base.z - center.z) + yawOffset
+    cam.position.set(
+      center.x + Math.sin(bearing) * r,
+      base.y,
+      center.z + Math.cos(bearing) * r
+    )
+    cam.lookAt(center)
+  }, yaw)
+  // one breath for the moved camera to be rendered before the screenshot
+  await new Promise((r) => setTimeout(r, 150))
+}
+
+async function restoreCamera() {
+  await mainWindow.evaluate(() => {
+    const cam = window.__apiaCamera
+    const saved = window.__vmdCheckCam
+    if (cam && saved) {
+      cam.position.copy(saved.pos)
+      cam.quaternion.copy(saved.quat)
+    }
+  })
+}
+
 async function snapshot(label) {
-  await mainWindow.screenshot({ path: path.join(outDir, `${label}.png`) })
+  for (const [suffix, yaw] of ANGLES) {
+    await setCameraAngle(yaw)
+    await mainWindow.screenshot({ path: path.join(outDir, `${label}_${suffix}.png`) })
+  }
+  await restoreCamera()
   return await mainWindow.evaluate(() => {
     const scene = window.__apiaScene
     if (!scene) return null
@@ -52,6 +116,13 @@ async function snapshot(label) {
     }
   })
 }
+
+// Rest pose first — the procedural idle (no clip) is where the original
+// "hands behind the back" bug lived (Layer 6 over-abduction), so it gets
+// its own 3-angle capture before any motion plays.
+await new Promise((r) => setTimeout(r, 2000))
+console.log('\n=== rest (no clip) ===')
+console.log('  rest:', JSON.stringify(await snapshot('rest')))
 
 for (const name of motions) {
   console.log(`\n=== ${name} ===`)
