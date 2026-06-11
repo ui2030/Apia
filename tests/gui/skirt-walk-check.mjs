@@ -46,11 +46,42 @@ if (useClip) {
 await new Promise((r) => setTimeout(r, 1200))
 await aimAndShoot('0_idle.png')
 
-await mainWindow.evaluate(() => window.__walkTo?.())
-await new Promise((r) => setTimeout(r, 2000))
-await aimAndShoot('1_walk_2s.png')
-await new Promise((r) => setTimeout(r, 2000))
-await aimAndShoot('2_walk_4s.png')
+await mainWindow.evaluate(() => window.__walkTo?.(2.5))
+
+// 출렁임 정량화: 걷는 동안 치맛자락 본의 (엉덩이 기준) 상대 위치를
+// 100ms 간격으로 샘플링 — 진폭이 0에 가까우면 치마가 굳은 것
+const hemSamples = []
+for (let i = 0; i < 35; i++) {
+  await new Promise((r) => setTimeout(r, 100))
+  const s = await mainWindow.evaluate(() => {
+    const scene = window.__apiaScene
+    let mesh = null
+    scene?.traverse((o) => { if (!mesh && o.skeleton) mesh = o })
+    if (!mesh) return null
+    const V = window.__apiaCamera.position.constructor
+    const map = new Map(mesh.skeleton.bones.map((b) => [b.name, b]))
+    const hip = map.get('下半身')
+    const hemF = map.get('前すそ_1-12') // 앞자락 중앙 최하단
+    const hemB = map.get('後すそ_1-5') // 뒷자락 중앙 최하단
+    if (!hip || !hemF || !hemB) return null
+    const hp = hip.getWorldPosition(new V())
+    const f = hemF.getWorldPosition(new V())
+    const b = hemB.getWorldPosition(new V())
+    return {
+      f: [+(f.x - hp.x).toFixed(4), +(f.y - hp.y).toFixed(4), +(f.z - hp.z).toFixed(4)],
+      b: [+(b.x - hp.x).toFixed(4), +(b.y - hp.y).toFixed(4), +(b.z - hp.z).toFixed(4)],
+      walk: window.__clipFlags?.()?.state === 'walk'
+    }
+  })
+  if (s) hemSamples.push(s)
+  if (i === 19) await mainWindow.screenshot({ path: path.join(outDir, '1_walk_2s.png') })
+}
+const walking = hemSamples.filter((s) => s.walk)
+const amp = (arr) => arr.length ? +(Math.max(...arr) - Math.min(...arr)).toFixed(4) : 0
+console.log('walking samples:', walking.length)
+console.log('front hem amp [x,y,z]:', [0, 1, 2].map((k) => amp(walking.map((s) => s.f[k]))))
+console.log('back  hem amp [x,y,z]:', [0, 1, 2].map((k) => amp(walking.map((s) => s.b[k]))))
+await aimAndShoot('2_walk_late.png')
 
 // 도착 대기 (walk 상태 종료 폴링, 최대 10s)
 for (let i = 0; i < 20; i++) {

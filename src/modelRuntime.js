@@ -199,6 +199,57 @@ export function stabilizeMmdPhysics(mesh, { warmupCycles = 60 } = {}) {
   return true
 }
 
+// ── 제작자 본 모프 적용 (꼬리 올림) ──────────────────────────────────────
+//
+// PMX에는 "본 모프"(켜면 특정 본에 위치/회전 오프셋이 더해지는 토글)가
+// 있는데 three.js MMDLoader는 정점 모프만 변환하고 본 모프 데이터는
+// 버린다 — morphTargetDictionary에 이름만 남은 빈 슬롯이 생겨 켜도 무효.
+// kisaki의 ★Up_しっぽ가 그 경우: しっぽ支(꼬리 지지, 뼈 추종 강체) 본을
+// (1.39, 3.05, 0.36) 들어 올리면 스프링 조인트(しっぽ3~11_Side)가 꼬리
+// 체인 전체를 바닥에서 끌어올리는, 제작자가 의도한 "꼬리 올림" 장치다.
+// PMX를 다시 파싱해(HTTP 캐시 적중, 모델 로드당 1회) 해당 본 모프를 본
+// 위치에 직접 적용한다 — 수치는 하드코딩 없이 항상 모델 파일이 출처라
+// 같은 관례의 다른 모델에도 그대로 작동한다.
+//
+// 반드시 stabilizeMmdPhysics(정착 warmup) *전에* 호출할 것 — 정착 후에
+// 지지 본을 옮기면 이미 안정된 동적 체인을 순간이동으로 흐트러뜨린다
+// (Codex MUST-FIX).
+export async function applyAuthorTailLift(mesh, url) {
+  const fetchable = normalizeUrlToFetchable(url)
+  const bones = mesh?.skeleton?.bones
+  if (!fetchable || !bones?.length) return 0
+  const [{ MMDParser }, buffer] = await Promise.all([
+    import('three/examples/jsm/libs/mmdparser.module.js'),
+    fetch(fetchable).then((r) => {
+      if (!r.ok) throw new Error(`PMX re-fetch failed: ${r.status}`)
+      return r.arrayBuffer()
+    }),
+  ])
+  const pmx = new MMDParser.Parser().parsePmx(buffer, true)
+  let applied = 0
+  for (const morph of pmx.morphs ?? []) {
+    if (morph.type !== 2) continue // 2 = 본 모프
+    if (!/Up_しっぽ/.test(morph.name)) continue
+    for (const el of morph.elements ?? []) {
+      const bone = bones[el.index]
+      // 파서 본 순서 ↔ skeleton.bones 1:1 가정의 안전망: 이름까지 대조
+      if (!bone || pmx.bones?.[el.index]?.name !== bone.name) continue
+      const [qx, qy, qz, qw] = el.rotation ?? [0, 0, 0, 1]
+      if (Math.abs(1 - qw) > 1e-6 || Math.abs(qx) + Math.abs(qy) + Math.abs(qz) > 1e-6) {
+        // 회전 성분은 이 모델에선 identity — 비-identity를 만나면 요소
+        // 전체를 보류하고 알린다 (검증 없는 코드 경로를 묵묵히 켜지 않는다)
+        console.warn('[Apia MMD] tail-lift morph has rotation — element skipped:', morph.name, bone.name)
+        continue
+      }
+      bone.position.x += el.position[0]
+      bone.position.y += el.position[1]
+      bone.position.z += el.position[2]
+      applied += 1
+    }
+  }
+  return applied
+}
+
 // ── URL / fetch helpers ─────────────────────────────────────────────────
 
 export function normalizeUrlToFetchable(url) {

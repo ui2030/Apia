@@ -37,6 +37,7 @@ import {
   getMmdHelper,
   getAmmoRuntime,
   stabilizeMmdPhysics,
+  applyAuthorTailLift,
   normalizeUrlToFetchable,
   loadOptionalJson,
   loadManifestByPath,
@@ -429,7 +430,9 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
   return new Promise((resolve) => {
     loader.load(
       url,
-      (mesh) => {
+      async (mesh) => {
+        // 주의: async 콜백의 reject는 loader의 onError로 가지 않는다 —
+        // await 구간은 아래에서 자체 try/catch로 감싼다 (Codex MUST-FIX)
         const box = new Box3().setFromObject(mesh)
         const size = new Vector3()
         const center = new Vector3()
@@ -548,6 +551,21 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
           console.warn('[Apia MMD] physics enable failed', err)
         }
         void helper
+        // 꼬리 올림(제작자 본 모프 ★Up_しっぽ) — three.js가 버리는 본
+        // 모프를 PMX 재파싱으로 직접 적용. 아래 stabilizeMmdPhysics의
+        // 정착 warmup이 "들린 꼬리" 기준으로 돌도록 반드시 그 전에.
+        try {
+          const lifted = await applyAuthorTailLift(mesh, url)
+          if (lifted > 0) console.info('[Apia MMD] author tail-lift applied:', lifted)
+        } catch (err) {
+          console.warn('[Apia MMD] tail-lift failed (모델은 정상 동작, 꼬리만 미보정)', err)
+        }
+        // await 동안 다른 모델 로드가 시작됐을 수 있다 — 이 mesh의 정리는
+        // 새 로드의 clearModel이 책임지므로 여기선 손대지 않고 빠진다
+        if (loadToken !== activeModelLoadToken) {
+          resolve(false)
+          return
+        }
         applyCharacterScale()
         alignCharacterToGround()
         // Settle skirt/tail/hair in the simulator's own (unscaled) space,
