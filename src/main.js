@@ -46,7 +46,8 @@ import {
   playVRMAnimation as playVRMAnimationRaw,
   playMMDAnimation as playMMDAnimationRaw,
   playFBXAnimation as playFBXAnimationRaw,
-  clearVRMFadeHandlers
+  clearVRMFadeHandlers,
+  releaseActiveClips
 } from './animationRuntime.js'
 
 // Stable ctx passed to every animation call. Per codex review: don't rebuild
@@ -161,6 +162,15 @@ if (typeof window !== 'undefined') {
     if (autoBehaviorEnabled) scheduleAutoBehavior()
     else clearAutoBehaviorTimer()
   }
+  // transition-check.mjs가 걷기 핸드오프(클립 → 절차적 gait)를 강제로
+  // 트리거하고, 클립 소유권 플래그가 풀리는지 단언할 수 있게 한다.
+  window.__walkTo = (minDistance = 1.4) => walkToRandomSpot({ minDistance })
+  window.__clipFlags = () => ({
+    vmd: currentModel?._vmdClipActive ?? null,
+    vrma: currentModel?._vrmaClipActive ?? null,
+    fbx: currentModel?._fbxClipActive ?? null,
+    state: getState?.() ?? null,
+  })
 }
 let worldManager = null
 const lipsync = { active: false, phase: 0 }
@@ -663,6 +673,8 @@ function clearModel() {
 
   if (currentModel.type === 'mmd') {
     try { getMmdHelper()?.remove(currentModel.obj) } catch {}
+    // 클립 해제 때 보관해둔 mixer까지 명시적으로 놓아준다
+    currentModel._stashedMmdMixer = null
   }
 
   // VRM에선 씬에 추가된 게 vrm.scene(=root)이고 obj는 wrapper.
@@ -831,6 +843,16 @@ function updateBody(t, delta) {
     personality,
     clipMask,
   })
+
+  // C단계 — 걷기가 시작됐는데 클립이 아직 본을 소유 중이면 클립을
+  // 절차적 걷기로 핸드오프한다. 안 그러면 루프 idle 클립이 다리를 계속
+  // 쥐고 있어 캐릭터가 idle 자세로 미끄러진다. clipMask는 이 프레임의
+  // 캡처값이라 이번 프레임 gait는 건너뛴다(의도) — fade(0.45s)가 끝나면
+  // 플래그가 풀리고 다음 프레임부터 다리가 움직인다. 호출은 매 프레임
+  // 일어나도 releaseActiveClips 내부의 pending 가드가 1회로 합친다.
+  if (state === 'walk' && clipMask) {
+    releaseActiveClips(currentModel, animationCtx)
+  }
 
   // — Walk gait overlay. Procedural sine on top of the summed map so the
   // spring filter is the only consumer. Same stride math the old

@@ -57,6 +57,97 @@ export function clearVRMFadeHandlers(model) {
   set.clear()
 }
 
+// ── 클립 → 절차적 레이어 핸드오프 (C단계) ──────────────────────────────
+//
+// 공통 패턴: action을 fade로 내리고, fade가 *끝난* 시점에 — 그 사이 새
+// 클립이 같은 슬롯을 차지하지 않았으면 — 클립 소유권 플래그를 끈다.
+// 플래그를 fade 시작에 끄면 절차적 applyPose가 즉시 본을 덮어써서
+// fade가 보이지 않고 자세가 톡 튄다. fade가 끝나면 mixer의 weight 0
+// action은 본을 더 안 건드리므로(PropertyMixer가 bind 값으로 수렴)
+// restQuat*spring을 쓰는 절차적 쪽과 연속적으로 이어진다.
+function scheduleGuardedRelease(model, ctx, { action, fade, isCurrent, onRelease }) {
+  if (!action) return false
+  try { action.fadeOut(fade) } catch {}
+  setTimeout(() => {
+    try {
+      if (ctx.getCurrentModel() !== model) return
+      if (!isCurrent()) return
+      action.stop()
+      onRelease()
+    } catch {}
+  }, fade * 1000 + 80)
+  return true
+}
+
+/**
+ * 활성 클립(VMD/VRMA/FBX 중 무엇이든)을 절차적 레이어로 핸드오프한다.
+ * 걷기 시작 등 "클립이 본을 놓아야 하는" 모든 지점의 단일 진입점.
+ *
+ * 주의(Codex MUST-FIX): 플래그는 true인데 action 참조가 아직 없으면
+ * 로더가 비행 중인 것이다 — 그 슬롯은 건드리지 않고 false를 유지한
+ * pending도 잡지 않는다. 클립이 착지하면 다음 프레임 호출이 잡는다.
+ */
+export function releaseActiveClips(model, ctx, { fade = 0.45 } = {}) {
+  if (!model || model._clipReleasePending) return false
+  const slots = [
+    { action: model._activeVmdAction, flag: '_vmdClipActive', ref: '_activeVmdAction' },
+    { action: model._activeVrmaAction, flag: '_vrmaClipActive', ref: '_activeVrmaAction' },
+    { action: model._activeFbxAction, flag: '_fbxClipActive', ref: '_activeFbxAction' },
+  ]
+  let any = false
+  for (const slot of slots) {
+    const action = slot.action
+    if (!action) continue
+    any = scheduleGuardedRelease(model, ctx, {
+      action,
+      fade,
+      isCurrent: () => model[slot.ref] === action,
+      onRelease: () => {
+        model[slot.flag] = false
+        model[slot.ref] = null
+        // MMD는 mixer가 남아 있으면 물리가 동결 자세를 따라간다 —
+        // 무클립 모드로 복원 (stashMmdMixer 주석 참조)
+        if (slot.flag === '_vmdClipActive') stashMmdMixer(model)
+      },
+    }) || any
+  }
+  if (any) {
+    model._clipReleasePending = true
+    setTimeout(() => { model._clipReleasePending = false }, fade * 1000 + 120)
+  }
+  return any
+}
+
+/**
+ * C단계 후속 — VMD 클립 해제 시 helper의 mixer를 빼서 보관한다.
+ *
+ * helper-소유 mixer가 남아 있으면 _animateMesh가 매 프레임
+ * _restoreBones → mixer.update → _saveBones를 돌리는데, 활성 액션이
+ * 없으면 이 사이클은 고정점이라 backupBones가 클립 마지막 자세에
+ * 동결되고 물리(치마/꼬리)가 화면의 절차적 자세 대신 그 동결 자세를
+ * 따라간다 — 걷기 핸드오프 후 치마가 엉켜 영영 회복되지 않던 원인.
+ *
+ * (기각된 대안: 매 프레임 최종 자세를 backupBones에 동기화 — IK/Grant가
+ * 이미 풀린 자세 위에 다시 적용돼 누적 발산, 다리가 수평으로 날아갔다.
+ * _saveBones 주석의 "Grant 2회 적용 금지" 경고 그대로.)
+ *
+ * mixer를 item에서 제거하면 _animateMesh가 애니메이션 블록(restore/save,
+ * IK/Grant)을 통째로 건너뛰고 물리가 절차적 본을 직접 읽는다 — 클립을 한
+ * 번도 안 튼 무클립 모드와 동일한, 검증된 상태. mixer는 model에 보관해
+ * 다음 클립 때 재부착한다(크로스페이드 인프라 유지).
+ * 주의: null 대입이 아니라 undefined 대입 — helper._syncDuration은
+ * undefined만 거르므로 null이면 add/remove 중 mixer._actions에서 크래시
+ * (Codex MUST-FIX).
+ */
+function stashMmdMixer(model) {
+  const helper = getMmdHelper()
+  const item = helper?.objects?.get?.(model.obj) ?? helper?.objects?.[model.obj?.uuid]
+  if (!item?.mixer) return
+  model._stashedMmdMixer = item.mixer
+  item.mixer = undefined
+  delete item.backupBones
+}
+
 /**
  * Plays a `.vrma` clip on the currently-loaded VRM model.
  *
@@ -105,7 +196,9 @@ export async function playVRMAnimation(url, { loop = false, fadeIn = 0.3 } = {},
           // resume layering on top of VRMA (it was always designed that
           // way). Only FBX needs the procedural layer disabled.
           model._fbxClipActive = false
+          model._activeFbxAction = null
           const action = model.mixer.clipAction(clip)
+          model._activeVrmaAction = action
           action.setLoop(loop ? LoopRepeat : LoopOnce, Infinity)
           if (fadeIn > 0) action.fadeIn(fadeIn)
 
@@ -117,9 +210,20 @@ export async function playVRMAnimation(url, { loop = false, fadeIn = 0.3 } = {},
             action.clampWhenFinished = true
             const onFinished = (e) => {
               if (e.action !== action) return
-              action.fadeOut(0.35)
               model.mixer?.removeEventListener('finished', onFinished)
               model._pendingFadeOutHandlers?.delete(onFinished)
+              // C단계: 클립이 끝나면 (fade 완료 후) 팔/몸통 소유권을
+              // 절차적 레이어에 돌려준다 — 안 돌려주면 _vrmaClipActive가
+              // 영원히 남아 호흡/제스처가 차단된 채 굳는다.
+              scheduleGuardedRelease(model, ctx, {
+                action,
+                fade: 0.35,
+                isCurrent: () => model._activeVrmaAction === action,
+                onRelease: () => {
+                  model._vrmaClipActive = false
+                  model._activeVrmaAction = null
+                },
+              })
             }
             ;(model._pendingFadeOutHandlers ||= new Set()).add(onFinished)
             model.mixer.addEventListener('finished', onFinished)
@@ -333,16 +437,25 @@ export async function playFBXAnimation(url, { loop = false, fadeIn = 0.3 } = {},
           // a clip is owning the rig. Cleared on finish for non-loop
           // and on next play/clearModel for loop.
           model._fbxClipActive = true
+          model._activeFbxAction = action
 
           if (!loop) {
             action.clampWhenFinished = true
             const onFinished = (e) => {
               if (e.action !== action) return
-              action.fadeOut(0.35)
               model.mixer?.removeEventListener('finished', onFinished)
               model._pendingFadeOutHandlers?.delete(onFinished)
-              // Clip is done — yield back to procedural layer.
-              model._fbxClipActive = false
+              // Clip is done — yield back to procedural layer (after fade,
+              // guarded — same pattern as VRMA/VMD).
+              scheduleGuardedRelease(model, ctx, {
+                action,
+                fade: 0.35,
+                isCurrent: () => model._activeFbxAction === action,
+                onRelease: () => {
+                  model._fbxClipActive = false
+                  model._activeFbxAction = null
+                },
+              })
             }
             ;(model._pendingFadeOutHandlers ||= new Set()).add(onFinished)
             model.mixer.addEventListener('finished', onFinished)
@@ -457,6 +570,14 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
           const item = helper.objects?.get?.(model.obj) ?? helper.objects?.[model.obj.uuid]
           let action = null
 
+          // 클립 해제 때 빼둔 mixer가 있으면 재부착 — 아래 !item.mixer
+          // 분기가 _setupMeshAnimation으로 mixer를 새로 만들어 누수되는
+          // 것을 막고 크로스페이드 인프라를 유지한다 (stashMmdMixer 참조)
+          if (item && !item.mixer && model._stashedMmdMixer) {
+            item.mixer = model._stashedMmdMixer
+            model._stashedMmdMixer = null
+          }
+
           if (!item) {
             // 등록 안 된 mesh (정상 흐름에선 없음) — 마지막 수단으로 full add.
             helper.add(model.obj, { animation: clip, physics: true, warmup: 0 })
@@ -509,6 +630,28 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
             if (!loop) {
               action.setLoop(LoopOnce, Infinity)
               action.clampWhenFinished = true
+              // C단계: non-loop 클립이 끝나면 (fade 완료 후) 소유권을
+              // 절차적 레이어로 돌려준다. 이게 없으면 _vmdClipActive가
+              // 영원히 남아 마지막 프레임에 굳는다. main.js가 플래그를
+              // 켜고, 여기서 끈다 — FBX 경로와 같은 분담.
+              const liveMixer = (helper.objects?.get?.(model.obj))?.mixer
+              if (liveMixer) {
+                const onFinished = (e) => {
+                  if (e.action !== action) return
+                  liveMixer.removeEventListener('finished', onFinished)
+                  scheduleGuardedRelease(model, ctx, {
+                    action,
+                    fade: 0.5,
+                    isCurrent: () => model._activeVmdAction === action,
+                    onRelease: () => {
+                      model._vmdClipActive = false
+                      model._activeVmdAction = null
+                      stashMmdMixer(model)
+                    },
+                  })
+                }
+                liveMixer.addEventListener('finished', onFinished)
+              }
             } else {
               action.setLoop(LoopRepeat, Infinity)
             }
