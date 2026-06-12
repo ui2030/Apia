@@ -25,15 +25,18 @@ const { mainWindow, cleanup } = await launchApia({
   extraEnv: { APIA_E2E_DISABLE_WALLPAPER: '1' }
 })
 
-const logs = []
+// 단언 근거는 errorLogs만 — [VMD diag] 진단 라인은 정보용(diagLogs)이라
+// 실패 판정에 섞이면 안 된다 (Codex 사전 검토 MUST-FIX).
+const errorLogs = []
+const diagLogs = []
 mainWindow.on('console', (msg) => {
   const t = msg.text()
   if (t.includes('Electron Security')) return
   if (msg.type() === 'error' && !t.includes('unknown char code')) {
-    logs.push(`[error] ${t}`)
+    errorLogs.push(`[error] ${t}`)
   }
   if (t.includes('[VMD diag]') || t.includes('[VMD] stripped')) {
-    logs.push(`[${msg.type()}] ${t}`)
+    diagLogs.push(`[${msg.type()}] ${t}`)
   }
 })
 
@@ -135,10 +138,19 @@ for (const name of motions) {
   console.log('  t=2.3s:', JSON.stringify(await snapshot(`${name}_b`)))
 }
 
-if (logs.length) {
-  console.log('\n========== logs ==========')
-  for (const l of logs) console.log(l)
+if (diagLogs.length) {
+  console.log('\n========== diag logs (정보용, 실패 판정 아님) ==========')
+  for (const l of diagLogs) console.log(l)
 }
 
 await cleanup()
+
+// 단언: 렌더러 콘솔에 [error]가 한 줄이라도 있으면 실패
+if (errorLogs.length) {
+  console.error('\n========== error logs ==========')
+  for (const l of errorLogs) console.error(l)
+  console.error('VMD CHECK FAILED')
+  process.exit(1)
+}
+console.log('VMD CHECK PASSED')
 process.exit(0)

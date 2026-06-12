@@ -11,6 +11,7 @@
     "start": "electron .",
     "test": "vitest run",
     "test:gui": "playwright test",
+    "qa:visual": "node tests/gui/run-visual-qa.mjs",
     "verify": "npm run build && node scripts/verify-build.mjs && node --check electron/main.js && node --check electron/preload.js && node --check electron/ipc/registerCharacterIpc.js && node --check electron/services/registryService.js && node --check electron/services/characterImportService.js && npm test",
     "verify:release": "node scripts/verify-release.mjs",
     "smoke:release": "node scripts/smoke-release.mjs",
