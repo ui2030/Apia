@@ -62,6 +62,12 @@ const steps = [
     timeoutMs: 180_000
   },
   {
+    name: 'expression-check',
+    label: '감정→표정 모프 + 깜빡임 (4단언)',
+    args: [path.join(__dirname, 'expression-check.mjs')],
+    timeoutMs: 180_000
+  },
+  {
     name: 'vmd-check',
     label: '9모션×3각도 스크린샷 + 에러 로그 단언',
     args: [path.join(__dirname, 'vmd-check.mjs')],

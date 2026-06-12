@@ -26,6 +26,7 @@ build` 먼저.
 | transition-check | ① 걷기 시작 ~1.5s 안에 VMD 클립 해제 ② 걷는 동안 다리 본 진동(legRange > 0.05) ③ 도착 후 치마 낙하량 ≥ idle 기준의 70% ④ 다음 클립 재생 시 mixer 재부착 + 치마 정상 | `TRANSITION CHECK PASSED` |
 | tail-check | ① ★Up_しっぽ 모프 적용(しっぽ支 로컬 Y > 0) ② 꼬리 끝(しっぽ12) 월드 Y > 0.02(바닥 위) ③ 꼬리 중간(しっぽ7) 월드 Y > 0.3 | `TAIL CHECK PASSED` |
 | smoothness-check | ① 시선 — __setLookTarget 좌/우에 左目 yaw 부호 반전(측정 ±0.22) ② 전환 부드러움 — idle_sway→idle_stretch 전환 시 左腕 프레임당 각도 점프 max < 0.15rad (측정: inertialization ON 0.003, OFF 0.067). `APIA_SMOOTH_MEASURE=1`이면 측정만 | `SMOOTHNESS CHECK PASSED` |
+| expression-check | ① 핵심 표정 모프 존재(笑い·まばたき·困る·怒り·びっくり·にっこり — 없으면 실패) ② happy 1s 후 笑い·にっこり > 0.3 ③ neutral 2s 후 笑い < 0.1 ④ 7s 내 まばたき > 0.5 한 번 이상(PMX 깜빡임). 스크린샷은 깜빡임 순간 회피 후 촬영 | `EXPRESSION CHECK PASSED` |
 | vmd-check | 9개 idle 모션 × 3각도(정면/측면/후면) 스크린샷 + 휴식 자세. 렌더러 콘솔에 `[error]` 한 줄이라도 있으면 실패. `[VMD diag]` 라인은 정보용으로만 출력 | `VMD CHECK PASSED` |
 
 skirt-walk-check.mjs는 단언이 없는 **진단 전용**(치마 출렁임 샘플링,
@@ -43,6 +44,9 @@ skirt-walk-check.mjs는 단언이 없는 **진단 전용**(치마 출렁임 샘�
   끌리거나 관통하면 실패
 - `test-results/transition-check/`: 걷기 전후·재생 직후 치마가 말려 올라가지
   않았는지
+- `test-results/expression-check/` (감정 4종 + neutral 얼굴 클로즈업):
+  happy=눈웃음+입꼬리, sad=팔자눈썹, angry=치켜뜬 눈썹, surprised=눈 크게.
+  **흰자 뜬 반감김 눈이 보이면 모프 간섭 회귀**(びっくり+丸目 조합 금지)
 
 ## 측정 모드 (단언 끄고 기준값 채집)
 

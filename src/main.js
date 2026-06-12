@@ -17,8 +17,9 @@ import {
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
-import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector } from './characterController.js'
+import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector } from './characterController.js'
 import { applyInertialization, recordDisplayedPose, setInertializationEnabled } from './inertialization.js'
+import { setExpressionEmotion, updateExpression, resetExpression } from './expressionRuntime.js'
 import { initWorld, updateWorldLabels } from './world.js'
 import { initChat, setCharacterRaycaster } from './chat.js'
 import { MotionManager } from './motionManager.js'
@@ -177,6 +178,8 @@ if (typeof window !== 'undefined') {
   // inertialization on/off 비교 측정을 한다(__setInertialization).
   window.__setLookTarget = (x, y) => setLookTarget(x, y, { source: 'global' })
   window.__setInertialization = (on) => setInertializationEnabled(on)
+  // G단계 E2E — expression-check가 감정→모프 연동을 단언한다.
+  window.__applyEmotion = (e) => applyEmotion(e)
 }
 let worldManager = null
 const lipsync = { active: false, phase: 0 }
@@ -693,6 +696,8 @@ function clearModel() {
   if (!currentModel) return
 
   clearDummyBlinkTarget()
+  // 이전 모델의 감정 target/스무딩 상태가 다음 모델로 새지 않게
+  resetExpression()
 
   if (currentModel.type === 'mmd') {
     try { getMmdHelper()?.remove(currentModel.obj) } catch {}
@@ -736,20 +741,29 @@ export function stopSpeaking() {
   lipsync.active = false
 }
 
+// G단계 — 모델 불문 감정→표정 진입점. MMD는 expressionRuntime(모프 스무딩
+// + 6s hold 후 자동 중립), VRM은 기존 1.5s 펄스 유지. neutral은 명시 지원
+// (Codex MUST-FIX) — E2E 감쇠 검증과 수동 중립 복귀가 이걸 의지한다.
+const VRM_EMOTION_EXPRS = ['happy', 'sad', 'angry', 'surprised']
 export function applyEmotion(emotion) {
+  if (currentModel?.type === 'mmd') {
+    setExpressionEmotion(emotion)
+    return
+  }
   if (currentModel?.type !== 'vrm') return
 
-  const expr = {
-    happy: 'happy',
-    sad: 'sad',
-    angry: 'angry',
-    surprised: 'surprised'
-  }[emotion]
-
-  if (!expr) return
-
-  currentModel.obj.expressionManager?.setValue(expr, 1.0)
-  setTimeout(() => currentModel.obj.expressionManager?.setValue(expr, 0), 1500)
+  const em = currentModel.obj.expressionManager
+  if (!em) return
+  if (emotion === 'neutral' || !VRM_EMOTION_EXPRS.includes(emotion)) {
+    for (const e of VRM_EMOTION_EXPRS) em.setValue(e, 0)
+    return
+  }
+  em.setValue(emotion, 1.0)
+  // 모델 캡처 — 1.5s 사이 모델이 교체되면 새 모델을 건드리지 않는다
+  const model = currentModel
+  setTimeout(() => {
+    if (currentModel === model) model.obj.expressionManager?.setValue(emotion, 0)
+  }, 1500)
 }
 
 export function showBubble(text, duration = 3000) {
@@ -990,6 +1004,10 @@ function animate() {
       recordDisplayedPose(currentModel, delta)
       updateCharacter(root, t, delta)
       lipsyncMMD()
+      // 표정은 맨 끝 — _updateBlink(updateCharacter 내부)가 갱신한 이번
+      // 프레임 blink를 읽고, "managed morphs win after helper/lipsync"
+      // (Codex MUST-FIX: updateBody 직후면 전 프레임 blink를 읽는다)
+      updateExpression(currentModel, delta, getBlinkValue())
     } else {
       updateCharacter(root, t, delta)
 
@@ -1168,6 +1186,7 @@ initChat({
   stopSpeaking,
   applyEmotion: (emotion) => {
     setEmotion(emotion)
+    applyEmotion(emotion) // G단계 — 표정 모프/익스프레션도 같이
     const reactMotion = motionManager.pickReactMotion({ emotion })
     playMotion(reactMotion)
   },
@@ -1221,6 +1240,7 @@ window.api?.onCharacterAction?.((payload) => {
     case 'emotion': {
       const emotion = payload.value || 'neutral'
       setEmotion(emotion)
+      applyEmotion(emotion) // G단계 — IPC 경로도 표정 동일 적용 (Codex MUST-FIX)
       const reactMotion = motionManager.pickReactMotion({ emotion })
       playMotion(reactMotion)
       break

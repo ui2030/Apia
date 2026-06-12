@@ -214,6 +214,13 @@ export function getLookTarget() {
   return { x: lookTargetX, y: lookTargetY }
 }
 
+// G단계 — PMX 깜빡임. blink.value는 모델 불문 매 프레임 계산되지만 적용은
+// dummy(_applyBlink)와 VRM(updateBody)뿐이었다. expressionRuntime이 이 값을
+// 읽어 まばたき 모프에 쓴다.
+export function getBlinkValue() {
+  return blink.value
+}
+
 export function setDummyBlinkTarget(node) {
   dummyBlinkTarget = node || null
 }
