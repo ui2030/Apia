@@ -56,6 +56,12 @@ const steps = [
     timeoutMs: 180_000
   },
   {
+    name: 'smoothness-check',
+    label: '시선 반응 + 전환 부드러움 (2단언)',
+    args: [path.join(__dirname, 'smoothness-check.mjs')],
+    timeoutMs: 180_000
+  },
+  {
     name: 'vmd-check',
     label: '9모션×3각도 스크린샷 + 에러 로그 단언',
     args: [path.join(__dirname, 'vmd-check.mjs')],

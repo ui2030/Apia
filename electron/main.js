@@ -695,6 +695,13 @@ app.whenReady().then(async () => {
 
   await windows.createMainWindow()
 
+  // F단계 — 전역 커서 시선 피드. 벽지 모드는 forwardMouseInput:false라
+  // renderer가 mousemove를 영영 못 받는다. 메인 프로세스가 커서를 폴링해
+  // 창 content 기준 정규화 좌표를 renderer에 푸시한다.
+  // E2E는 피드를 끈다 — 러너 도는 동안 사용자가 마우스를 움직이면 시선이
+  // 덮어써져 스크린샷/단언이 비결정적이 된다 (launchApia가 항상 세팅).
+  if (process.env.APIA_E2E_NO_CURSOR_FEED !== '1') startCursorFeed()
+
   // Phase F1: drop the main overlay into the Windows wallpaper layer (behind
   // desktop icons). Codex MUST-FIX: lazy + graceful — if the native module
   // isn't available (non-Windows, build missing), fall back to the existing
@@ -706,6 +713,42 @@ app.whenReady().then(async () => {
 }).catch(async (error) => {
   await windows.showStartupError('Apia failed during app initialization.', error)
 })
+
+// ── F단계: 전역 커서 시선 피드 ───────────────────────────────────────────────
+//
+// screen.getCursorScreenPoint()와 getContentBounds()는 둘 다 DIP 좌표계라
+// DPI 스케일이 달라도 정규화가 일관된다. 같은 값이면 안 보내서(IPC 디듀프)
+// 커서가 멈춰 있는 동안 트래픽이 0이고, 복귀 타이머는 renderer
+// (characterController)가 단일 관할한다 — Codex 사전 검토 반영.
+const CURSOR_POLL_MS = 50
+let cursorPollTimer = null
+
+function startCursorFeed() {
+  if (cursorPollTimer) return
+  let lastX = null
+  let lastY = null
+  cursorPollTimer = setInterval(() => {
+    const main = windows.getMain()
+    if (!main || main.isDestroyed() || !main.isVisible()) return
+    let pt
+    try { pt = screen.getCursorScreenPoint() } catch { return }
+    const b = main.getContentBounds()
+    if (!b.width || !b.height) return
+    const nx = ((pt.x - b.x) / b.width) * 2 - 1
+    const ny = ((pt.y - b.y) / b.height) * 2 - 1
+    if (nx === lastX && ny === lastY) return
+    lastX = nx
+    lastY = ny
+    try { main.webContents.send('cursor:pos', { x: nx, y: ny }) } catch {}
+  }, CURSOR_POLL_MS)
+}
+
+function stopCursorFeed() {
+  if (cursorPollTimer) {
+    clearInterval(cursorPollTimer)
+    cursorPollTimer = null
+  }
+}
 
 // ── Phase F1 wallpaper mode integration ─────────────────────────────────────
 
@@ -987,6 +1030,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   logInfo('[BEFORE_QUIT]', { backendStartedByApp: backend.isStartedByApp() })
+  stopCursorFeed()
   try {
     wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
   } catch (error) {

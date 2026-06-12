@@ -20,6 +20,7 @@
  */
 import { AnimationClip, LoopOnce, LoopRepeat, Quaternion, QuaternionKeyframeTrack, VectorKeyframeTrack } from 'three'
 import { getMmdRuntime, getMmdHelper, stabilizeMmdPhysics, normalizeUrlToFetchable } from './modelRuntime.js'
+import { markInertialTransition, findPoseAwareStart } from './inertialization.js'
 
 let _vrmAnimRuntime = null
 let _fbxLoader = null
@@ -566,7 +567,15 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
           //     호출 허용 — REGRESSION_NOTES에 기록)
           //   - 이후 클립: 같은 mixer 위에서 fadeIn/fadeOut 크로스페이드.
           //     물리 객체가 살아있으니 본이 연속적으로 움직이고 슬램이 없다.
-          const FADE_SEC = 0.45
+          // F단계: 불연속 흡수의 주역이 inertialization으로 넘어가면서
+          // 크로스페이드는 0.45→0.25로 축소(미추적 본 — 손가락/어깨/다리 —
+          // 의 잔여 블렌딩용). Codex 권고로 보수적 축소; smoothness-check가
+          // 물리 포함 회귀를 감시한다.
+          const FADE_SEC = 0.25
+          // 포즈 인지 전환 — loop 클립만: 새 클립 앞 절반에서 현재 자세와
+          // 최근접 프레임을 찾아 거기서 시작한다. non-loop은 시작점을 밀면
+          // finished가 조기 발화해 제외 (Codex MUST-FIX).
+          const seekT = loop ? findPoseAwareStart(clip, model.obj) : 0
           const item = helper.objects?.get?.(model.obj) ?? helper.objects?.[model.obj.uuid]
           let action = null
 
@@ -584,6 +593,7 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
             stabilizeMmdPhysics(model.obj)
             const fresh = helper.objects?.get?.(model.obj)
             action = fresh?.mixer?.clipAction?.(clip) ?? null
+            if (action) markInertialTransition(model)
           } else if (!item.mixer) {
             // 첫 클립: mixer + loop 리스너 생성. _setupMeshAnimation은 클립을
             // weight 1로 즉시 play()하므로, 멈췄다가 fadeIn으로 다시 건다.
@@ -600,6 +610,10 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
             if (action) {
               action.stop()
               action.reset().fadeIn(FADE_SEC).play()
+              if (seekT > 0) action.time = seekT
+              // 절차적 자세 → 첫 클립도 전환이다 — 표시 자세 캐시 기준으로
+              // 다음 프레임에 offset 실측 (inertialization.js 참조)
+              markInertialTransition(model)
             }
           } else {
             const mixer = item.mixer
@@ -609,6 +623,8 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
             action.reset().setEffectiveTimeScale(1).setEffectiveWeight(1)
             if (prevAction && prevAction !== action) prevAction.fadeOut(FADE_SEC)
             action.fadeIn(FADE_SEC).play()
+            if (seekT > 0) action.time = seekT
+            markInertialTransition(model)
             if (prevClip && prevClip !== clip) {
               // 페이드가 끝난 뒤 옛 클립을 mixer 캐시에서 내린다. 그 사이에
               // 같은 클립이 다시 활성화됐거나 모델이 교체됐으면 건너뜀.

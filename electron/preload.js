@@ -27,6 +27,15 @@ contextBridge.exposeInMainWorld('api', {
   // citation chip click — main process enforces http/https only.
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
+  // F단계 — 전역 커서 시선 피드 구독. 다른 onX들과 달리 해제 함수를
+  // 반환한다(Codex MUST-FIX: 리스너 누수 방지 — 매 프레임급 이벤트라
+  // 잔류 리스너의 비용이 실재함).
+  onCursorPos: (cb) => {
+    const listener = (_e, pos) => cb(pos)
+    ipcRenderer.on('cursor:pos', listener)
+    return () => ipcRenderer.removeListener('cursor:pos', listener)
+  },
+
   // Phase F2 — chat window IPC. `notifyCharacter` lets the standalone chat
   // window forward emotion/face-camera/bubble/lipsync actions to the
   // wallpaper main window. Main process applies an action allowlist before

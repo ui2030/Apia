@@ -25,6 +25,7 @@ build` 먼저.
 | vitest | 단위 테스트 전체 | 전부 통과 |
 | transition-check | ① 걷기 시작 ~1.5s 안에 VMD 클립 해제 ② 걷는 동안 다리 본 진동(legRange > 0.05) ③ 도착 후 치마 낙하량 ≥ idle 기준의 70% ④ 다음 클립 재생 시 mixer 재부착 + 치마 정상 | `TRANSITION CHECK PASSED` |
 | tail-check | ① ★Up_しっぽ 모프 적용(しっぽ支 로컬 Y > 0) ② 꼬리 끝(しっぽ12) 월드 Y > 0.02(바닥 위) ③ 꼬리 중간(しっぽ7) 월드 Y > 0.3 | `TAIL CHECK PASSED` |
+| smoothness-check | ① 시선 — __setLookTarget 좌/우에 左目 yaw 부호 반전(측정 ±0.22) ② 전환 부드러움 — idle_sway→idle_stretch 전환 시 左腕 프레임당 각도 점프 max < 0.15rad (측정: inertialization ON 0.003, OFF 0.067). `APIA_SMOOTH_MEASURE=1`이면 측정만 | `SMOOTHNESS CHECK PASSED` |
 | vmd-check | 9개 idle 모션 × 3각도(정면/측면/후면) 스크린샷 + 휴식 자세. 렌더러 콘솔에 `[error]` 한 줄이라도 있으면 실패. `[VMD diag]` 라인은 정보용으로만 출력 | `VMD CHECK PASSED` |
 
 skirt-walk-check.mjs는 단언이 없는 **진단 전용**(치마 출렁임 샘플링,

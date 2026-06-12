@@ -37,6 +37,15 @@ let blink = {
 
 let lookTargetX = 0
 let lookTargetY = 0
+// F단계 — 시선 입력의 단일 관할. canvas mousemove와 전역 커서 IPC 피드가
+// 같은 setLookTarget으로 들어오되, 전역 피드가 한 번이라도 도착하면 canvas
+// 경로는 무시한다(벽지 모드에선 canvas 이벤트가 아예 없고, 오버레이
+// 모드에선 둘 다 와서 이중 권한이 되기 때문). 무이동 타임스탬프도 여기
+// 한 곳에서만 찍는다 (Codex MUST-FIX: 복귀 타이머 단일 관할).
+let lastLookInputMs = 0
+let globalCursorFeed = false
+const LOOK_IDLE_RETURN_MS = 8000 // 커서 8s 무이동이면 시선을 중앙으로 복귀
+const LOOK_IDLE_RETURN_RATE = 0.6 // 1/s 지수 감쇠 — 절차적 시선 방황이 승계
 
 // Phase C: temporary "face the camera" override. While `faceCameraUntil > Date.now()`
 // every state's body yaw and lookTargetY get nudged toward the user. Codex
@@ -190,9 +199,15 @@ export function getState() {
 export function onMouseMove(x, y) {
   const nx = (x / window.innerWidth) * 2 - 1
   const ny = (y / window.innerHeight) * 2 - 1
+  setLookTarget(nx, ny, { source: 'canvas' })
+}
 
+export function setLookTarget(nx, ny, { source = 'canvas' } = {}) {
+  if (source === 'global') globalCursorFeed = true
+  else if (globalCursorFeed) return
   lookTargetX = Math.max(-1, Math.min(1, nx))
   lookTargetY = Math.max(-1, Math.min(1, ny))
+  lastLookInputMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
 }
 
 export function getLookTarget() {
@@ -232,6 +247,18 @@ export function getCurrentMotion() {
 
 export function updateCharacter(mesh, t, dt) {
   mesh3D = mesh
+
+  // 커서가 한참 안 움직이면 시선을 서서히 중앙으로 — 사용자를 빤히
+  // 계속 쳐다보는 것보다 살아 있어 보인다. 복귀 후엔 saccade/자연 자세
+  // 레이어가 미세 시선을 이어받는다.
+  if (lastLookInputMs) {
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
+    if (nowMs - lastLookInputMs > LOOK_IDLE_RETURN_MS) {
+      const k = Math.exp(-LOOK_IDLE_RETURN_RATE * Math.max(dt, 0))
+      lookTargetX *= k
+      lookTargetY *= k
+    }
+  }
 
   _updateBlink(t, dt)
   _updateNaturalPose(t)

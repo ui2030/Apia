@@ -46,6 +46,10 @@ export async function launchApia({ existingUserData, extraEnv = {} } = {}) {
       APIA_E2E_USER_DATA_DIR: userData,
       APIA_E2E_DISABLE_BACKEND: '1',
       APIA_E2E_NO_SHELL_OPEN: '1',
+      // F단계 — 전역 커서 시선 피드 차단. 테스트 중 실제 마우스가 움직이면
+      // 시선(눈/목/머리)이 끌려가 스크린샷·자세 단언이 비결정적이 된다.
+      // 시선 검증은 smoothness-check가 __setLookTarget 훅으로 한다.
+      APIA_E2E_NO_CURSOR_FEED: '1',
       ...extraEnv
     }
   })

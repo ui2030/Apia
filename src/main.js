@@ -17,7 +17,8 @@ import {
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
-import { updateCharacter, onMouseMove, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector } from './characterController.js'
+import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector } from './characterController.js'
+import { applyInertialization, recordDisplayedPose, setInertializationEnabled } from './inertialization.js'
 import { initWorld, updateWorldLabels } from './world.js'
 import { initChat, setCharacterRaycaster } from './chat.js'
 import { MotionManager } from './motionManager.js'
@@ -172,6 +173,10 @@ if (typeof window !== 'undefined') {
     fbx: currentModel?._fbxClipActive ?? null,
     state: getState?.() ?? null,
   })
+  // F단계 E2E — smoothness-check가 시선 반응을 단언하고(__setLookTarget),
+  // inertialization on/off 비교 측정을 한다(__setInertialization).
+  window.__setLookTarget = (x, y) => setLookTarget(x, y, { source: 'global' })
+  window.__setInertialization = (on) => setInertializationEnabled(on)
 }
 let worldManager = null
 const lipsync = { active: false, phase: 0 }
@@ -976,7 +981,13 @@ function animate() {
     } else if (currentModel.type === 'mmd') {
       currentModel.mixer?.update(delta)
       getMmdHelper()?.update(delta)
+      // F단계 — 클립 전환 관성 보정. helper(mixer는 helper 내부 소유) 뒤,
+      // 절차적 레이어 앞이 유일하게 유효한 자리다 (inertialization.js의
+      // 설계 결정 주석 참조).
+      applyInertialization(currentModel, delta)
       updateBody(t, delta)
+      // 화면에 나가는 최종 자세를 캐시 — 다음 전환의 연속성 기준점
+      recordDisplayedPose(currentModel, delta)
       updateCharacter(root, t, delta)
       lipsyncMMD()
     } else {
@@ -1061,6 +1072,16 @@ loadDummy()
 initCameraControls()
 
 window.addEventListener('mousemove', (e) => onMouseMove(e.clientX, e.clientY))
+
+// F단계 — 전역 커서 시선. 벽지 모드는 forwardMouseInput:false라 위의
+// mousemove가 영영 안 온다. 메인 프로세스가 50ms 폴링한 커서 좌표(창
+// content 기준 [-1,1] 정규화)를 구독한다. 전역 피드가 한 번이라도 도착하면
+// characterController가 canvas 경로를 무시해 이중 권한이 안 생긴다.
+window.api?.onCursorPos?.((pos) => {
+  if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+    setLookTarget(pos.x, pos.y, { source: 'global' })
+  }
+})
 
 if (window.api) {
   window.api.getSettings().then(async (s) => {
