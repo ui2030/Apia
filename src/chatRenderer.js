@@ -14,6 +14,8 @@
 //   - Close button hides the window (preventDefault) rather than destroying
 //     it; reopen via tray click / Ctrl+Alt+A is instant.
 
+import { analyzeWav } from './lipsyncRuntime.js'
+
 const state = {
   history: [],
   voiceId: null,
@@ -170,8 +172,12 @@ async function speakWithLipsync(text) {
     audioUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
     audio = new Audio(audioUrl)
 
-    window.api.notifyCharacter?.({ action: 'lipsync-start' })
-    started = true
+    // H단계 — 이 창이 오디오를 재생하고 캐릭터(메인 창)는 IPC로만 입을
+    // 움직인다. 비짐 타임라인을 여기서 분석해 lipsync-start에 실어 보내되,
+    // 반드시 play() 성공 **후** offsetSec(=currentTime)과 함께 — 수신 시점
+    // t0에서 그만큼 되감아 IPC 지연을 흡수한다 (Codex MUST-FIX).
+    // 분석은 Blob 버퍼가 아닌 복제본으로 (decodeAudioData가 detach).
+    const visemeTimeline = await analyzeWav(buf.buffer.slice(0))
 
     await new Promise((resolve) => {
       let finished = false
@@ -182,7 +188,15 @@ async function speakWithLipsync(text) {
       }
       audio.onended = finish
       audio.onerror = finish
-      audio.play().catch(finish)
+      audio.play().then(() => {
+        window.api.notifyCharacter?.({
+          action: 'lipsync-start',
+          value: visemeTimeline
+            ? { timeline: visemeTimeline, offsetSec: audio.currentTime || 0 }
+            : undefined
+        })
+        started = true
+      }).catch(finish)
     })
   } catch (error) {
     console.warn('[chatRenderer] tts failed', error)

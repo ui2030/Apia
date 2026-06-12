@@ -1,6 +1,7 @@
 // src/chat.js - 채팅, STT, TTS
 import { setState, getState } from './characterController.js'
 import { setEmotion, requestFaceCamera } from './characterController.js'
+import { analyzeWav, playTimeline, stopTimeline } from './lipsyncRuntime.js'
 
 // Step 3: character raycaster injected by main.js. null = wallpaper mode
 // active (or just no character loaded) — click-through manager skips the
@@ -326,6 +327,11 @@ async function speakText(text, talkMotion = null) {
         URL.revokeObjectURL(audioUrl)
       }
 
+      // H단계 — 재생 전 비짐 분석. decodeAudioData가 버퍼를 detach하므로
+      // Blob에 쓴 버퍼가 아니라 복제본을 넘긴다 (Codex MUST-FIX). 분석
+      // 실패(null)면 lipsyncRuntime이 사인파 폴백으로 동작한다.
+      const visemeTimeline = await analyzeWav(buf.buffer.slice(0))
+
       const previousState = getState?.()
       state.speechReturnState =
         previousState && previousState !== 'talk'
@@ -345,6 +351,7 @@ async function speakText(text, talkMotion = null) {
         const finalizeAudio = () => {
           if (finished) return
           finished = true
+          stopTimeline()
           cleanupAudio()
           finishSpeakingMotion({ didEnterTalk })
           resolve()
@@ -358,7 +365,11 @@ async function speakText(text, talkMotion = null) {
           finalizeAudio()
         }
 
-        audio.play().catch(() => {
+        // 타임라인은 재생이 실제로 시작된 뒤에 건다 — currentTime 보정으로
+        // play() 지연을 흡수
+        audio.play().then(() => {
+          if (visemeTimeline) playTimeline(visemeTimeline, audio.currentTime || 0)
+        }).catch(() => {
           finalizeAudio()
         })
       })

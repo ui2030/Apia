@@ -20,6 +20,7 @@ import { createSceneRuntime } from './sceneRuntime.js'
 import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector } from './characterController.js'
 import { applyInertialization, recordDisplayedPose, setInertializationEnabled } from './inertialization.js'
 import { setExpressionEmotion, updateExpression, resetExpression } from './expressionRuntime.js'
+import { playTimeline, stopTimeline, updateMouthMMD, updateMouthVRM } from './lipsyncRuntime.js'
 import { initWorld, updateWorldLabels } from './world.js'
 import { initChat, setCharacterRaycaster } from './chat.js'
 import { MotionManager } from './motionManager.js'
@@ -180,6 +181,12 @@ if (typeof window !== 'undefined') {
   window.__setInertialization = (on) => setInertializationEnabled(on)
   // G단계 E2E — expression-check가 감정→모프 연동을 단언한다.
   window.__applyEmotion = (e) => applyEmotion(e)
+  // H단계 E2E — lipsync-check가 합성 타임라인으로 입모양 연동을 단언한다.
+  window.__lipsyncPlay = (tl, off) => {
+    startSpeaking()
+    return playTimeline(tl, off)
+  }
+  window.__lipsyncStop = () => stopSpeaking()
 }
 let worldManager = null
 const lipsync = { active: false, phase: 0 }
@@ -739,6 +746,9 @@ export function startSpeaking() {
 
 export function stopSpeaking() {
   lipsync.active = false
+  // H단계 — 비짐 타임라인도 함께 종료. 입 모프는 lipsyncRuntime의 스무딩이
+  // 전 모음을 0으로 수렴시킨다.
+  stopTimeline()
 }
 
 // G단계 — 모델 불문 감정→표정 진입점. MMD는 expressionRuntime(모프 스무딩
@@ -938,34 +948,17 @@ function updateBody(t, delta) {
   }
 }
 
-function lipsyncVRM() {
-  const em = currentModel.obj.expressionManager
-  if (!em) return
-
-  if (lipsync.active) {
-    lipsync.phase += 0.25
-    em.setValue('aa', Math.abs(Math.sin(lipsync.phase)) * 0.7)
-    em.setValue('ih', Math.abs(Math.sin(lipsync.phase * 1.3)) * 0.3)
-  } else {
-    em.setValue('aa', 0)
-    em.setValue('ih', 0)
-  }
+// H단계 — 비짐 타임라인 기반 입모양 (lipsyncRuntime). 타임라인이 없으면
+// (디코드 실패 등) lipsync.active 동안 구 사인파 폴백, 둘 다 아니면 전
+// 모음 모프가 0으로 수렴한다.
+function lipsyncVRM(delta) {
+  if (lipsync.active) lipsync.phase += 0.25
+  updateMouthVRM(currentModel, delta, lipsync.active, lipsync.phase)
 }
 
-function lipsyncMMD() {
-  const mesh = currentModel.obj
-  if (!mesh.morphTargetInfluences) return
-
-  for (const n of ['あ', 'a', 'mouth_a', 'A', 'mouth', 'Ah']) {
-    const i = currentModel.morphs[n]
-    if (i !== undefined) {
-      lipsync.phase += 0.2
-      mesh.morphTargetInfluences[i] = lipsync.active
-        ? Math.abs(Math.sin(lipsync.phase)) * 0.8
-        : 0
-      break
-    }
-  }
+function lipsyncMMD(delta) {
+  if (lipsync.active) lipsync.phase += 0.2
+  updateMouthMMD(currentModel, delta, lipsync.active, lipsync.phase)
 }
 
 function animate() {
@@ -990,7 +983,7 @@ function animate() {
       // still running breath/gaze/saccade. So we no longer skip the call
       // when an FBX clip is active — the mask handles the conflict.
       updateBody(t, delta)
-      lipsyncVRM()
+      lipsyncVRM(delta)
       updateCharacter(root, t, delta)
     } else if (currentModel.type === 'mmd') {
       currentModel.mixer?.update(delta)
@@ -1003,7 +996,7 @@ function animate() {
       // 화면에 나가는 최종 자세를 캐시 — 다음 전환의 연속성 기준점
       recordDisplayedPose(currentModel, delta)
       updateCharacter(root, t, delta)
-      lipsyncMMD()
+      lipsyncMMD(delta)
       // 표정은 맨 끝 — _updateBlink(updateCharacter 내부)가 갱신한 이번
       // 프레임 blink를 읽고, "managed morphs win after helper/lipsync"
       // (Codex MUST-FIX: updateBody 직후면 전 프레임 blink를 읽는다)
@@ -1252,6 +1245,11 @@ window.api?.onCharacterAction?.((payload) => {
       requestFaceCamera({ durationMs: payload.durationMs || 12000, approach: true })
       break
     case 'lipsync-start': {
+      // H단계 Codex MUST-FIX(사후): 타임라인 검증이 먼저 — sanitize에서
+      // 거부될 payload가 talk 상태·사인파 폴백을 트리거하면 안 된다.
+      // timeline 부재는 송신측 디코드 실패의 명시적 폴백이라 사인파 허용.
+      const tl = payload.value?.timeline
+      if (tl && !playTimeline(tl, payload.value.offsetSec)) break
       // Codex MUST-FIX (F2 round 1): save prior state and switch to 'talk' so
       // updateVRMBody's talk branch (arm sway + breath) actually fires; just
       // toggling lipsync.active animates the mouth but leaves the body in

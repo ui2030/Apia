@@ -969,6 +969,17 @@ ipcMain.handle('character:notify', (event, payload) => {
     logWarn('[CHARACTER_NOTIFY_REJECTED]', payload.action)
     return { ok: false, reason: 'unknown action' }
   }
+  // H단계 Codex MUST-FIX(사후): allowlist는 action 이름만 본다. lipsync-start
+  // 의 frames가 비대하면 메인 창으로의 구조화 복제·IPC 전송 자체가 부담이라
+  // 얕은 상한(배열 여부 + 길이 6000=렌더러 MAX_FRAMES)을 여기서 먼저 건다.
+  // 프레임 내용의 정밀 검증은 렌더러 sanitizeTimeline 소관.
+  if (payload.action === 'lipsync-start' && payload.value !== undefined) {
+    const frames = payload.value?.timeline?.frames
+    if (!Array.isArray(frames) || frames.length < 1 || frames.length > 6000) {
+      logWarn('[CHARACTER_NOTIFY_REJECTED]', 'lipsync-start payload cap')
+      return { ok: false, reason: 'invalid lipsync payload' }
+    }
+  }
   const main = windows.getMain()
   if (!main || main.isDestroyed()) return { ok: false, reason: 'no main window' }
   try {
@@ -1030,6 +1041,10 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   logInfo('[BEFORE_QUIT]', { backendStartedByApp: backend.isStartedByApp() })
+  // H단계 — quit이 quitApia()가 아닌 경로(OS 종료, E2E의 app.close())로
+  // 시작되면 chatWindow의 close 핸들러가 preventDefault로 종료를 영원히
+  // 막는다. before-quit에서 플래그를 세워 "진짜 종료"임을 알린다.
+  quittingApia = true
   stopCursorFeed()
   try {
     wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })

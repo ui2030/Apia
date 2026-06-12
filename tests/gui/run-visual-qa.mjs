@@ -68,6 +68,12 @@ const steps = [
     timeoutMs: 180_000
   },
   {
+    name: 'lipsync-check',
+    label: '비짐 타임라인 → 입모양 (5단언)',
+    args: [path.join(__dirname, 'lipsync-check.mjs')],
+    timeoutMs: 180_000
+  },
+  {
     name: 'vmd-check',
     label: '9모션×3각도 스크린샷 + 에러 로그 단언',
     args: [path.join(__dirname, 'vmd-check.mjs')],
