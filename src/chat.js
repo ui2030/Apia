@@ -321,7 +321,7 @@ async function speakText(text, talkMotion = null) {
         buf[i] = bytes.charCodeAt(i)
       }
 
-      const audioUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
+      const audioUrl = URL.createObjectURL(new Blob([buf], { type: r.mime || 'audio/wav' }))
       const audio = new Audio(audioUrl)
       const cleanupAudio = () => {
         URL.revokeObjectURL(audioUrl)

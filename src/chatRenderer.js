@@ -169,7 +169,7 @@ async function speakWithLipsync(text) {
     const bytes = atob(r.audio)
     const buf = new Uint8Array(bytes.length)
     for (let i = 0; i < bytes.length; i += 1) buf[i] = bytes.charCodeAt(i)
-    audioUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
+    audioUrl = URL.createObjectURL(new Blob([buf], { type: r.mime || 'audio/wav' }))
     audio = new Audio(audioUrl)
 
     // H단계 — 이 창이 오디오를 재생하고 캐릭터(메인 창)는 IPC로만 입을

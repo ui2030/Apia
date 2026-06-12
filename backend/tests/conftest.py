@@ -119,7 +119,11 @@ def patched_voice(monkeypatch: pytest.MonkeyPatch):
     fake_tts.list_voices = MagicMock(return_value=[
         {"id": "sys-1", "name": "System Voice 1"},
     ])
-    fake_tts.synthesize = AsyncMock(return_value=b"RIFF\x00\x00\x00\x00WAVEfake-audio-bytes")
+    # synthesize 계약: (bytes, mime) 튜플 — I단계에서 edge(mp3)/pyttsx3(wav)
+    # 분기가 생기며 mime이 동적이 됐다.
+    fake_tts.synthesize = AsyncMock(
+        return_value=(b"RIFF\x00\x00\x00\x00WAVEfake-audio-bytes", "audio/wav")
+    )
     fake_vm = MagicMock()
     fake_vm.list_voices = MagicMock(return_value=[])
 

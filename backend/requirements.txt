@@ -14,6 +14,10 @@ protobuf
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # ── TTS ──
+# edge-tts: Microsoft Edge 신경망 음성 (무료, 키 불요, 네트워크 필요).
+# PyInstaller 포함 대상이라 상한 핀 — aiohttp 등 전이 의존성 drift가
+# 릴리스 빌드에서만 깨지는 사고 방지.
+edge-tts>=7.2,<8
 pyttsx3==2.90
 soundfile==0.12.1
 numpy==1.26.0

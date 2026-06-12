@@ -305,12 +305,18 @@ ipcMain.handle('tts', async (e, { text, voice_id }) => {
       return { disabled: true }
     }
 
-    const audio = await requestBackendBuffer('/tts', {
+    // I단계 — 엔진에 따라 mp3(edge)/wav(pyttsx3)가 오므로 Content-Type을
+    // 렌더러까지 흘린다. 렌더러는 이걸 Blob type으로 쓴다.
+    const response = await requestBackend('/tts', {
       method: 'POST',
       timeout: 30000,
       body: { text, voice_id: voice_id ?? settings.voiceId ?? null }
     })
-    return { audio: audio.toString('base64') }
+    const audio = Buffer.from(await response.arrayBuffer())
+    return {
+      audio: audio.toString('base64'),
+      mime: response.headers.get('content-type') || 'audio/wav'
+    }
   } catch (e) {
     return { error: e.message }
   }

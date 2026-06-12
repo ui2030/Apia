@@ -187,6 +187,60 @@ function httpGetJson(baseUrl, pathSegment, timeoutMs = 5000) {
   })
 }
 
+function httpPostBinary(baseUrl, pathSegment, payload, timeoutMs = 30000) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const url = new URL(pathSegment, baseUrl)
+    const body = JSON.stringify(payload)
+    const request = http.request(url, {
+      method: 'POST',
+      timeout: timeoutMs,
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }
+    }, (response) => {
+      const chunks = []
+      response.on('data', (chunk) => chunks.push(chunk))
+      response.on('end', () => {
+        resolvePromise({
+          status: response.statusCode || 0,
+          contentType: response.headers['content-type'] || '',
+          buffer: Buffer.concat(chunks),
+          get body() { return this.buffer.toString('utf-8') }
+        })
+      })
+    })
+    request.on('timeout', () => {
+      request.destroy(new Error(`timeout after ${timeoutMs}ms`))
+    })
+    request.on('error', (error) => {
+      rejectPromise(error)
+    })
+    request.end(body)
+  })
+}
+
+// I단계 — /tts는 GET+JSON 계약이 아니라 POST+바이너리라 별도 프로브.
+// /health·/voices만으로는 edge-tts(aiohttp 등) hidden-import 누락 같은
+// PyInstaller 번들 드리프트를 못 잡는다. 합성 엔진은 환경에 따라
+// edge(mp3)/pyttsx3(wav)/silent(wav) 어느 쪽이든 유효 — 계약은
+// "200 + audio/* + 비어있지 않은 본문"이다.
+async function probeTts(backendUrl) {
+  let response
+  try {
+    response = await httpPostBinary(backendUrl, '/tts', { text: '스모크 테스트', voice_id: null })
+  } catch (error) {
+    return { ok: false, failure: describeProbeFailure('/tts', error, null) }
+  }
+  if (response.status !== 200) {
+    return { ok: false, failure: describeProbeFailure('/tts', null, response) }
+  }
+  if (!response.contentType.startsWith('audio/')) {
+    return { ok: false, failure: `/tts: content-type "${response.contentType}" is not audio/*` }
+  }
+  if (response.buffer.length < 44) {
+    return { ok: false, failure: `/tts: body too small (${response.buffer.length} bytes)` }
+  }
+  return { ok: true }
+}
+
 function describeProbeFailure(name, error, response) {
   if (response) {
     const snippet = (response.body || '').slice(0, 200).replace(/\s+/g, ' ')
@@ -309,6 +363,9 @@ async function runBehaviorProbes(logText) {
     const result = await probeEndpoint(backendUrl, probe.path, probe.validate)
     if (!result.ok) failures.push(result.failure)
   }
+
+  const ttsResult = await probeTts(backendUrl)
+  if (!ttsResult.ok) failures.push(ttsResult.failure)
 
   if (failures.length > 0) {
     throw new Error(`[SMOKE_RELEASE_BEHAVIOR_FAIL] backend=${backendUrl}\n  - ${failures.join('\n  - ')}`)
