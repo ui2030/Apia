@@ -22,6 +22,13 @@ pyttsx3==2.90
 soundfile==0.12.1
 numpy==1.26.0
 
+# ── 음성 복제 (캐릭터 목소리) ──
+# seed-vc: 제로샷 음색 변환. 미설치 환경에서는 custom 음성 기능만 조용히
+# 비활성화된다 (voice_clone_service.is_available 게이트). GPU 권장:
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+# 주의: 패키징 exe(requirements-packaging.txt)에는 넣지 않는다 — 용량 수 GB.
+seed-vc
+
 # ── 기타 API (선택) ──
 # httpx<0.28 : starlette TestClient는 httpx 0.28에서 제거된 `app=` kwarg를 쓴다
 # (fastapi 0.109/starlette 0.35 기준). 백엔드 런타임에선 영향 없지만 pytest 픽스처

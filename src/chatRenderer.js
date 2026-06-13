@@ -166,6 +166,11 @@ async function speakWithLipsync(text) {
   try {
     const r = await window.api.tts(text, state.voiceId)
     if (r?.disabled || !r?.audio) return
+    // 음성 복제 폴백 안내 — 세션당 1회 (chat.js와 동일 계약)
+    if (r?.fallback && !state.voiceFallbackNotified && String(state.voiceId || '').startsWith('custom:')) {
+      state.voiceFallbackNotified = true
+      appendMessage('ai', '(설정한 캐릭터 음성을 준비하지 못해서 기본 음성으로 말했어요. 잠시 뒤 다시 적용될 수 있어요.)')
+    }
     const bytes = atob(r.audio)
     const buf = new Uint8Array(bytes.length)
     for (let i = 0; i < bytes.length; i += 1) buf[i] = bytes.charCodeAt(i)

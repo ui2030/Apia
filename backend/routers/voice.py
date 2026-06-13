@@ -53,16 +53,65 @@ async def get_vm():
 async def prime() -> None:
     """warmup 라우터에서 호출. 첫 /voices 요청 전에 TTS/VM을 미리 인스턴스화한다."""
     await get_tts()
-    await get_vm()
+    vm = await get_vm()
+    # 복제 음성이 하나라도 있으면 모델을 백그라운드로 선로딩 — 사용자가
+    # custom 음성을 적용해둔 채 앱을 켰을 때 첫 발화가 폴백되지 않게.
+    from services import voice_clone_service as clone
+
+    if vm.list_voices() and clone.is_available() and not clone.is_loaded():
+        asyncio.ensure_future(clone.ensure_loaded())
+
+
+def _clone_available() -> bool:
+    from services import voice_clone_service as clone
+
+    return clone.is_available()
+
+
+def _strip_custom_id(voice_id: str) -> str:
+    """공개 id 'custom:voice_xxxx' → raw 디렉터리명. 검증 실패 시 404.
+
+    custom: prefix 계약은 여기(라우터)서 끝낸다 — VoiceManager는 raw
+    디렉터리명만 받고, 정규식 검증이 경로 탈출을 막는다.
+    """
+    from fastapi import HTTPException
+    from services.voice_manager import validate_voice_dir
+
+    # 공개 계약은 custom:<dir> 엄격 — raw 디렉터리명 직접 호출도 404.
+    if not voice_id.startswith("custom:"):
+        raise HTTPException(status_code=404, detail="없는 음성이에요")
+    raw = voice_id[len("custom:"):]
+    if not validate_voice_dir(raw):
+        raise HTTPException(status_code=404, detail="없는 음성이에요")
+    return raw
 
 
 @router.get("", response_model=VoicesResponse)
 async def list_voices():
     tts = await get_tts()
     vm = await get_vm()
+    custom = [
+        {
+            "id": f"custom:{v['id']}",
+            "name": f"{v['name']} (복제 음성)",
+            "source": "custom",
+            "has_preview": v.get("has_preview", False),
+        }
+        for v in vm.list_voices()
+    ]
+    if _clone_available():
+        # 정렬: edge(기본 후보) → custom(명시 적용 대상) → system
+        engine_voices = tts.list_voices()
+        edge = [v for v in engine_voices if v.get("source") == "edge"]
+        rest = [v for v in engine_voices if v.get("source") != "edge"]
+        return {
+            "voices": edge + custom + rest,
+            "unsupported_custom_voices": [],
+        }
+    # seed-vc 비가용(패키징 exe 등) — custom은 선택 불가 목록으로 강등
     return {
         "voices": tts.list_voices(),
-        "unsupported_custom_voices": vm.list_voices(),
+        "unsupported_custom_voices": custom,
     }
 
 
@@ -72,10 +121,16 @@ async def upload_voice(
     file: UploadFile = File(...),
     name: str = Form(...)
 ):
-    """WAV 업로드 → 학습 시작"""
+    """음성 파일 업로드 → 복제 준비 시작 (게이지는 /voices/train/{job_id} 폴링)"""
+    from fastapi import HTTPException
+
     vm = await get_vm()
-    job_id = await vm.start_training(file, name)
-    return {"job_id": job_id, "message": f"'{name}' 학습이 시작됐어요!"}
+    tts = await get_tts()
+    try:
+        job_id = await vm.start_training(file, name, tts_service=tts)
+    except RuntimeError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"job_id": job_id, "message": f"'{name}' 음성 복제 준비를 시작했어요!"}
 
 
 @router.get("/train/{job_id}")
@@ -87,16 +142,18 @@ async def training_progress(job_id: str):
 
 @router.get("/{voice_id}/preview")
 async def preview_voice(voice_id: str):
-    """미리듣기 오디오 반환"""
+    """미리듣기 오디오 반환. id는 custom:<dir> 계약."""
+    from fastapi import HTTPException
+
     vm = await get_vm()
-    path = vm.get_preview_path(voice_id)
+    path = vm.get_preview_path(_strip_custom_id(voice_id))
     if path and path.exists():
         return FileResponse(path, media_type="audio/wav")
-    return {"error": "미리듣기 파일이 없어요"}
+    raise HTTPException(status_code=404, detail="미리듣기 파일이 없어요")
 
 
 @router.delete("/{voice_id}")
 async def delete_voice(voice_id: str):
     vm = await get_vm()
-    vm.delete_voice(voice_id)
+    vm.delete_voice(_strip_custom_id(voice_id))
     return {"ok": True}

@@ -314,6 +314,13 @@ async function speakText(text, talkMotion = null) {
       return
     }
 
+    // 음성 복제 — 요청한 custom 음성이 아닌 대체 음성으로 합성된 경우
+    // (모델 워밍업/변환 실패) 세션당 1회만 정직하게 알린다.
+    if (r?.fallback && !state.voiceFallbackNotified && String(state.voiceId || '').startsWith('custom:')) {
+      state.voiceFallbackNotified = true
+      appendMessage('ai', '(설정한 캐릭터 음성을 준비하지 못해서 기본 음성으로 말했어요. 잠시 뒤 다시 적용될 수 있어요.)')
+    }
+
     if (r.audio) {
       const bytes = atob(r.audio)
       const buf = new Uint8Array(bytes.length)

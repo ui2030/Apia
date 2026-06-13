@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld('api', {
   }),
   tts: (text, voice_id) => ipcRenderer.invoke('tts', { text, voice_id }),
   getVoices: () => ipcRenderer.invoke('get-voices'),
+  // 음성 복제 (custom voice) — 설정 UI: 업로드→게이지 폴링→미리듣기→삭제
+  voiceCloneUpload: (name, wavBase64) => ipcRenderer.invoke('voice-clone-upload', { name, wavBase64 }),
+  voiceCloneProgress: (jobId) => ipcRenderer.invoke('voice-clone-progress', jobId),
+  voiceClonePreview: (voiceId) => ipcRenderer.invoke('voice-clone-preview', voiceId),
+  voiceCloneDelete: (voiceId) => ipcRenderer.invoke('voice-clone-delete', voiceId),
   warmup: () => ipcRenderer.invoke('warmup'),
   getWarmupStatus: () => ipcRenderer.invoke('warmup:status'),
   loadWorld: () => ipcRenderer.invoke('load-world'),

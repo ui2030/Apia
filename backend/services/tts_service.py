@@ -25,6 +25,7 @@ EDGE_VOICES = [
 ]
 DEFAULT_EDGE_VOICE = "ko-KR-SunHiNeural"
 EDGE_TIMEOUT_SEC = 15  # electron IPC 타임아웃(30s)의 절반 — 폴백 합성 시간 확보
+CLONE_TIMEOUT_SEC = 20  # 음색 변환 상한 — 초과 시 기본 음성 폴백 (발화 생존)
 
 
 class TTSService:
@@ -103,7 +104,56 @@ class TTSService:
             print(f"[TTS] unknown edge voice '{voice_id}', using {DEFAULT_EDGE_VOICE}")
         return DEFAULT_EDGE_VOICE
 
-    async def synthesize(self, text: str, voice_id: str = None) -> tuple[bytes, str]:
+    async def synthesize(self, text: str, voice_id: str = None) -> tuple[bytes, str, bool]:
+        """(audio, mime, fallback) — fallback=True는 "요청한 음성이 아닌
+        대체 음성으로 말했다"는 뜻 (custom 변환 실패/미준비). 라우터가
+        X-Apia-Tts-Fallback 헤더로 흘려 프런트가 정직하게 안내한다."""
+        if voice_id and str(voice_id).startswith("custom:"):
+            return await self._synthesize_custom(text, str(voice_id))
+        audio, mime = await self.synthesize_base(text, voice_id)
+        return audio, mime, False
+
+    async def _synthesize_custom(self, text: str, voice_id: str) -> tuple[bytes, str, bool]:
+        """custom:<voice_dir> — Edge 합성 후 seed-vc로 음색 변환.
+
+        변환이 불가능한 모든 경우(미설치·참조 없음·모델 미로드·변환 실패)
+        에 발화는 살린다: 기본 음성으로 말하되 fallback=True. 모델이 아직
+        안 떠 있으면 이번 발화는 폴백하고 로드는 백그라운드로 시작 —
+        채팅 첫 응답이 cold-load 수십 초를 기다리게 하지 않는다.
+        """
+        from services import voice_clone_service as clone
+        from services import voice_manager
+
+        dir_id = voice_id[len("custom:"):]
+        base_audio, base_mime = await self.synthesize_base(text)
+
+        if not voice_manager.validate_voice_dir(dir_id) or not clone.is_available():
+            print(f"[TTS] custom voice unavailable ({voice_id}), fallback")
+            return base_audio, base_mime, True
+
+        ref_path = voice_manager.VOICES_DIR / dir_id / "reference.wav"
+        if not ref_path.exists():
+            print(f"[TTS] custom reference missing ({voice_id}), fallback")
+            return base_audio, base_mime, True
+
+        if not clone.is_loaded():
+            asyncio.ensure_future(clone.ensure_loaded())
+            print(f"[TTS] clone model warming, fallback this utterance ({voice_id})")
+            return base_audio, base_mime, True
+
+        try:
+            converted = await asyncio.wait_for(
+                clone.convert(base_audio, base_mime, ref_path),
+                timeout=CLONE_TIMEOUT_SEC,
+            )
+            return converted, "audio/wav", False
+        except Exception as error:
+            print(f"[TTS] clone conversion failed, fallback: {error}")
+            return base_audio, base_mime, True
+
+    async def synthesize_base(self, text: str, voice_id: str = None) -> tuple[bytes, str]:
+        """엔진 우선순위 edge→pyttsx3→silent (custom 변환의 입력이자
+        직접 선택 음성의 출력)."""
         wants_system = bool(voice_id) and str(voice_id).startswith("system:")
 
         if self._edge_available and not wants_system:

@@ -480,6 +480,35 @@
         <option value="">기본 목소리</option>
       </select>
     </div>
+    <div class="row" id="voice-custom-actions" hidden>
+      <div class="row-label">선택한 복제 음성</div>
+      <div style="display:flex; gap:6px;">
+        <button type="button" class="btn btn-ghost" id="voice-clone-preview-btn">미리듣기</button>
+        <button type="button" class="btn btn-red" id="voice-clone-delete-btn">삭제</button>
+      </div>
+    </div>
+
+    <!-- 음성 복제 — 캐릭터 음성 파일을 올리면 그 목소리로 말한다 (seed-vc 제로샷) -->
+    <div class="row" style="flex-direction:column; align-items:stretch; gap:6px;">
+      <div>
+        <div class="row-label">캐릭터 목소리 만들기</div>
+        <div class="row-sub">캐릭터 음성 파일(mp3/wav, 5초~2분)을 올리면 그 목소리로 말해요. 인터넷 연결이 필요하고, 처음 한 번은 음성 모델 다운로드로 몇 분 걸려요.</div>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" id="voice-clone-name" placeholder="음성 이름 (예: 키사키)" style="flex:1; min-width:0;">
+        <input type="file" id="voice-clone-file" accept="audio/*" hidden>
+        <button type="button" class="btn btn-ghost" id="voice-clone-pick">파일 선택</button>
+        <button type="button" class="btn btn-purple" id="voice-clone-start" disabled>만들기</button>
+      </div>
+      <div id="voice-clone-file-label" class="helper-text" hidden></div>
+      <div id="voice-clone-progress-wrap" hidden>
+        <div id="voice-clone-status" class="helper-text">음성 합성 중입니다…</div>
+        <div style="height:8px; border-radius:4px; background:rgba(255,255,255,0.08); overflow:hidden; margin-top:4px;">
+          <div id="voice-clone-bar" style="height:100%; width:0%; background:#a78bfa; transition:width .4s;"></div>
+        </div>
+      </div>
+      <div id="voice-clone-done" class="helper-text" hidden></div>
+    </div>
   </div>
 
   <!-- ─────────────────────────────────────────────────────────────
@@ -1281,10 +1310,175 @@ async function loadVoices() {
       if (settings.voiceId === v.id) o.selected = true
       sel.appendChild(o)
     })
+    updateCustomVoiceActions()
   } catch (e) {
     console.warn('[Settings] loadVoices 실패:', e)
   }
 }
+
+// ── 음성 복제 (캐릭터 목소리 만들기) ─────────────────────────────────────
+// 흐름: 파일 선택 → 브라우저 디코드(decodeAudioData — mp3/wav/ogg 전부) →
+// 22.05kHz mono WAV 재인코딩 → base64 IPC 업로드 → job 진행률 1초 폴링 →
+// 완료 시 목록 갱신 + 자동 선택. 백엔드 ffmpeg 의존 없이 포맷을 흡수한다.
+
+const VOICE_CLONE_TARGET_SR = 22050
+const VOICE_CLONE_STATUS_LABELS = {
+  preparing: '준비 중…',
+  validating: '음성 파일 확인 중…',
+  loading_model: '음성 모델 준비 중… (처음 한 번은 다운로드로 몇 분 걸려요)',
+  generating_preview: '미리듣기 만드는 중…',
+  done: '완성!',
+  error: '실패했어요'
+}
+
+async function fileToCloneWavBase64(file) {
+  const arrayBuf = await file.arrayBuffer()
+  const probe = new AudioContext()
+  let decoded
+  try {
+    decoded = await probe.decodeAudioData(arrayBuf)
+  } finally {
+    probe.close().catch(() => {})
+  }
+  if (decoded.duration < 5) throw new Error(`음성이 너무 짧아요 (${decoded.duration.toFixed(1)}초). 5초 이상 필요해요.`)
+  if (decoded.duration > 120) throw new Error(`음성이 너무 길어요 (${Math.round(decoded.duration)}초). 2분 이하로 잘라 주세요.`)
+
+  const frames = Math.ceil(decoded.duration * VOICE_CLONE_TARGET_SR)
+  const off = new OfflineAudioContext(1, frames, VOICE_CLONE_TARGET_SR)
+  const srcNode = off.createBufferSource()
+  srcNode.buffer = decoded
+  srcNode.connect(off.destination)
+  srcNode.start()
+  const rendered = await off.startRendering()
+  const pcm = rendered.getChannelData(0)
+
+  const buf = new ArrayBuffer(44 + pcm.length * 2)
+  const dv = new DataView(buf)
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)) }
+  writeStr(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length * 2, true); writeStr(8, 'WAVE')
+  writeStr(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true)
+  dv.setUint32(24, VOICE_CLONE_TARGET_SR, true); dv.setUint32(28, VOICE_CLONE_TARGET_SR * 2, true)
+  dv.setUint16(32, 2, true); dv.setUint16(34, 16, true)
+  writeStr(36, 'data'); dv.setUint32(40, pcm.length * 2, true)
+  for (let i = 0; i < pcm.length; i++) {
+    const v = Math.max(-1, Math.min(1, pcm[i]))
+    dv.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true)
+  }
+  const bytes = new Uint8Array(buf)
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+  }
+  return btoa(bin)
+}
+
+let voiceCloneBusy = false
+
+async function startVoiceClone() {
+  if (voiceCloneBusy) return
+  const fileInput = document.getElementById('voice-clone-file')
+  const file = fileInput.files?.[0]
+  const name = document.getElementById('voice-clone-name').value.trim()
+  const statusEl = document.getElementById('voice-clone-status')
+  const barEl = document.getElementById('voice-clone-bar')
+  const wrapEl = document.getElementById('voice-clone-progress-wrap')
+  const doneEl = document.getElementById('voice-clone-done')
+  const startBtn = document.getElementById('voice-clone-start')
+  if (!file) return
+
+  voiceCloneBusy = true
+  startBtn.disabled = true
+  doneEl.hidden = true
+  wrapEl.hidden = false
+  barEl.style.width = '0%'
+  statusEl.textContent = '음성 합성 중입니다…'
+
+  try {
+    const wavBase64 = await fileToCloneWavBase64(file)
+    const res = await window.api.voiceCloneUpload(name || file.name.replace(/\.[^.]+$/, ''), wavBase64)
+    if (res?.error || !res?.job_id) throw new Error(res?.error || '업로드에 실패했어요')
+
+    const result = await new Promise((resolve, reject) => {
+      const poll = async () => {
+        const p = await window.api.voiceCloneProgress(res.job_id)
+        statusEl.textContent = `음성 합성 중입니다… ${VOICE_CLONE_STATUS_LABELS[p.status] || p.status} (${p.progress || 0}%)`
+        barEl.style.width = `${Math.max(2, p.progress || 0)}%`
+        if (p.status === 'done') return resolve(p)
+        if (p.status === 'error') return reject(new Error(p.error || '복제 준비에 실패했어요'))
+        if (p.status === 'not_found') {
+          // 백엔드 재시작으로 작업 상태만 유실됐을 수 있다 — 완성본이
+          // 디스크에 있으면(목록에 보이면) 성공으로 인정 (Codex 권고).
+          const voiceId = `voice_${res.job_id}`
+          const d = await window.api.getVoices().catch(() => null)
+          if (d?.voices?.some(v => v.id === `custom:${voiceId}`)) {
+            return resolve({ status: 'done', progress: 100, voice_id: voiceId })
+          }
+          return reject(new Error('작업 상태를 잃어버렸어요 (백엔드 재시작?). 다시 시도해 주세요.'))
+        }
+        setTimeout(poll, 1000)
+      }
+      poll().catch(reject)
+    })
+
+    barEl.style.width = '100%'
+    await loadVoices()
+    const newId = `custom:${result.voice_id}`
+    const sel = document.getElementById('voice-select')
+    if ([...sel.options].some(o => o.value === newId)) sel.value = newId
+    updateCustomVoiceActions()
+    wrapEl.hidden = true
+    doneEl.hidden = false
+    doneEl.textContent = '✅ 완성! 아래 미리듣기로 확인하고, "저장 및 적용"을 누르면 이 목소리로 말해요.'
+  } catch (e) {
+    wrapEl.hidden = true
+    doneEl.hidden = false
+    doneEl.textContent = `❌ ${e?.message || e}`
+  } finally {
+    voiceCloneBusy = false
+    startBtn.disabled = !fileInput.files?.length
+  }
+}
+
+function updateCustomVoiceActions() {
+  const sel = document.getElementById('voice-select')
+  const row = document.getElementById('voice-custom-actions')
+  if (row) row.hidden = !String(sel.value || '').startsWith('custom:')
+}
+
+async function playClonePreview() {
+  const sel = document.getElementById('voice-select')
+  const r = await window.api.voiceClonePreview(sel.value)
+  if (!r?.audio) return
+  const bytes = Uint8Array.from(atob(r.audio), c => c.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes], { type: r.mime || 'audio/wav' }))
+  const audio = new Audio(url)
+  audio.onended = () => URL.revokeObjectURL(url)
+  audio.play().catch(() => URL.revokeObjectURL(url))
+}
+
+async function deleteCloneVoice() {
+  const sel = document.getElementById('voice-select')
+  if (!String(sel.value || '').startsWith('custom:')) return
+  await window.api.voiceCloneDelete(sel.value)
+  sel.value = ''
+  await loadVoices()
+  updateCustomVoiceActions()
+}
+
+document.getElementById('voice-clone-pick').addEventListener('click', () => {
+  document.getElementById('voice-clone-file').click()
+})
+document.getElementById('voice-clone-file').addEventListener('change', (e) => {
+  const file = e.target.files?.[0]
+  const label = document.getElementById('voice-clone-file-label')
+  label.hidden = !file
+  if (file) label.textContent = `선택됨: ${file.name}`
+  document.getElementById('voice-clone-start').disabled = !file
+})
+document.getElementById('voice-clone-start').addEventListener('click', startVoiceClone)
+document.getElementById('voice-select').addEventListener('change', updateCustomVoiceActions)
+document.getElementById('voice-clone-preview-btn').addEventListener('click', playClonePreview)
+document.getElementById('voice-clone-delete-btn').addEventListener('click', deleteCloneVoice)
 
 // Busy-state guards live at the save() boundary so any intermediate failure
 // path (saveBackendEnvKeys failure, restart failure) gets the buttons back

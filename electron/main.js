@@ -315,10 +315,74 @@ ipcMain.handle('tts', async (e, { text, voice_id }) => {
     const audio = Buffer.from(await response.arrayBuffer())
     return {
       audio: audio.toString('base64'),
-      mime: response.headers.get('content-type') || 'audio/wav'
+      mime: response.headers.get('content-type') || 'audio/wav',
+      // 음성 복제 — 요청한 음성(custom)이 아닌 대체 음성으로 합성된 경우.
+      // 렌더러가 "기본 음성으로 말했어요"를 1회 안내한다.
+      fallback: response.headers.get('x-apia-tts-fallback') === '1'
     }
   } catch (e) {
     return { error: e.message }
+  }
+})
+
+// ── 음성 복제 (custom voice) IPC — 설정 UI가 쓴다 ───────────────────────
+// 업로드는 렌더러가 decodeAudioData로 22.05kHz mono WAV로 정규화한 것을
+// base64로 보낸다 (mp3/m4a 디코드는 브라우저 몫 — 백엔드 ffmpeg 의존 제로).
+ipcMain.handle('voice-clone-upload', async (e, { name, wavBase64 }) => {
+  try {
+    await backend.ensureAvailableForRequest()
+    const form = new FormData()
+    form.append('name', String(name || '').trim().slice(0, 40) || '내 캐릭터 음성')
+    form.append(
+      'file',
+      new Blob([Buffer.from(String(wavBase64 || ''), 'base64')], { type: 'audio/wav' }),
+      'reference.wav'
+    )
+    const { controller, timer } = makeTimeoutController(60000)
+    try {
+      const response = await fetch(`${getBackendUrl()}/voices/upload`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal
+      })
+      if (!response.ok) {
+        const details = await readErrorResponse(response)
+        return { error: details || response.statusText }
+      }
+      return await response.json()
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch (error) {
+    return { error: error.message }
+  }
+})
+
+ipcMain.handle('voice-clone-progress', async (e, jobId) => {
+  try {
+    return await requestBackendJson(`/voices/train/${encodeURIComponent(String(jobId))}`, { timeout: 5000 })
+  } catch (error) {
+    return { status: 'error', progress: 0, error: error.message }
+  }
+})
+
+ipcMain.handle('voice-clone-preview', async (e, voiceId) => {
+  try {
+    const response = await requestBackend(`/voices/${encodeURIComponent(String(voiceId))}/preview`, { timeout: 15000 })
+    const contentType = response.headers.get('content-type') || ''
+    if (!contentType.startsWith('audio/')) return { error: '미리듣기가 없어요' }
+    const buf = Buffer.from(await response.arrayBuffer())
+    return { audio: buf.toString('base64'), mime: contentType }
+  } catch (error) {
+    return { error: error.message }
+  }
+})
+
+ipcMain.handle('voice-clone-delete', async (e, voiceId) => {
+  try {
+    return await requestBackendJson(`/voices/${encodeURIComponent(String(voiceId))}`, { method: 'DELETE', timeout: 10000 })
+  } catch (error) {
+    return { error: error.message }
   }
 })
 
