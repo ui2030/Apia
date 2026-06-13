@@ -32,6 +32,7 @@ import {
   stepPoseSpring,
   applyPose,
   computePoseTargets,
+  applyClipArmHangCorrection,
   LOCOMOTION_ROLES
 } from './poseRig.js'
 
@@ -1006,6 +1007,12 @@ function animate() {
     } else if (currentModel.type === 'mmd') {
       currentModel.mixer?.update(delta)
       getMmdHelper()?.update(delta)
+      // A-2 — clip이 팔을 소유하면(granular mask) 모델별 팔처짐을 클립 출력
+      // 위에 합성한다. helper.update 직후·inertialization 전이라 전환 평활화와
+      // 표시자세 캐시가 처짐 포함 결과를 본다(클립은 제스처 델타만 갖는다).
+      if (currentModel._clipRoles?.size && currentModel.poseRig?.registry) {
+        applyClipArmHangCorrection(currentModel.poseRig.registry, { roles: currentModel._clipRoles })
+      }
       // F단계 — 클립 전환 관성 보정. helper(mixer는 helper 내부 소유) 뒤,
       // 절차적 레이어 앞이 유일하게 유효한 자리다 (inertialization.js의
       // 설계 결정 주석 참조).

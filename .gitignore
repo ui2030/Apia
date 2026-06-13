@@ -19,3 +19,8 @@ src/assets/motions/fbx/**/*.FBX
 # the author's permission statement); the .vmd binaries are not.
 src/assets/motions/vmd/**/*.vmd
 src/assets/motions/vmd/**/*.VMD
+# …but Apia-generated original clips (scripts/gen-vmd.py) carry no license
+# restriction and are model-agnostic (gesture deltas; the per-model arm hang is
+# composed at runtime), so ship them. Whitelist each generated file.
+!src/assets/motions/vmd/talk/explain.vmd
+!src/assets/motions/vmd/talk/think.vmd

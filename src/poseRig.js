@@ -436,6 +436,44 @@ export function applyPose(registry, springState, clipMask = null) {
   }
 }
 
+// ── Clip arm-hang composition (A-2) ─────────────────────────────────
+//
+// When a clip OWNS an arm (granular mask), the procedural abduction layer is
+// skipped — so a clip that only carries a small gesture delta would leave the
+// arm at the model's bind pose (often a T-pose) instead of hanging. Instead of
+// baking the hang into every clip (model-specific → breaks on other rigs), we
+// compose the SAME per-model hang the procedural layer uses on top of the
+// clip's gesture output, here, every frame.
+//
+// Math (Codex): target = rest * hang * gesture. The mixer left
+// qClip = rest * gesture, so gesture = restᐟ * qClip and
+// target = rest * hang * restᐟ * qClip → bone.q.premultiply(rest*hang*restᐟ).
+// Run AFTER helper.update() but BEFORE inertialization/applyPose so the
+// transition smoother + displayed-pose cache see the hang-composed result.
+const _hangEuler = new Euler(0, 0, 0, 'XYZ')
+const _hangQ = new Quaternion()
+const _hangRestInv = new Quaternion()
+const _hangM = new Quaternion()
+
+export function applyClipArmHangCorrection(registry, clipMask) {
+  const fp = registry?.fingerprint
+  if (!fp?.needsAbductionCorrection) return
+  if (!clipMask?.roles) return // granular only — legacy mask path is separate
+  const hang = fp.armHangCorrection
+  if (!(hang > 0.001)) return
+  for (const [role, sign] of [['lArm', -1], ['rArm', 1]]) {
+    if (!clipMask.roles.has(role)) continue // clip doesn't own this arm → procedural handles it
+    const entry = registry.roles.get(role)
+    if (!entry) continue
+    _hangEuler.set(0, 0, sign * hang)
+    _hangQ.setFromEuler(_hangEuler)
+    // M = rest * hang * rest⁻¹
+    _hangRestInv.copy(entry.restQuat).invert()
+    _hangM.copy(entry.restQuat).multiply(_hangQ).multiply(_hangRestInv)
+    entry.bone.quaternion.premultiply(_hangM)
+  }
+}
+
 // ── Saccade — Poisson micro-shifts, Codex spec ──────────────────────
 //
 // Mean inter-arrival ≈ 600ms with a 180ms refractory floor; magnitudes
