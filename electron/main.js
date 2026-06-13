@@ -602,6 +602,7 @@ ipcMain.handle('apply-settings', (e, s) => {
   }
   // Re-sync the attach/detach in case the user just flipped the toggle.
   syncWallpaperMode()
+  startWallpaperHealthCheck() // (re)start or stop the probe to match the toggle
   return { ok: true, settings }
 })
 
@@ -731,6 +732,33 @@ app.on('child-process-gone', (event, details) => {
 // Phase F1: when monitors are added/removed/rearranged, Windows may invalidate
 // the WorkerW handle we attached to. Re-syncing the wallpaper mode forces a
 // detach + re-attach against the current Progman state. Codex NICE-TO-HAVE.
+// Explorer can restart (crash or manual) and recreate the shell windows,
+// orphaning our Progman-child wallpaper — it silently vanishes with no Electron
+// event. A periodic health probe re-attaches when that happens. Cheap: one
+// ~100ms helper spawn per interval, and only while wallpaper mode is on.
+let wallpaperHealthTimer = null
+function startWallpaperHealthCheck() {
+  stopWallpaperHealthCheck()
+  if (loadSettings().useWallpaperMode === false) return
+  wallpaperHealthTimer = setInterval(async () => {
+    const main = windows.getMain()
+    if (!main || main.isDestroyed()) return
+    if (loadSettings().useWallpaperMode === false) return
+    if (wallpaperMode.getMode() !== 'progman-child') return
+    let healthy = true
+    try { healthy = await wallpaperMode.isStillAttached(main) } catch { healthy = true }
+    if (!healthy) {
+      logWarn('[WALLPAPER_REATTACH]', 'lost Progman parent (shell recreated?) — re-syncing')
+      wallpaperMode.markDetached() // clear stale state so enableWallpaper re-attaches
+      syncWallpaperMode()
+    }
+  }, 20000)
+  if (wallpaperHealthTimer.unref) wallpaperHealthTimer.unref()
+}
+function stopWallpaperHealthCheck() {
+  if (wallpaperHealthTimer) { clearInterval(wallpaperHealthTimer); wallpaperHealthTimer = null }
+}
+
 let rewallpaperTimer = null
 function rewallpaperOnDisplayChange() {
   // Debounce — a single monitor change can fire metrics-changed several times
@@ -804,6 +832,7 @@ app.whenReady().then(async () => {
   // ready-to-show so attach() never runs against a partially constructed
   // HWND.
   syncWallpaperMode()
+  startWallpaperHealthCheck()
   setupTrayAndShortcuts()
 }).catch(async (error) => {
   await windows.showStartupError('Apia failed during app initialization.', error)
@@ -1197,6 +1226,7 @@ app.on('before-quit', () => {
   // 막는다. before-quit에서 플래그를 세워 "진짜 종료"임을 알린다.
   quittingApia = true
   stopCursorFeed()
+  stopWallpaperHealthCheck()
   try {
     wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
   } catch (error) {

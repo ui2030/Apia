@@ -4,7 +4,7 @@
  * Two attach strategies, tried in order:
  *   1. `electron-as-wallpaper` (Win32 Progman → WorkerW → SetParent). Works on
  *      Windows builds that keep a separate WorkerW behind the desktop icons.
- *   2. Progman-child fallback (scripts/win-wallpaper.ps1). Windows 11 builds
+ *   2. Progman-child fallback (scripts/win-wallpaper.exe, source win-wallpaper.cs). Windows 11 builds
  *      like 26200 have NO WorkerW — Progman hosts SHELLDLL_DefView (icons) and
  *      the wallpaper directly, spanning the whole virtual desktop. The native
  *      module then fails with "couldn't locate WorkerW". The helper does the
@@ -27,7 +27,7 @@
  * to the matching teardown even when the native module isn't loadable.
  *
  * The native module is C++ node-gyp built (1.x). For packaged builds it must be
- * in `asarUnpack`, and scripts/win-wallpaper.ps1 must ship alongside (it's
+ * in `asarUnpack`, and scripts/win-wallpaper.exe ships via extraResources (it's
  * resolved from resourcesPath when packaged).
  */
 const { execFile } = require('child_process')
@@ -76,28 +76,23 @@ function firstExisting(...candidates) {
   return candidates.filter(Boolean).find((p) => fs.existsSync(p)) || null
 }
 
-// Prefer the precompiled exe (~100ms cold) over the .ps1 (PowerShell + Add-Type
-// Roslyn compile can blow past a 15s timeout on a cold spawn). The .ps1 stays as
-// a source-of-truth / fallback if the exe wasn't built.
+// The precompiled win-wallpaper.exe (~100ms cold, no PowerShell/Add-Type
+// compile latency) is the single source of truth — win-wallpaper.cs is its
+// source, committed + shipped via extraResources. (An earlier .ps1 fallback was
+// dropped: it lacked the z-order fix, so if it ever ran it would reproduce the
+// "hidden behind the wallpaper" bug.)
 //
-// resourcesPath candidates come FIRST: in a packaged build the __dirname path
-// resolves INSIDE app.asar, and an .exe can't be spawned from inside an asar
-// archive. extraResources ships it to resourcesPath/scripts (Codex MUST-FIX).
-// In dev, resourcesPath is Electron's own dist (no scripts/ there) so it falls
-// through to the repo path.
+// resourcesPath comes FIRST: in a packaged build the __dirname path resolves
+// INSIDE app.asar, and an .exe can't be spawned from inside an asar archive.
+// extraResources ships it to resources/scripts. In dev, resourcesPath is
+// Electron's own dist (no scripts/ there) so it falls through to the repo path.
 function resolveHelper() {
   const res = process.resourcesPath
   const exe = firstExisting(
     res ? path.join(res, 'scripts', 'win-wallpaper.exe') : null,
     path.join(__dirname, '..', '..', 'scripts', 'win-wallpaper.exe')
   )
-  if (exe) return { kind: 'exe', path: exe }
-  const ps1 = firstExisting(
-    res ? path.join(res, 'scripts', 'win-wallpaper.ps1') : null,
-    path.join(__dirname, '..', '..', 'scripts', 'win-wallpaper.ps1')
-  )
-  if (ps1) return { kind: 'ps1', path: ps1 }
-  return null
+  return exe ? { path: exe } : null
 }
 
 function hwndOf(window) {
@@ -114,10 +109,7 @@ function runHelper(action, hwnd) {
   return new Promise((resolve) => {
     const helper = resolveHelper()
     if (!helper) return resolve({ ok: false, error: 'helper-missing' })
-    const [cmd, args] = helper.kind === 'exe'
-      ? [helper.path, [action, hwnd]]
-      : ['powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper.path, '-Action', action, '-Hwnd', hwnd]]
-    execFile(cmd, args, { timeout: 15000, windowsHide: true, encoding: 'utf8' }, (error, stdout) => {
+    execFile(helper.path, [action, hwnd], { timeout: 15000, windowsHide: true, encoding: 'utf8' }, (error, stdout) => {
       // The helper prints its JSON line even on a non-zero exit (carried on
       // error.stdout by execFile).
       const out = String(stdout || (error && error.stdout) || '').trim()
@@ -249,11 +241,35 @@ function getMode() {
   return attachState.mode
 }
 
+/**
+ * Health probe: is the Progman-child wallpaper still attached? Explorer
+ * restarts recreate the shell and orphan the child window, silently losing the
+ * wallpaper. Returns true when the attach still looks healthy, false when a
+ * progman-child window has lost its Progman parent (caller should re-sync).
+ * The native path can't be cheaply probed, so it's assumed healthy.
+ */
+async function isStillAttached(window) {
+  if (attachState.mode !== 'progman-child') return true
+  const target = window || attachState.window
+  if (!target || target.isDestroyed?.()) return false
+  const hwnd = hwndOf(target)
+  if (!hwnd) return false
+  const result = await runHelper('check', hwnd)
+  return result.ok === true && result.parentMatch === true
+}
+
+/** Reset state to 'none' so a follow-up enableWallpaper actually re-attaches. */
+function markDetached() {
+  attachState = { mode: 'none', window: null }
+}
+
 module.exports = {
   isAvailable,
   getLoadError,
   enableWallpaper,
   disableWallpaper,
   isAttached,
-  getMode
+  getMode,
+  isStillAttached,
+  markDetached
 }

@@ -12,7 +12,7 @@
 // so the overlay renders over the wallpaper but UNDER the icons. detach
 // reverses it so the window returns to a normal top-level overlay.
 //
-// Usage:  win-wallpaper.exe <attach|detach> <hwndDecimal>
+// Usage:  win-wallpaper.exe <attach|detach|check> <hwndDecimal>
 // Emits one JSON line on stdout: {"ok":bool,"parentMatch":bool,"rect":"L,T,R,B","error":"..."}
 //
 // Build: csc.exe /nologo /target:exe /out:win-wallpaper.exe win-wallpaper.cs
@@ -134,6 +134,15 @@ static class ApiaWallpaper
                 Console.WriteLine("{\"ok\":" + (ok ? "true" : "false") + ",\"parentMatch\":" + (match ? "true" : "false") +
                     ",\"rect\":\"" + r.L + "," + r.T + "," + r.R + "," + r.B + "\"}");
                 return ok ? 0 : 1;
+            }
+            else if (action == "check")
+            {
+                // Health probe: are we still parented to Progman? Explorer
+                // restarts recreate the shell windows and orphan the child.
+                IntPtr progman = FindProgman();
+                bool match = progman != IntPtr.Zero && GetParent(hwnd) == progman;
+                Console.WriteLine("{\"ok\":true,\"parentMatch\":" + (match ? "true" : "false") + "}");
+                return 0;
             }
             else if (action == "detach")
             {
