@@ -24,6 +24,7 @@ import { playTimeline, stopTimeline, updateMouthMMD, updateMouthVRM } from './li
 import { initWorld, updateWorldLabels } from './world.js'
 import { initChat, setCharacterRaycaster } from './chat.js'
 import { MotionManager } from './motionManager.js'
+import { createDirectorRunner, applyDirective, buildDirectorContext } from './behaviorDirector.js'
 import { resolveMotionAsset, resolveMmdMotionAsset } from './motionAssets.js'
 import {
   buildBoneRegistry,
@@ -295,7 +296,31 @@ function getAutoBehaviorConfig() {
 
   const minDelay = Math.max(2000, Math.round(baseMin * (2 - e)))
   const maxDelay = Math.max(minDelay + 500, Math.round(baseMax * (2 - e)))
-  return { autoBehaviorMinMs: minDelay, autoBehaviorMaxMs: maxDelay, chairBias, inPlaceIdleBias, walkShare, attentiveness: att }
+  const cfg = { autoBehaviorMinMs: minDelay, autoBehaviorMaxMs: maxDelay, chairBias, inPlaceIdleBias, walkShare, attentiveness: att }
+  // J단계 — LLM 디렉터가 활성 directive를 갖고 있으면 규칙 위에 약하게 변조한다.
+  // directive 없음/만료/백엔드 없음이면 cfg 그대로(규칙기반). 절대 앱을 막지 않음.
+  return applyDirective(cfg, behaviorDirector.current(), Date.now())
+}
+
+// J단계 — LLM 행동 디렉터. 전용 IPC(window.api.directorDecide)가 있을 때만 LLM에
+// 묻고(채팅 history와 분리), 없으면 call 미주입 → directive 항상 null → 규칙기반.
+// 백엔드 프롬프트/IPC는 다음 슬라이스. runner가 single-flight·최소간격·백오프·
+// 타임아웃을 관할하므로 여기선 느린 틱에서 fire-and-forget로 maybeRun만 부른다.
+const behaviorDirector = createDirectorRunner({
+  call: typeof window !== 'undefined' && window.api?.directorDecide
+    ? (ctx) => window.api.directorDecide(ctx)
+    : null
+})
+
+function runBehaviorDirector() {
+  const ctx = buildDirectorContext({
+    hour: new Date().getHours(),
+    personality: motionManager.getPersonality?.(),
+    attentiveness: interactionRecencyFactor(),
+    idleStreakMs: lastInteractionAt ? Date.now() - lastInteractionAt : 0
+  })
+  // fire-and-forget — 실패는 runner가 흡수, directive는 다음 틱에 반영.
+  Promise.resolve(behaviorDirector.maybeRun(ctx)).catch(() => {})
 }
 
 // Codex MUST-FIX (step 1 round 2): tracking the active character id so the
@@ -340,6 +365,10 @@ function scheduleAutoBehavior() {
     autoBehaviorTimer = null
 
     if (autoBehaviorEnabled && !lipsync.active && getState?.() === 'idle') {
+      // J단계 — 느린 LLM 디렉터 리프레시(maybeRun이 ~4분 간격·single-flight로
+      // 자체 스로틀). fire-and-forget이라 이번 틱은 직전 directive로 동작.
+      runBehaviorDirector()
+
       // Phase A/J: personality-weighted mix of in-place idle gestures, free
       // roam, and furniture interactions. Order matters — the in-place idle
       // slot goes first so the standing idle vocabulary (pose clips, head
@@ -354,8 +383,9 @@ function scheduleAutoBehavior() {
       const idleBias = safe(behaviorConfig.inPlaceIdleBias, 0.28)
       const walkShare = safe(behaviorConfig.walkShare, 0.36)
       const walkCut = Math.min(0.97, idleBias + walkShare)
-      // 방금 대화했으면(attentiveness 높음) "듣는 듯한" 제스처 선호.
-      const idleMood = behaviorConfig.attentiveness > 0.4 ? 'engaged' : undefined
+      // 방금 대화했으면(attentiveness 높음) "듣는 듯한" 제스처 선호. 디렉터가
+      // 명시적으로 무드를 지시(config.idleMood)하면 그게 우선.
+      const idleMood = behaviorConfig.idleMood || (behaviorConfig.attentiveness > 0.4 ? 'engaged' : undefined)
       const roll = Math.random()
       let handled = false
       if (roll < idleBias) {
