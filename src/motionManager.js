@@ -421,10 +421,20 @@ export class MotionManager {
       0.82
     )
 
+    // J단계(행동 지능) — 자율 행동 믹스를 성격이 좌우하게. 이동성이 높으면 더
+    // 돌아다니고(walk↑), 낮으면 제자리 제스처(idle↑). fidget이 높으면 이동성이
+    // 낮아도 제자리에서 안절부절 제스처가 늘어난다. 합(idleBias+walkShare)은
+    // 최대 0.94라 가구 슬롯이 항상 ≥6% 남는다. 소비측에서 다시 clamp(방어).
+    const fidget = clamp01(behavior.fidgetiness, 0.3)
+    const inPlaceIdleBias = clamp(0.30 - mobilityScore * 0.18 + fidget * 0.12, 0.16, 0.44)
+    const walkShare = clamp(0.26 + mobilityScore * 0.30, 0.22, 0.50)
+
     return {
       autoBehaviorMinMs: minDelay,
       autoBehaviorMaxMs: maxDelay,
-      chairBias
+      chairBias,
+      inPlaceIdleBias,
+      walkShare
     }
   }
 

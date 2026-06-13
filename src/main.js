@@ -286,22 +286,29 @@ function scheduleAutoBehavior() {
     autoBehaviorTimer = null
 
     if (autoBehaviorEnabled && !lipsync.active && getState?.() === 'idle') {
-      // Phase A/J: weighted mix of in-place idle gestures, free roam, and
-      // furniture interactions. Order matters — the in-place idle slot goes
-      // first so the standing idle vocabulary (pose clips, head tilt, look
-      // around) actually surfaces instead of being an unreachable fallback;
-      // otherwise the character only ever walks/sits and never just stands
-      // and emotes (거주형 비서 생동감). Roughly: 28% in-place idle gesture,
-      // 36% free walk, the rest (incl. walk failures) → furniture picker.
+      // Phase A/J: personality-weighted mix of in-place idle gestures, free
+      // roam, and furniture interactions. Order matters — the in-place idle
+      // slot goes first so the standing idle vocabulary (pose clips, head
+      // tilt, look around) actually surfaces instead of being an unreachable
+      // fallback. The split is no longer flat: getBehaviorConfig derives
+      // inPlaceIdleBias / walkShare from personality (low mobility or high
+      // fidget → more standing gestures; high mobility → more roaming), so an
+      // active character roams and a shy/restless one emotes in place
+      // (행동 지능). Defensive clamp keeps furniture's slot ≥0 even if the
+      // config is later externalized.
+      const safe = (v, d) => (Number.isFinite(v) ? Math.min(0.6, Math.max(0, v)) : d)
+      const idleBias = safe(behaviorConfig.inPlaceIdleBias, 0.28)
+      const walkShare = safe(behaviorConfig.walkShare, 0.36)
+      const walkCut = Math.min(0.97, idleBias + walkShare)
       const roll = Math.random()
       let handled = false
-      if (roll < 0.28) {
+      if (roll < idleBias) {
         const idleGesture = motionManager.pickIdleMotion()
         if (idleGesture) {
           playMotion(idleGesture)
           handled = true
         }
-      } else if (roll < 0.64) {
+      } else if (roll < walkCut) {
         handled = walkToRandomSpot({ minDistance: 1.4 }) === true
       }
       if (!handled) {
