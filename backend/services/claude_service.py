@@ -5,6 +5,7 @@ auto fallback behavior.
 
 import asyncio
 import importlib.util
+import json
 import re
 from typing import Any, List, Optional, Tuple
 
@@ -454,11 +455,49 @@ class ClaudeService:
             return await self._summarize_local(summary_system, user_payload)
         raise RuntimeError(f"unsupported mode for summarization: {active_mode}")
 
+    # J단계 — 행동 디렉터. 채팅과 분리된 경량 단발 호출(캐릭터 롤플레이·감정태그
+    # 없음). summarize와 같은 generic (system, user) 헬퍼를 재사용한다. 출력은
+    # 엄격 JSON 1개; 클라이언트(behaviorDirector.parseDirective)가 검증·clamp·
+    # 폴백을 전담하므로 여기선 raw 문자열만 돌려준다.
+    DIRECTOR_SYSTEM = (
+        "You set the ambient mood of a small character that lives on the user's "
+        "desktop. From the given context, output ONLY a compact JSON object (no "
+        "prose, no markdown) describing how it should behave for the next few "
+        "minutes. Schema: {\"mood\": one of "
+        "[\"playful\",\"focused\",\"calm\",\"restless\",\"sleepy\"], \"focus\": one "
+        "of [\"user\",\"room\",\"self\"], \"activityBias\": number -1 (settle, "
+        "still) to 1 (roam, explore), \"ttlSec\": integer 120-600, \"note\": short "
+        "string under 80 chars}. Guidance: late night -> sleepy/calm and low "
+        "activity; morning -> livelier; just talked (high attentiveness) -> "
+        "focus the user, lower activity; long idle -> more independent, higher "
+        "activity. Match the character's personality. Output ONLY the JSON."
+    )
+
+    async def decide_directive(
+        self, context: Optional[dict] = None, ai_mode: Optional[str] = None
+    ) -> str:
+        active_mode = await self.ensure_mode(ai_mode)
+        if active_mode == "fallback":
+            raise RuntimeError(
+                "no provider available for director (check APIA_AI_MODE / API keys)"
+            )
+        payload = "Context: " + json.dumps(context or {}, ensure_ascii=False) + "\nJSON:"
+        if active_mode == "claude":
+            return await self._summarize_claude(self.DIRECTOR_SYSTEM, payload)
+        if active_mode == "groq":
+            return await self._summarize_groq(self.DIRECTOR_SYSTEM, payload)
+        if active_mode == "hf_api":
+            return await self._summarize_hf_api(self.DIRECTOR_SYSTEM, payload)
+        if active_mode == "local":
+            return await self._summarize_local(self.DIRECTOR_SYSTEM, payload)
+        raise RuntimeError(f"unsupported mode for director: {active_mode}")
+
     async def _summarize_claude(self, system: str, user: str) -> str:
         try:
             response = self._claude.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=MAX_NEW_TOKENS,
+                temperature=0.2,  # 요약·디렉터 모두 결정성 우선(다른 provider와 일치)
                 system=system,
                 messages=[{"role": "user", "content": user}],
             )

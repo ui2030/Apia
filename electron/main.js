@@ -313,6 +313,24 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
   }
 })
 
+// J단계 — LLM 행동 디렉터. 채팅과 분리된 경량 호출. 짧은 타임아웃, 실패는 전부
+// null로 흡수(렌더러 runner가 백오프). 백엔드 미가용이면 ensureAvailableForRequest가
+// 던지고 catch → null → 규칙기반 유지.
+ipcMain.handle('director:decide', async (e, context) => {
+  try {
+    await backend.ensureAvailableForRequest()
+    const settings = loadSettings()
+    const r = await requestBackendJson('/director', {
+      method: 'POST',
+      timeout: 9000,
+      body: { context: context || {}, ai_mode: settings.aiMode }
+    })
+    return (r && typeof r.raw === 'string') ? r.raw : null
+  } catch {
+    return null
+  }
+})
+
 ipcMain.handle('tts', async (e, { text, voice_id }) => {
   try {
     await backend.ensureAvailableForRequest()

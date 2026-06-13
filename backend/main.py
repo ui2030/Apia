@@ -29,7 +29,7 @@ from ai_config import (
     WEB_PROVIDER,
     WEB_TIMEOUT_SECONDS,
 )
-from routers import chat, store, stt, tts, voice, warmup
+from routers import chat, director, store, stt, tts, voice, warmup
 from schemas import HealthResponse
 from services.embedding_service import EmbeddingService
 from services.file_index_service import FileIndexService
@@ -140,6 +140,7 @@ app.add_middleware(
 )
 
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
+app.include_router(director.router, prefix="/director", tags=["director"])
 app.include_router(tts.router, prefix="/tts", tags=["tts"])
 app.include_router(stt.router, prefix="/stt", tags=["stt"])
 app.include_router(voice.router, prefix="/voices", tags=["voice"])

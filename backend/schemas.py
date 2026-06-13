@@ -40,6 +40,18 @@ class ChatRequest(BaseModel):
     use_web: bool = False
 
 
+class DirectorRequest(BaseModel):
+    # J단계 행동 디렉터 — 컴팩트 컨텍스트(hour/personality/attentiveness/idleMinutes).
+    # 채팅과 분리(history 없음). 구조는 느슨하게 dict로 받아 프롬프트에 직렬화.
+    context: Dict = Field(default_factory=dict)
+    ai_mode: Optional[str] = None
+
+
+class DirectorResponse(BaseModel):
+    # LLM 원시 출력(클라이언트의 parseDirective가 검증/clamp). 실패/미가용이면 None.
+    raw: Optional[str] = None
+
+
 class ChatCitation(BaseModel):
     """An assistant-emitted `[N]` marker resolved to its source. Same shape
     whether the source is web (step 4), file (future), or memory (future)."""

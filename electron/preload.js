@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('api', {
     message: msg, history: hist, useWeb: opts?.useWeb
   }),
   tts: (text, voice_id) => ipcRenderer.invoke('tts', { text, voice_id }),
+  // J단계 — LLM 행동 디렉터(채팅과 분리). raw JSON 문자열 또는 null.
+  directorDecide: (context) => ipcRenderer.invoke('director:decide', context),
   getVoices: () => ipcRenderer.invoke('get-voices'),
   // 음성 복제 (custom voice) — 설정 UI: 업로드→게이지 폴링→미리듣기→삭제
   voiceCloneUpload: (name, wavBase64) => ipcRenderer.invoke('voice-clone-upload', { name, wavBase64 }),
