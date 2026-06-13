@@ -539,13 +539,24 @@ export function createImpulseState() {
   return { kind: null, t0: 0, dur: 0 }
 }
 
-/** kind: 'nod' | 'surprise'. Triggered by main.js for head-based react motions. */
+// kind: 'nod' | 'surprise' (react) | 'lookaround' | 'lookdown' (idle gaze).
 export function triggerImpulse(state, kind, t, intensity = 1) {
-  if (!state || (kind !== 'nod' && kind !== 'surprise')) return
+  if (!state) return
+  const DUR = { nod: 0.7, surprise: 0.65, lookaround: 1.9, lookdown: 1.7 }
+  if (!(kind in DUR)) return
   state.kind = kind
   state.t0 = t
-  state.dur = kind === 'surprise' ? 0.65 : 0.7
+  state.dur = DUR[kind]
   state.intensity = Math.max(0.4, Math.min(1.4, intensity))
+  if (kind === 'lookaround') state.dir = Math.random() < 0.5 ? -1 : 1
+}
+
+// rise → hold → fall (a soft trapezoid) for look impulses that "turn, look,
+// return" instead of a single pulse.
+function trapezoid(p) {
+  if (p < 0.18) return p / 0.18
+  if (p > 0.78) return Math.max(0, (1 - p) / 0.22)
+  return 1
 }
 
 function addImpulseLayer(state, t, add) {
@@ -554,18 +565,25 @@ function addImpulseLayer(state, t, add) {
   if (p < 0 || p >= 1) { state.kind = null; return }
   const k = state.intensity ?? 1
   if (state.kind === 'nod') {
-    // down then back: a single smooth arch.
-    const arch = Math.sin(Math.PI * p)
+    const arch = Math.sin(Math.PI * p) // down then back
     add('impulse', 'head', 0.34 * arch * k, 0, 0)
     add('impulse', 'neck', 0.13 * arch * k, 0, 0)
     add('impulse', 'chest', 0.04 * arch * k, 0, 0)
-  } else {
-    // surprise: up-jerk, then settle back. Bigger amplitude than a nod so the
-    // head spring (which lags a fast pulse) still shows a clear jolt.
+  } else if (state.kind === 'surprise') {
+    // up-jerk then settle. Bigger amplitude so the lagging spring still jolts.
     const env = Math.sin(Math.PI * Math.min(1, p * 1.6)) * (1 - p * 0.85)
     add('impulse', 'head', -0.48 * env * k, 0, 0)
     add('impulse', 'neck', -0.18 * env * k, 0, 0)
     add('impulse', 'chest', -0.05 * env * k, 0, 0)
+  } else if (state.kind === 'lookaround') {
+    const env = trapezoid(p)
+    const dir = state.dir || 1
+    add('impulse', 'neck', 0, 0.24 * dir * env * k, 0)
+    add('impulse', 'head', 0, 0.15 * dir * env * k, 0)
+  } else if (state.kind === 'lookdown') {
+    const env = trapezoid(p)
+    add('impulse', 'head', 0.20 * env * k, 0, 0)
+    add('impulse', 'neck', 0.09 * env * k, 0, 0)
   }
 }
 

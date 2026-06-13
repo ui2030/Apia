@@ -8,20 +8,29 @@ const PERSONALITY = {
 
 const MOTION_LIBRARY = {
   idle: {
+    // 절차적 idle(breath/gaze/fidget/weightshift) + 캐릭터다운 포즈 클립 혼합.
+    // 포즈 클립(hands_clasped/ponder/…)은 .vmd가 있으면 재생, VRM·미존재면
+    // 절차적 폴백. look_around/look_down은 절차적 시선 임펄스(main.js).
     shy: [
       'idle_breath_soft',
       'idle_look_down_soft',
-      'idle_small_fidget'
+      'idle_small_fidget',
+      'idle_hands_clasped',
+      'idle_ponder'
     ],
     active: [
       'idle_shift_weight',
       'idle_look_around',
-      'idle_breath_lively'
+      'idle_breath_lively',
+      'idle_hand_on_hip',
+      'idle_hands_back'
     ],
     calm: [
       'idle_breath_soft',
       'idle_neutral',
-      'idle_look_around_soft'
+      'idle_look_around_soft',
+      'idle_arms_crossed',
+      'idle_relaxed'
     ]
   },
 

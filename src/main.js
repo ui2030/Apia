@@ -105,7 +105,9 @@ function playMotion(motion) {
     const n = motion.name || ''
     let kind = null
     let intensity = motion.intensity ?? 1
-    if (/surpris/.test(n)) kind = 'surprise'
+    if (/look_around/.test(n)) { kind = 'lookaround'; if (/soft/.test(n)) intensity *= 0.7 }
+    else if (/look_down/.test(n)) kind = 'lookdown'
+    else if (/surpris/.test(n)) kind = 'surprise'
     else if (/nod/.test(n)) { kind = 'nod'; intensity *= /big/.test(n) ? 1.25 : /small/.test(n) ? 0.65 : 1 }
     else if (n === 'react_happy') { kind = 'nod'; intensity *= 0.7 } // a happy little bob
     if (kind) triggerImpulse(currentModel.poseRig.impulse, kind, clock.getElapsedTime(), intensity)
@@ -117,7 +119,10 @@ function playMotion(motion) {
   if (type === 'mmd') {
     const asset = resolveMmdMotionAsset(motion.name)
     if (!asset) {
-      // No .vmd matched — procedural owns the rig until next motion call.
+      // No .vmd matched — hand any running clip back to the procedural layer
+      // (fade out) so switching from a pose clip to a procedural idle doesn't
+      // leave the old clip fighting the procedural write.
+      if (currentModel?._vmdClipActive) releaseActiveClips(currentModel, animationCtx)
       if (currentModel) currentModel._vmdClipActive = false
       return
     }
@@ -132,7 +137,8 @@ function playMotion(motion) {
   if (type === 'vrm') {
     const asset = resolveMotionAsset(motion.name)
     if (!asset) {
-      if (currentModel) currentModel._vrmaClipActive = false
+      if (currentModel?._vrmaClipActive || currentModel?._fbxClipActive) releaseActiveClips(currentModel, animationCtx)
+      if (currentModel) { currentModel._vrmaClipActive = false; currentModel._fbxClipActive = false }
       return
     }
     // Step 6: resolveMotionAsset now returns `kind: 'vrma' | 'fbx'`. FBX
