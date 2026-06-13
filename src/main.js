@@ -247,6 +247,25 @@ function timeOfDayEnergy(hour = new Date().getHours()) {
   return 0.65                 // 늦은 밤
 }
 
+// J단계(상황 인지) — 대화 최근성. lastInteractionAt은 "사용자 입력 시점"이 아니라
+// "캐릭터가 마지막으로 응답/발화한 시점"(발화는 항상 사용자 입력에 뒤따르므로 근사).
+// 사용자가 읽기만 하는 동안 갱신 안 되는 것은 이 정의에서 정상.
+let lastInteractionAt = 0 // ms; 0 = 아직 대화 없음
+
+function markInteraction() {
+  lastInteractionAt = Date.now()
+}
+
+// 대화 최근성 → 주의도 [-1,1]. +1 방금 대화(집중), 0 중립, -1 오래 무관심(독립/지루).
+function interactionRecencyFactor(now = Date.now()) {
+  if (!lastInteractionAt) return 0
+  const elapsed = now - lastInteractionAt
+  if (elapsed < 30000) return 1
+  if (elapsed < 90000) return 1 - (elapsed - 30000) / 60000 // 30s→90s: 1→0
+  if (elapsed < 180000) return -((elapsed - 90000) / 90000) // 90s→180s: 0→-1
+  return -1
+}
+
 function getAutoBehaviorConfig() {
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
   const base = motionManager.getBehaviorConfig?.() || {}
@@ -256,16 +275,26 @@ function getAutoBehaviorConfig() {
   const baseIdle = Number.isFinite(base.inPlaceIdleBias) ? base.inPlaceIdleBias : 0.28
   const chairBias = Number.isFinite(base.chairBias) ? base.chairBias : 0.45
 
-  // 활기(e)로 변조: e↑(아침)=더 돌아다니고(walk↑) 간격 짧게, e↓(밤)=제자리/정적↑
-  // 느긋(delay↑). base는 성격 로직이 재사용하므로 절대 변형 말고 새 객체로 반환.
+  // base는 성격 로직이 재사용하므로 절대 변형 말고 새 객체로 변조 반환.
+  // 1) 시간대 인지(활기 e): e↑(아침)=walk↑·간격 짧게, e↓(밤)=제자리/정적↑·느긋.
   const e = timeOfDayEnergy()
-  let walkShare = clamp(baseWalk * e, 0.15, 0.6)
-  let inPlaceIdleBias = clamp(baseIdle / clamp(e, 0.6, 1.3), 0.12, 0.5)
+  let walkShare = baseWalk * e
+  let inPlaceIdleBias = baseIdle / clamp(e, 0.6, 1.3)
+
+  // 2) 사용자 상태 인지(주의도 att): 방금 대화=곁에 머묾(walk↓ idle↑),
+  //    오래 무관심=독립적으로 돌아다님(walk↑ idle↓). 시간대 위에 곱연쇄.
+  const att = interactionRecencyFactor()
+  walkShare *= (1 - att * 0.35)
+  inPlaceIdleBias *= (1 + att * 0.30)
+
+  // 3) 최종 clamp + 합 0.94 캡(가구/폴백 슬롯 항상 보존).
+  walkShare = clamp(walkShare, 0.15, 0.6)
+  inPlaceIdleBias = clamp(inPlaceIdleBias, 0.12, 0.5)
   const sum = walkShare + inPlaceIdleBias
   if (sum > 0.94) { const s = 0.94 / sum; walkShare *= s; inPlaceIdleBias *= s }
+
   const minDelay = Math.max(2000, Math.round(baseMin * (2 - e)))
   const maxDelay = Math.max(minDelay + 500, Math.round(baseMax * (2 - e)))
-
   return { autoBehaviorMinMs: minDelay, autoBehaviorMaxMs: maxDelay, chairBias, inPlaceIdleBias, walkShare }
 }
 
@@ -823,6 +852,7 @@ function applyCharacterScale() {
 export function startSpeaking() {
   lipsync.active = true
   lipsync.phase = 0
+  markInteraction() // J단계 — 발화 = 방금 대화함(주의도 갱신)
 }
 
 export function stopSpeaking() {
@@ -1280,6 +1310,7 @@ initChat({
   startSpeaking,
   stopSpeaking,
   applyEmotion: (emotion) => {
+    markInteraction() // J단계 — 감정 반응 = 방금 대화함(주의도 갱신)
     setEmotion(emotion)
     applyEmotion(emotion) // G단계 — 표정 모프/익스프레션도 같이
     const reactMotion = motionManager.pickReactMotion({ emotion })
