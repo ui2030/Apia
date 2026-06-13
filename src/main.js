@@ -237,12 +237,36 @@ const motionManager = new MotionManager({
   personality: 'calm'
 })
 
+// J단계(상황 인지) — 시간대별 활기 계수. 아침 활기·밤 차분. 자율 행동은 수 초마다
+// 도므로 계단식으로 충분(경계 급변은 체감 작음). hour 인자는 테스트용.
+function timeOfDayEnergy(hour = new Date().getHours()) {
+  if (hour < 6) return 0.55   // 깊은 밤 — 느긋
+  if (hour < 11) return 1.12  // 아침 — 활기
+  if (hour < 17) return 1.0   // 낮 — 평소
+  if (hour < 22) return 0.9   // 저녁 — 살짝 차분
+  return 0.65                 // 늦은 밤
+}
+
 function getAutoBehaviorConfig() {
-  return motionManager.getBehaviorConfig?.() || {
-    autoBehaviorMinMs: 9000,
-    autoBehaviorMaxMs: 16000,
-    chairBias: 0.45
-  }
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+  const base = motionManager.getBehaviorConfig?.() || {}
+  const baseMin = Number.isFinite(base.autoBehaviorMinMs) ? base.autoBehaviorMinMs : 9000
+  const baseMax = Number.isFinite(base.autoBehaviorMaxMs) ? base.autoBehaviorMaxMs : 16000
+  const baseWalk = Number.isFinite(base.walkShare) ? base.walkShare : 0.36
+  const baseIdle = Number.isFinite(base.inPlaceIdleBias) ? base.inPlaceIdleBias : 0.28
+  const chairBias = Number.isFinite(base.chairBias) ? base.chairBias : 0.45
+
+  // 활기(e)로 변조: e↑(아침)=더 돌아다니고(walk↑) 간격 짧게, e↓(밤)=제자리/정적↑
+  // 느긋(delay↑). base는 성격 로직이 재사용하므로 절대 변형 말고 새 객체로 반환.
+  const e = timeOfDayEnergy()
+  let walkShare = clamp(baseWalk * e, 0.15, 0.6)
+  let inPlaceIdleBias = clamp(baseIdle / clamp(e, 0.6, 1.3), 0.12, 0.5)
+  const sum = walkShare + inPlaceIdleBias
+  if (sum > 0.94) { const s = 0.94 / sum; walkShare *= s; inPlaceIdleBias *= s }
+  const minDelay = Math.max(2000, Math.round(baseMin * (2 - e)))
+  const maxDelay = Math.max(minDelay + 500, Math.round(baseMax * (2 - e)))
+
+  return { autoBehaviorMinMs: minDelay, autoBehaviorMaxMs: maxDelay, chairBias, inPlaceIdleBias, walkShare }
 }
 
 // Codex MUST-FIX (step 1 round 2): tracking the active character id so the
