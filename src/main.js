@@ -98,13 +98,17 @@ function playMotion(motion) {
   if (!motion) return
   applyMotion(motion)
 
-  // A-3 — head-based react motions (nod/surprise) can't be clips (procedural
-  // gaze owns head/neck), so fire a transient procedural impulse. Works on any
-  // model with head/neck roles; rides on top of gaze through the spring.
-  if (motion.category === 'react' && currentModel?.poseRig?.impulse) {
+  // A-3 — head motion (nod/surprise) can't be a clip (procedural gaze owns
+  // head/neck), so fire a transient procedural impulse. Covers nods/surprise in
+  // BOTH talk and react names; arm clips (if any) still play underneath.
+  if (currentModel?.poseRig?.impulse) {
     const n = motion.name || ''
-    const kind = /surpris/.test(n) ? 'surprise' : /nod/.test(n) ? 'nod' : null
-    if (kind) triggerImpulse(currentModel.poseRig.impulse, kind, clock.getElapsedTime(), motion.intensity ?? 1)
+    let kind = null
+    let intensity = motion.intensity ?? 1
+    if (/surpris/.test(n)) kind = 'surprise'
+    else if (/nod/.test(n)) { kind = 'nod'; intensity *= /big/.test(n) ? 1.25 : /small/.test(n) ? 0.65 : 1 }
+    else if (n === 'react_happy') { kind = 'nod'; intensity *= 0.7 } // a happy little bob
+    if (kind) triggerImpulse(currentModel.poseRig.impulse, kind, clock.getElapsedTime(), intensity)
   }
 
   // 절차적 layer는 dummy/null 포함 모든 경우 위에서 처리. clip 재생은 type별로 분기:

@@ -24,3 +24,9 @@ src/assets/motions/vmd/**/*.VMD
 # composed at runtime), so ship them. Whitelist each generated file.
 !src/assets/motions/vmd/talk/explain.vmd
 !src/assets/motions/vmd/talk/think.vmd
+!src/assets/motions/vmd/talk/soft.vmd
+!src/assets/motions/vmd/talk/happy.vmd
+!src/assets/motions/vmd/talk/neutral.vmd
+!src/assets/motions/vmd/talk/explain_soft.vmd
+!src/assets/motions/vmd/react/happy.vmd
+!src/assets/motions/vmd/react/shy.vmd

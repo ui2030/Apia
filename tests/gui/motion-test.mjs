@@ -10,12 +10,21 @@ import path from 'node:path'
 const OUT = process.argv[2] || path.resolve('test-results', 'motion')
 await mkdir(OUT, { recursive: true })
 
-const CLIPS = [
+const CLIPS = (process.argv[3] ? process.argv[3].split(',').map((s) => {
+  const [category, name] = s.includes(':') ? s.split(':') : [s.split('_')[0], s]
+  return { category, name }
+}) : [
   { category: 'react', name: 'react_nod' },
   { category: 'react', name: 'react_surprised' },
+  { category: 'react', name: 'react_happy' },
+  { category: 'react', name: 'react_shy' },
   { category: 'talk', name: 'talk_explain' },
   { category: 'talk', name: 'talk_think' },
-]
+  { category: 'talk', name: 'talk_soft' },
+  { category: 'talk', name: 'talk_happy' },
+  { category: 'talk', name: 'talk_neutral' },
+  { category: 'talk', name: 'talk_explain_soft' },
+])
 const BONES = ['頭', '首', '上半身', '左腕', '右腕', '左ひじ', '右ひじ']
 
 const { app, mainWindow, cleanup } = await launchApia({
