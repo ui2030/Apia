@@ -24,6 +24,23 @@ if (APIA_E2E_USER_DATA_DIR) {
 const APIA_E2E_DISABLE_BACKEND = process.env.APIA_E2E_DISABLE_BACKEND === '1'
 const APIA_E2E_NO_SHELL_OPEN = process.env.APIA_E2E_NO_SHELL_OPEN === '1'
 
+// Single-instance guard. Without it, pressing "Apia 시작" while the app is
+// already running spawns a SECOND full instance that fights the first for the
+// backend port — and in wallpaper mode neither has a visible window, so it
+// looks like "nothing happened". Skip under E2E (tests run isolated instances
+// in separate userData dirs and must be allowed to coexist).
+if (!APIA_E2E_USER_DATA_DIR) {
+  if (!app.requestSingleInstanceLock()) {
+    app.quit()
+  } else {
+    app.on('second-instance', () => {
+      // Already running. In wallpaper mode there's no main window to focus, so
+      // open Settings as a visible "yes, it's already on" signal.
+      try { windows.openSettings() } catch {}
+    })
+  }
+}
+
 const { registerCharacterIpc } = require('./ipc/registerCharacterIpc')
 const registryService = require('./services/registryService')
 const {
