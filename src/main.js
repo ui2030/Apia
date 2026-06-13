@@ -286,13 +286,22 @@ function scheduleAutoBehavior() {
     autoBehaviorTimer = null
 
     if (autoBehaviorEnabled && !lipsync.active && getState?.() === 'idle') {
-      // Phase A: weighted mix of furniture interactions and free roam so the
-      // character actually uses the (x,z) plane instead of bouncing between
-      // the same chair/point pair. ~50% free walk, the rest goes to the
-      // world manager's existing furniture picker.
+      // Phase A/J: weighted mix of in-place idle gestures, free roam, and
+      // furniture interactions. Order matters — the in-place idle slot goes
+      // first so the standing idle vocabulary (pose clips, head tilt, look
+      // around) actually surfaces instead of being an unreachable fallback;
+      // otherwise the character only ever walks/sits and never just stands
+      // and emotes (거주형 비서 생동감). Roughly: 28% in-place idle gesture,
+      // 36% free walk, the rest (incl. walk failures) → furniture picker.
       const roll = Math.random()
       let handled = false
-      if (roll < 0.5) {
+      if (roll < 0.28) {
+        const idleGesture = motionManager.pickIdleMotion()
+        if (idleGesture) {
+          playMotion(idleGesture)
+          handled = true
+        }
+      } else if (roll < 0.64) {
         handled = walkToRandomSpot({ minDistance: 1.4 }) === true
       }
       if (!handled) {
