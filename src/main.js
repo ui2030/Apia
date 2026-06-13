@@ -33,6 +33,8 @@ import {
   applyPose,
   computePoseTargets,
   applyClipArmHangCorrection,
+  createImpulseState,
+  triggerImpulse,
   LOCOMOTION_ROLES
 } from './poseRig.js'
 
@@ -95,6 +97,15 @@ export function playFBXAnimation(url, opts) {
 function playMotion(motion) {
   if (!motion) return
   applyMotion(motion)
+
+  // A-3 — head-based react motions (nod/surprise) can't be clips (procedural
+  // gaze owns head/neck), so fire a transient procedural impulse. Works on any
+  // model with head/neck roles; rides on top of gaze through the spring.
+  if (motion.category === 'react' && currentModel?.poseRig?.impulse) {
+    const n = motion.name || ''
+    const kind = /surpris/.test(n) ? 'surprise' : /nod/.test(n) ? 'nod' : null
+    if (kind) triggerImpulse(currentModel.poseRig.impulse, kind, clock.getElapsedTime(), motion.intensity ?? 1)
+  }
 
   // 절차적 layer는 dummy/null 포함 모든 경우 위에서 처리. clip 재생은 type별로 분기:
   // mmd → VMD, vrm → VRMA, 그 외(dummy/null/unknown)는 명시적으로 no-op.
@@ -395,6 +406,7 @@ async function loadVRMRuntimeModel(url, loadToken) {
             registry,
             spring: createPoseSpring(registry),
             saccade: createSaccadeState(),
+            impulse: createImpulseState(),
           }
         }
         applyCharacterScale()
@@ -513,6 +525,7 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
             registry,
             spring: createPoseSpring(registry),
             saccade: createSaccadeState(),
+            impulse: createImpulseState(),
           }
           // E2E hatch — vmd-check 계열 진단이 모델의 rest 지문(armAbduction
           // 등)을 읽어 팔 보정값을 검증할 수 있게 한다. __apiaScene과 동일한
@@ -902,6 +915,7 @@ function updateBody(t, delta) {
   const { summed } = computePoseTargets({
     registry,
     saccadeState: saccade,
+    impulseState: currentModel.poseRig?.impulse,
     t,
     look,
     state,

@@ -528,6 +528,47 @@ export function sampleSaccade(state, t) {
   return state.current
 }
 
+// ── Head react impulses (A-3) ───────────────────────────────────────
+//
+// Nods / surprise head-jerks can't be clips: the procedural gaze layer always
+// owns head/neck (never masked). So react head motions are transient impulses
+// added into the head/neck target and smoothed by the same spring. A short
+// time-curve plays out and clears itself.
+
+export function createImpulseState() {
+  return { kind: null, t0: 0, dur: 0 }
+}
+
+/** kind: 'nod' | 'surprise'. Triggered by main.js for head-based react motions. */
+export function triggerImpulse(state, kind, t, intensity = 1) {
+  if (!state || (kind !== 'nod' && kind !== 'surprise')) return
+  state.kind = kind
+  state.t0 = t
+  state.dur = kind === 'surprise' ? 0.65 : 0.7
+  state.intensity = Math.max(0.4, Math.min(1.4, intensity))
+}
+
+function addImpulseLayer(state, t, add) {
+  if (!state?.kind) return
+  const p = (t - state.t0) / state.dur
+  if (p < 0 || p >= 1) { state.kind = null; return }
+  const k = state.intensity ?? 1
+  if (state.kind === 'nod') {
+    // down then back: a single smooth arch.
+    const arch = Math.sin(Math.PI * p)
+    add('impulse', 'head', 0.34 * arch * k, 0, 0)
+    add('impulse', 'neck', 0.13 * arch * k, 0, 0)
+    add('impulse', 'chest', 0.04 * arch * k, 0, 0)
+  } else {
+    // surprise: up-jerk, then settle back. Bigger amplitude than a nod so the
+    // head spring (which lags a fast pulse) still shows a clear jolt.
+    const env = Math.sin(Math.PI * Math.min(1, p * 1.6)) * (1 - p * 0.85)
+    add('impulse', 'head', -0.48 * env * k, 0, 0)
+    add('impulse', 'neck', -0.18 * env * k, 0, 0)
+    add('impulse', 'chest', -0.05 * env * k, 0, 0)
+  }
+}
+
 // ── Pose target composition ─────────────────────────────────────────
 
 /**
@@ -549,6 +590,7 @@ export function sampleSaccade(state, t) {
 export function computePoseTargets({
   registry,
   saccadeState,
+  impulseState, // A-3 — transient head react impulses (nod/surprise)
   t,
   look,
   state,
@@ -577,6 +619,7 @@ export function computePoseTargets({
     talk: new Map(),
     idleSubtle: new Map(),
     statePose: new Map(),
+    impulse: new Map(),
   }
   const summed = new Map()
 
@@ -659,6 +702,10 @@ export function computePoseTargets({
       add('saccade', 'eyes', -s.y, s.x, 0)
     }
   }
+
+  // — Layer 4.5: head react impulse (nod/surprise). Head/neck are never
+  // masked, so this rides on top of gaze through the same spring.
+  addImpulseLayer(impulseState, t, add)
 
   // — Layer 5: fidget. Asymmetric tiny motion on shoulders + wrists,
   // scaled by the personality fidgetiness vector.
