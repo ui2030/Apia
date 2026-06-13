@@ -107,7 +107,7 @@ function playMotion(motion) {
     let intensity = motion.intensity ?? 1
     if (/look_around/.test(n)) { kind = 'lookaround'; if (/soft/.test(n)) intensity *= 0.7 }
     else if (/look_down/.test(n)) kind = 'lookdown'
-    else if (/head_tilt|tilt/.test(n)) { kind = 'headtilt'; if (/soft|small/.test(n)) intensity *= 0.7 }
+    else if (/head_tilt|(^|_)tilt(_|$)/.test(n)) { kind = 'headtilt'; if (/soft|small/.test(n)) intensity *= 0.7 }
     else if (/surpris/.test(n)) { kind = 'surprise'; intensity *= /small/.test(n) ? 0.62 : 1 }
     else if (/nod/.test(n)) { kind = 'nod'; intensity *= /big/.test(n) ? 1.25 : /small/.test(n) ? 0.65 : 1 }
     else if (n === 'react_happy') { kind = 'nod'; intensity *= 0.7 } // a happy little bob
