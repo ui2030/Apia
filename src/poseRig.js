@@ -539,16 +539,16 @@ export function createImpulseState() {
   return { kind: null, t0: 0, dur: 0 }
 }
 
-// kind: 'nod' | 'surprise' (react) | 'lookaround' | 'lookdown' (idle gaze).
+// kind: 'nod' | 'surprise' (react) | 'lookaround' | 'lookdown' | 'headtilt' (idle gaze).
 export function triggerImpulse(state, kind, t, intensity = 1) {
   if (!state) return
-  const DUR = { nod: 0.7, surprise: 0.65, lookaround: 1.9, lookdown: 1.7 }
+  const DUR = { nod: 0.7, surprise: 0.65, lookaround: 1.9, lookdown: 1.7, headtilt: 2.2 }
   if (!(kind in DUR)) return
   state.kind = kind
   state.t0 = t
   state.dur = DUR[kind]
   state.intensity = Math.max(0.4, Math.min(1.4, intensity))
-  if (kind === 'lookaround') state.dir = Math.random() < 0.5 ? -1 : 1
+  if (kind === 'lookaround' || kind === 'headtilt') state.dir = Math.random() < 0.5 ? -1 : 1
 }
 
 // rise → hold → fall (a soft trapezoid) for look impulses that "turn, look,
@@ -584,6 +584,12 @@ function addImpulseLayer(state, t, add) {
     const env = trapezoid(p)
     add('impulse', 'head', 0.20 * env * k, 0, 0)
     add('impulse', 'neck', 0.09 * env * k, 0, 0)
+  } else if (state.kind === 'headtilt') {
+    // 옆으로 갸웃 — "듣는/궁금한" 제스처. Z 롤, 살짝 기울였다 유지 후 복귀.
+    const env = trapezoid(p)
+    const dir = state.dir || 1
+    add('impulse', 'head', 0, 0, 0.18 * dir * env * k)
+    add('impulse', 'neck', 0, 0, 0.08 * dir * env * k)
   }
 }
 

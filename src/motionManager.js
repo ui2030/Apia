@@ -16,21 +16,24 @@ const MOTION_LIBRARY = {
       'idle_look_down_soft',
       'idle_small_fidget',
       'idle_hands_clasped',
-      'idle_ponder'
+      'idle_ponder',
+      'idle_head_tilt_soft'
     ],
     active: [
       'idle_shift_weight',
       'idle_look_around',
       'idle_breath_lively',
       'idle_hand_on_hip',
-      'idle_hands_back'
+      'idle_hands_back',
+      'idle_head_tilt'
     ],
     calm: [
       'idle_breath_soft',
       'idle_neutral',
       'idle_look_around_soft',
       'idle_arms_crossed',
-      'idle_relaxed'
+      'idle_relaxed',
+      'idle_head_tilt_soft'
     ]
   },
 
