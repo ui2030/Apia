@@ -295,7 +295,7 @@ function getAutoBehaviorConfig() {
 
   const minDelay = Math.max(2000, Math.round(baseMin * (2 - e)))
   const maxDelay = Math.max(minDelay + 500, Math.round(baseMax * (2 - e)))
-  return { autoBehaviorMinMs: minDelay, autoBehaviorMaxMs: maxDelay, chairBias, inPlaceIdleBias, walkShare }
+  return { autoBehaviorMinMs: minDelay, autoBehaviorMaxMs: maxDelay, chairBias, inPlaceIdleBias, walkShare, attentiveness: att }
 }
 
 // Codex MUST-FIX (step 1 round 2): tracking the active character id so the
@@ -354,10 +354,12 @@ function scheduleAutoBehavior() {
       const idleBias = safe(behaviorConfig.inPlaceIdleBias, 0.28)
       const walkShare = safe(behaviorConfig.walkShare, 0.36)
       const walkCut = Math.min(0.97, idleBias + walkShare)
+      // 방금 대화했으면(attentiveness 높음) "듣는 듯한" 제스처 선호.
+      const idleMood = behaviorConfig.attentiveness > 0.4 ? 'engaged' : undefined
       const roll = Math.random()
       let handled = false
       if (roll < idleBias) {
-        const idleGesture = motionManager.pickIdleMotion()
+        const idleGesture = motionManager.pickIdleMotion({ mood: idleMood })
         if (idleGesture) {
           playMotion(idleGesture)
           handled = true
@@ -377,7 +379,7 @@ function scheduleAutoBehavior() {
           }) === true
       }
       if (!handled) {
-        const idleMotion = motionManager.pickIdleMotion()
+        const idleMotion = motionManager.pickIdleMotion({ mood: idleMood })
         playMotion(idleMotion)
       }
     }

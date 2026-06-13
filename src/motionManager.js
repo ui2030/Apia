@@ -74,6 +74,18 @@ const MOTION_LIBRARY = {
   }
 }
 
+// J단계 — "듣는 듯한/관여된" idle 제스처(방금 대화 직후 선호). 갸웃·손 모음·
+// 생각·둘러보기는 사용자를 향한 주의로 읽힌다. hands_back/arms_crossed 같은
+// 닫힌/독립 포즈는 제외.
+const ENGAGED_IDLE = new Set([
+  'idle_head_tilt',
+  'idle_head_tilt_soft',
+  'idle_hands_clasped',
+  'idle_ponder',
+  'idle_look_around',
+  'idle_look_around_soft'
+])
+
 function randomPick(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return null
   return arr[Math.floor(Math.random() * arr.length)]
@@ -464,12 +476,19 @@ export class MotionManager {
     this.cooldowns.set(motionName, Date.now() + this.cooldownMs)
   }
 
-  pickIdleMotion() {
+  pickIdleMotion({ mood } = {}) {
     const candidates = this.getMotionCandidates('idle')
-    let motion = randomPick(candidates)
+    // J단계 — 방금 대화했으면(mood:'engaged') "듣는 듯한" 제스처를 선호:
+    // 갸웃·손 모음·생각·둘러보기. 후보에 없으면(성격별로) 전체로 폴백.
+    let pool = candidates
+    if (mood === 'engaged') {
+      const engaged = candidates.filter((m) => ENGAGED_IDLE.has(m))
+      if (engaged.length > 0) pool = engaged
+    }
+    let motion = randomPick(pool)
 
-    if (motion && motion === this.lastMotion && candidates.length > 1) {
-      const filtered = candidates.filter((m) => m !== this.lastMotion)
+    if (motion && motion === this.lastMotion && pool.length > 1) {
+      const filtered = pool.filter((m) => m !== this.lastMotion)
       motion = randomPick(filtered)
     }
 
