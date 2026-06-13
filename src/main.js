@@ -111,6 +111,7 @@ function playMotion(motion) {
     else if (/surpris/.test(n)) { kind = 'surprise'; intensity *= /small/.test(n) ? 0.62 : 1 }
     else if (/nod/.test(n)) { kind = 'nod'; intensity *= /big/.test(n) ? 1.25 : /small/.test(n) ? 0.65 : 1 }
     else if (n === 'react_happy') { kind = 'nod'; intensity *= 0.7 } // a happy little bob
+    else if (n === 'react_neutral') { kind = 'nod'; intensity *= 0.4 } // 평범한 답에도 미세한 끄덕 인정
     if (kind) triggerImpulse(currentModel.poseRig.impulse, kind, clock.getElapsedTime(), intensity)
   }
 
