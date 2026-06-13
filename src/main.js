@@ -1100,6 +1100,9 @@ window.api?.onCursorPos?.((pos) => {
 // see-through.
 window.api?.onWallpaperOpaque?.((on) => {
   try { _sceneRuntime.setWallpaperOpaque?.(on === true) } catch {}
+  // Hide the interactive HUD (chat, buttons, labels) when it's a real wallpaper
+  // — it's behind icons + click-through, so it can't be used anyway.
+  try { document.body.classList.toggle('wallpaper-mode', on === true) } catch {}
 })
 
 if (window.api) {

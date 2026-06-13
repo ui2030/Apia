@@ -171,6 +171,16 @@
     }
     #backend-status.online { background:rgba(16,185,129,0.2); border:1px solid rgba(16,185,129,0.4); color:#6ee7b7; }
     #backend-status.offline { background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.4); color:#fca5a5; }
+    /* Wallpaper mode: it's behind icons + click-through, so the interactive HUD
+       can't be used — hide it (incl. the speech bubble, which renders as a big
+       slab here) for a clean desktop scene (Wallpaper Engine feel). Only the
+       3D character canvas remains. */
+    body.wallpaper-mode #backend-status,
+    body.wallpaper-mode #world-layer,
+    body.wallpaper-mode #chat-toggle,
+    body.wallpaper-mode #settings-btn,
+    body.wallpaper-mode #speech-bubble,
+    body.wallpaper-mode #chat-panel { display:none !important; }
   </style>
 </head>
 <body>
