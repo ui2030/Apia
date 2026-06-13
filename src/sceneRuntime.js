@@ -52,6 +52,33 @@ const CAM_DEFAULT = Object.freeze({
   fov: 30
 })
 
+// The room framing (camera pos/fov above) was tuned at ~16:9. On displays
+// narrower than this the fixed vertical FOV would clip the room/character
+// left and right; on wider displays the character stays the same vertical
+// size and only the room sides reveal more.
+const DESIGN_ASPECT = 16 / 9
+
+// Current viewport aspect, guarded against a zero/negative height (can happen
+// mid display-move / minimize) — falls back to the design aspect.
+function viewportAspect() {
+  const w = window.innerWidth
+  const h = window.innerHeight
+  if (!(w > 0) || !(h > 0)) return DESIGN_ASPECT
+  return w / h
+}
+
+// Vertical FOV that keeps the 16:9 horizontal frame from being cropped.
+// Asymmetric clamp (Codex-approved): widen vertical FOV only when narrower
+// than design so nothing is cut off horizontally; keep the base FOV on wider
+// screens so the character's vertical size stays constant (no head/feet crop
+// that two-way horizontal-FOV preservation would cause on ultrawide).
+function adaptiveFov(baseDeg, aspect) {
+  if (aspect >= DESIGN_ASPECT) return baseDeg
+  const baseHalf = (baseDeg * Math.PI) / 360
+  const adjusted = 2 * Math.atan(Math.tan(baseHalf) * (DESIGN_ASPECT / aspect))
+  return (adjusted * 180) / Math.PI
+}
+
 // Room geometry. Z convention (Codex MUST-FIX round 2):
 //   - Camera lives at z=+7.6, looks toward -z into the room.
 //   - z=0 is the "back wall" (the deepest wall the user sees).
@@ -123,7 +150,9 @@ export function createSceneRuntime({ canvasEl }) {
     antialias: true,
     premultipliedAlpha: false
   })
-  renderer.setPixelRatio(window.devicePixelRatio)
+  // Capped here too (not just in applyViewport) so a high-DPR display gets
+  // the cap from the very first frame, before any resize/DPR-change fires.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   renderer.setSize(window.innerWidth, window.innerHeight)
   renderer.setClearColor(0x000000, 0)
   renderer.shadowMap.enabled = true
@@ -150,19 +179,59 @@ export function createSceneRuntime({ canvasEl }) {
   )
 
   function applyCameraDefault() {
+    const aspect = viewportAspect()
     camera.position.copy(live.pos)
     camera.lookAt(live.target)
-    camera.fov = live.fov
+    camera.aspect = aspect
+    // live.fov stays the *base* (debug slider / reset write it); only the
+    // applied camera.fov is the aspect-adapted value.
+    camera.fov = adaptiveFov(live.fov, aspect)
+    camera.updateProjectionMatrix()
+  }
+
+  // Re-fit renderer + camera to the current viewport. The single place that
+  // reacts to a window resize OR a display move (different size *or* DPI).
+  function applyViewport() {
+    const aspect = viewportAspect()
+    // Cap DPR at 2 — a 3x/4x monitor would otherwise blow up the transparent
+    // overlay's WebGL buffer for no visible gain.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    renderer.setSize(window.innerWidth, window.innerHeight)
+    camera.aspect = aspect
+    camera.fov = adaptiveFov(live.fov, aspect)
     camera.updateProjectionMatrix()
   }
 
   applyCameraDefault()
 
-  window.addEventListener('resize', () => {
-    renderer.setSize(window.innerWidth, window.innerHeight)
-    camera.aspect = window.innerWidth / window.innerHeight
-    camera.updateProjectionMatrix()
-  })
+  window.addEventListener('resize', applyViewport)
+
+  // A monitor move that changes DPI but not the CSS pixel size won't fire
+  // 'resize', so watch the resolution media query directly. matchMedia keys
+  // on the *current* dpr, so the watcher must re-arm itself on every change
+  // (and drop the previous listener first — no leak / double-fire).
+  let resolutionMql = null
+  function onResolutionChange() {
+    applyViewport()
+    armResolutionWatcher()
+  }
+  function armResolutionWatcher() {
+    if (resolutionMql) {
+      if (resolutionMql.removeEventListener) resolutionMql.removeEventListener('change', onResolutionChange)
+      else if (resolutionMql.removeListener) resolutionMql.removeListener(onResolutionChange)
+    }
+    const dpr = window.devicePixelRatio || 1
+    resolutionMql = window.matchMedia(`(resolution: ${dpr}dppx)`)
+    if (resolutionMql.addEventListener) resolutionMql.addEventListener('change', onResolutionChange)
+    else if (resolutionMql.addListener) resolutionMql.addListener(onResolutionChange)
+  }
+  function disposeResolutionWatcher() {
+    if (!resolutionMql) return
+    if (resolutionMql.removeEventListener) resolutionMql.removeEventListener('change', onResolutionChange)
+    else if (resolutionMql.removeListener) resolutionMql.removeListener(onResolutionChange)
+    resolutionMql = null
+  }
+  armResolutionWatcher()
 
   const clock = new Clock()
 
@@ -234,6 +303,8 @@ export function createSceneRuntime({ canvasEl }) {
     clock,
     CAM_DEFAULT: live, // caller can mutate pos/target/fov on this; applyCameraDefault uses it
     applyCameraDefault,
+    applyViewport, // re-fit renderer+camera to current viewport (size/aspect/DPI)
+    disposeResolutionWatcher,
     ROOM,
     room,
     furniture
