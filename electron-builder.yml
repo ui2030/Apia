@@ -22,6 +22,11 @@ files:
 extraResources:
   - from: backend-dist/ApiaBackend.exe
     to: backend/ApiaBackend.exe
+  # Win11 "behind icons" wallpaper helper (Progman-child reparent). Shipped
+  # unpacked under resources/scripts so it can be spawned — an .exe can't run
+  # from inside the .asar. wallpaperMode.js resolves resourcesPath/scripts first.
+  - from: scripts/win-wallpaper.exe
+    to: scripts/win-wallpaper.exe
 
 win:
   target:

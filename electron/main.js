@@ -714,13 +714,21 @@ app.on('child-process-gone', (event, details) => {
 // Phase F1: when monitors are added/removed/rearranged, Windows may invalidate
 // the WorkerW handle we attached to. Re-syncing the wallpaper mode forces a
 // detach + re-attach against the current Progman state. Codex NICE-TO-HAVE.
+let rewallpaperTimer = null
 function rewallpaperOnDisplayChange() {
-  const settings = loadSettings()
-  if (settings.useWallpaperMode === false) return
-  try {
-    wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
-  } catch {}
-  syncWallpaperMode()
+  // Debounce — a single monitor change can fire metrics-changed several times
+  // in a burst, and each re-attach spawns the sync Win32 helper (Codex
+  // NICE-TO-HAVE). Coalesce to one detach + re-attach.
+  if (rewallpaperTimer) clearTimeout(rewallpaperTimer)
+  rewallpaperTimer = setTimeout(() => {
+    rewallpaperTimer = null
+    const settings = loadSettings()
+    if (settings.useWallpaperMode === false) return
+    try {
+      wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
+    } catch {}
+    syncWallpaperMode()
+  }, 500)
 }
 app.whenReady().then(() => {
   screen.on('display-metrics-changed', rewallpaperOnDisplayChange)
@@ -842,10 +850,20 @@ function syncWallpaperMode() {
     // because the user's intent is "this is just background".
     try { main.setAlwaysOnTop(false) } catch {}
     try { main.setIgnoreMouseEvents(true, { forward: false }) } catch {}
+    // Cover the WHOLE target display (full bounds, not workArea) before the
+    // wallpaper reparent so Electron's renderer is already sized to the monitor
+    // — the helper then matches the window's physical rect to that monitor and
+    // canvas + window stay in sync (otherwise a workArea-sized canvas gets
+    // stretched to the full physical monitor → zoomed-in look on a HiDPI
+    // secondary display).
+    try {
+      const disp = screen.getDisplayMatching(main.getBounds())
+      if (disp?.bounds) main.setBounds(disp.bounds)
+    } catch {}
     const ready = main.isVisible() ? Promise.resolve() : new Promise((resolve) => {
       main.once('ready-to-show', resolve)
     })
-    Promise.resolve(ready).then(() => {
+    Promise.resolve(ready).then(async () => {
       // Codex MUST-FIX (round 2): a stale ready-to-show promise from an
       // earlier sync can fire after the user has flipped the toggle off.
       // Re-read settings + window state inside the .then() so the actual
@@ -853,13 +871,46 @@ function syncWallpaperMode() {
       const live = windows.getMain()
       if (!live || live.isDestroyed()) return
       if (loadSettings().useWallpaperMode === false) return
-      wallpaperMode.enableWallpaper(live, { info: logInfo, warn: logWarn })
+      const mode = await wallpaperMode.enableWallpaper(live, { info: logInfo, warn: logWarn })
+      if (loadSettings().useWallpaperMode === false) return
+      if (mode) {
+        // The Progman-child helper resizes the window via Win32 SetWindowPos
+        // from outside Electron; Chromium doesn't always re-fit its viewport,
+        // leaving the 3D camera framed for the old size (character off-centre).
+        // Force a resize tick so sceneRuntime's applyViewport re-centres.
+        try {
+          live.webContents?.executeJavaScript('window.dispatchEvent(new Event("resize"))').catch(() => {})
+        } catch {}
+      }
+      if (!mode) {
+        // Both native and Progman-child attach failed. Don't leave the window
+        // in limbo (not floating, click-through, not in the wallpaper layer →
+        // hidden behind other windows). Fall back to a normal always-on-top
+        // overlay so the character stays visible. (Codex MUST-FIX)
+        // Restore workArea bounds first — the full-display bounds set above for
+        // the wallpaper layer would otherwise cover the taskbar AND, once
+        // setIgnoreMouseEvents(false) re-arms clicks, intercept them across the
+        // whole screen. (Codex MUST-FIX)
+        try {
+          const d = screen.getDisplayMatching(live.getBounds())
+          if (d?.workArea) live.setBounds(d.workArea)
+        } catch {}
+        try { live.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
+        try { live.setIgnoreMouseEvents(false) } catch {}
+        logWarn('[WALLPAPER_FALLBACK_OVERLAY]', 'attach failed; using always-on-top overlay')
+      }
     })
   } else {
     if (wallpaperMode.isAttached()) {
       wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn })
     }
-    // Restore the normal overlay behavior (floating, accepts clicks).
+    // Restore the normal overlay behavior (floating, accepts clicks) at workArea
+    // bounds — a previous wallpaper session may have grown it to full display
+    // bounds (Codex MUST-FIX: don't leave a taskbar-covering click sink).
+    try {
+      const d = screen.getDisplayMatching(main.getBounds())
+      if (d?.workArea) main.setBounds(d.workArea)
+    } catch {}
     try { main.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
     try { main.setIgnoreMouseEvents(false) } catch {}
   }
