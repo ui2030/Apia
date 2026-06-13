@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld('api', {
   openSettings: () => ipcRenderer.invoke('open-settings'),
   applySettings: (d) => ipcRenderer.invoke('apply-settings', d),
   onSettingsApplied: (cb) => ipcRenderer.on('settings-applied', (e, s) => cb(s)),
+  // true once the window is actually attached as a desktop wallpaper, so the
+  // renderer can switch to an opaque, screen-filling scene; false in overlay
+  // mode where the character should float over the live desktop.
+  onWallpaperOpaque: (cb) => ipcRenderer.on('wallpaper:opaque', (e, on) => cb(on)),
   openBackendDataDir: () => ipcRenderer.invoke('settings:openBackendDataDir'),
   openBackendEnvFile: () => ipcRenderer.invoke('settings:openBackendEnvFile'),
   getBackendEnvKeys: () => ipcRenderer.invoke('settings:getBackendEnvKeys'),

@@ -32,6 +32,7 @@ static class ApiaWallpaper
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int ht, uint f);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string title);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int m);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
     [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr hMon, ref MONITORINFO mi);
@@ -108,6 +109,20 @@ static class ApiaWallpaper
                 int x = m.L - pr.L, y = m.T - pr.T, w = m.R - m.L, ht = m.B - m.T;
                 SetWindowPos(hwnd, HWND_BOTTOM, x, y, w, ht, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
+                // Z-order: Progman hosts SHELLDLL_DefView (icons) on top and a
+                // WorkerW that paints the actual wallpaper UNDER the icons.
+                // HWND_BOTTOM above dropped us BELOW that WorkerW → hidden behind
+                // the wallpaper. Re-insert just under SHELLDLL_DefView so we sit
+                // ABOVE the wallpaper WorkerW but BEHIND the icons.
+                IntPtr defView = FindWindowExW(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
+                // The z-order re-insert is what makes us visible (above the
+                // wallpaper WorkerW). If we can't find the icons host or the
+                // re-insert fails, we'd be hidden behind the wallpaper — report
+                // failure so Electron falls back to a visible overlay instead of
+                // claiming a "working" but invisible wallpaper. (Codex MUST-FIX)
+                bool zOk = defView != IntPtr.Zero &&
+                    SetWindowPos(hwnd, defView, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
                 bool match = GetParent(hwnd) == progman;
                 RECT r; GetWindowRect(hwnd, out r);
                 // Validate the child actually lands on the monitor (parentMatch
@@ -115,7 +130,7 @@ static class ApiaWallpaper
                 // of slack for rounding.
                 bool sizeOk = Math.Abs((r.R - r.L) - (m.R - m.L)) <= 4 && Math.Abs((r.B - r.T) - (m.B - m.T)) <= 4;
                 bool posOk = Math.Abs(r.L - m.L) <= 4 && Math.Abs(r.T - m.T) <= 4;
-                bool ok = match && sizeOk && posOk;
+                bool ok = match && sizeOk && posOk && zOk;
                 Console.WriteLine("{\"ok\":" + (ok ? "true" : "false") + ",\"parentMatch\":" + (match ? "true" : "false") +
                     ",\"rect\":\"" + r.L + "," + r.T + "," + r.R + "," + r.B + "\"}");
                 return ok ? 0 : 1;

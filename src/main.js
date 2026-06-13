@@ -1094,6 +1094,14 @@ window.api?.onCursorPos?.((pos) => {
   }
 })
 
+// Opaque, screen-filling scene when actually attached as a desktop wallpaper;
+// transparent overlay otherwise. Driven by the main process (true on a real
+// wallpaper attach, false on overlay/fallback) so E2E and overlay mode stay
+// see-through.
+window.api?.onWallpaperOpaque?.((on) => {
+  try { _sceneRuntime.setWallpaperOpaque?.(on === true) } catch {}
+})
+
 if (window.api) {
   window.api.getSettings().then(async (s) => {
     currentUserScale = (s.charScale || 100) / 100

@@ -888,7 +888,14 @@ function syncWallpaperMode() {
       const live = windows.getMain()
       if (!live || live.isDestroyed()) return
       if (loadSettings().useWallpaperMode === false) return
-      const mode = await wallpaperMode.enableWallpaper(live, { info: logInfo, warn: logWarn })
+      let mode = false
+      try {
+        mode = await wallpaperMode.enableWallpaper(live, { info: logInfo, warn: logWarn })
+      } catch (error) {
+        // Never let an attach exception skip the fallback below (Codex MUST-FIX).
+        logWarn('[WALLPAPER_ENABLE_THROW]', error?.message || error)
+        mode = false
+      }
       if (loadSettings().useWallpaperMode === false) return
       if (mode) {
         // The Progman-child helper resizes the window via Win32 SetWindowPos
@@ -898,6 +905,10 @@ function syncWallpaperMode() {
         try {
           live.webContents?.executeJavaScript('window.dispatchEvent(new Event("resize"))').catch(() => {})
         } catch {}
+        // Now that it's a real wallpaper, tell the renderer to render an opaque,
+        // screen-filling scene (a transparent overlay is invisible against the
+        // desktop).
+        try { live.webContents?.send('wallpaper:opaque', true) } catch {}
       }
       if (!mode) {
         // Both native and Progman-child attach failed. Don't leave the window
@@ -914,6 +925,7 @@ function syncWallpaperMode() {
         } catch {}
         try { live.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
         try { live.setIgnoreMouseEvents(false) } catch {}
+        try { live.webContents?.send('wallpaper:opaque', false) } catch {}
         logWarn('[WALLPAPER_FALLBACK_OVERLAY]', 'attach failed; using always-on-top overlay')
       }
     })
@@ -930,6 +942,7 @@ function syncWallpaperMode() {
     } catch {}
     try { main.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
     try { main.setIgnoreMouseEvents(false) } catch {}
+    try { main.webContents?.send('wallpaper:opaque', false) } catch {}
   }
 }
 

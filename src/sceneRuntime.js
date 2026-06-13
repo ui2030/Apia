@@ -25,6 +25,7 @@ import {
   BackSide,
   BoxGeometry,
   Clock,
+  Color,
   DirectionalLight,
   DoubleSide,
   Group,
@@ -296,6 +297,42 @@ export function createSceneRuntime({ canvasEl }) {
   dir.shadow.camera.far = 12
   dir.shadow.camera.updateProjectionMatrix()
 
+  // Wallpaper mode wants an OPAQUE, screen-filling scene (like Wallpaper
+  // Engine) — a solid backdrop + solid room so it reads as a real desktop
+  // background, not a faint see-through overlay (which is invisible against a
+  // busy/dark desktop). Overlay mode keeps the transparent look so the
+  // character floats over the live desktop. Reversible: original material
+  // opacity/transparent are stashed once and restored on toggle-off.
+  const OPAQUE_BACKDROP = 0xe9dcc4 // warm room tone behind the back wall
+  function setWallpaperOpaque(on) {
+    if (on) {
+      scene.background = new Color(OPAQUE_BACKDROP)
+      renderer.setClearColor(OPAQUE_BACKDROP, 1)
+    } else {
+      scene.background = null
+      renderer.setClearColor(0x000000, 0)
+    }
+    const solidify = (root) => root && root.traverse((o) => {
+      const m = o.material
+      if (!m) return
+      for (const mat of (Array.isArray(m) ? m : [m])) {
+        // Leave shadow catchers alone — forcing them opaque paints a solid slab.
+        if (mat.isShadowMaterial || mat.type === 'ShadowMaterial') continue
+        if (mat.userData.__origOpacity === undefined) {
+          mat.userData.__origOpacity = mat.opacity
+          mat.userData.__origTransparent = mat.transparent
+        }
+        if (on) { mat.opacity = 1; mat.transparent = false } else {
+          mat.opacity = mat.userData.__origOpacity
+          mat.transparent = mat.userData.__origTransparent
+        }
+        mat.needsUpdate = true
+      }
+    })
+    solidify(room)
+    solidify(furniture)
+  }
+
   return {
     scene,
     camera,
@@ -305,6 +342,7 @@ export function createSceneRuntime({ canvasEl }) {
     applyCameraDefault,
     applyViewport, // re-fit renderer+camera to current viewport (size/aspect/DPI)
     disposeResolutionWatcher,
+    setWallpaperOpaque,
     ROOM,
     room,
     furniture
