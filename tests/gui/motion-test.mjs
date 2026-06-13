@@ -58,6 +58,9 @@ try {
     await new Promise((r) => setTimeout(r, 1200))
 
     await mainWindow.evaluate((c) => window.__applyMotion?.({ ...c, intensity: 1 }), clip).catch(() => {})
+    await new Promise((r) => setTimeout(r, 300))
+    const flags = await mainWindow.evaluate(() => window.__clipFlags?.()).catch(() => null)
+    console.log(`[${clip.name}] clipRoles:`, flags?.clipRoles ? flags.clipRoles.join(',') : 'none')
 
     // ~1.6s 동안 100ms마다 본 회전 절대 피크 추적
     const peak = {}

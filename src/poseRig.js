@@ -317,6 +317,11 @@ const LEGS_ROLES = new Set([
 
 function maskedRoleSet(clipMask) {
   if (!clipMask) return null
+  // Granular (track-based): the clip masks exactly the roles whose bones it
+  // animates. Everything else keeps running procedurally — a talk clip that
+  // only touches the arms no longer freezes the legs/idle.
+  if (clipMask.roles) return clipMask.roles
+  // Legacy whole-group mask (kept for compatibility / non-granular callers).
   const skip = new Set()
   if (clipMask.arms) for (const r of ARMS_ROLES) skip.add(r)
   if (clipMask.torso) {
@@ -324,6 +329,29 @@ function maskedRoleSet(clipMask) {
     for (const r of LEGS_ROLES) skip.add(r) // sit pose / walk both live here
   }
   return skip
+}
+
+/** Locomotion roles — used by main.js to decide if a clip blocks walking. */
+export const LOCOMOTION_ROLES = new Set([...LEGS_ROLES, 'hip', 'lowerBody'])
+
+/**
+ * Map a set of raw bone names (from a clip's tracks) to the humanoid roles
+ * this model actually has. Uses the registry's live bone→role binding so we
+ * don't duplicate the PMX/VRM name tables. Names with no matching role (hair,
+ * skirt, fingers, IK…) are ignored.
+ */
+export function rolesForBones(registry, boneNames) {
+  const nameToRole = new Map()
+  for (const [role, entry] of registry.roles) {
+    const name = entry?.bone?.name
+    if (name) nameToRole.set(name, role)
+  }
+  const roles = new Set()
+  for (const n of boneNames) {
+    const r = nameToRole.get(n)
+    if (r) roles.add(r)
+  }
+  return roles
 }
 
 /**

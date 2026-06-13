@@ -21,6 +21,32 @@
 import { AnimationClip, LoopOnce, LoopRepeat, Quaternion, QuaternionKeyframeTrack, VectorKeyframeTrack } from 'three'
 import { getMmdRuntime, getMmdHelper, stabilizeMmdPhysics, normalizeUrlToFetchable } from './modelRuntime.js'
 import { markInertialTransition, findPoseAwareStart } from './inertialization.js'
+import { rolesForBones } from './poseRig.js'
+
+// Step 5+/goal A-1 (granular clipMask): pull the bone names a clip actually
+// keyframes so the procedural layer can mask exactly those roles (and keep
+// running on the rest). Handles MMD (".bones[左腕].quaternion") and
+// three/VRM ("左腕.quaternion") track-name shapes.
+function clipBoneNames(clip) {
+  const names = new Set()
+  for (const tr of (clip?.tracks || [])) {
+    const m = tr.name.match(/\.bones\[([^\]]+)\]\./)
+    if (m) { names.add(m[1]); continue }
+    const dot = tr.name.indexOf('.')
+    if (dot > 0) names.add(tr.name.slice(0, dot))
+  }
+  return names
+}
+
+// Set model._clipRoles from a clip's tracks (MMD path). main.js turns this
+// into a granular clipMask; null/empty falls back to the legacy whole-group
+// mask there. Cleared on release.
+function setClipRoles(model, clip) {
+  const reg = model?.poseRig?.registry
+  if (!reg) return
+  const roles = rolesForBones(reg, clipBoneNames(clip))
+  model._clipRoles = roles.size ? roles : null
+}
 
 let _vrmAnimRuntime = null
 let _fbxLoader = null
@@ -106,6 +132,7 @@ export function releaseActiveClips(model, ctx, { fade = 0.45 } = {}) {
       onRelease: () => {
         model[slot.flag] = false
         model[slot.ref] = null
+        model._clipRoles = null // A-1: clip no longer owns any bones
         // MMD는 mixer가 남아 있으면 물리가 동결 자세를 따라간다 —
         // 무클립 모드로 복원 (stashMmdMixer 주석 참조)
         if (slot.flag === '_vmdClipActive') stashMmdMixer(model)
@@ -641,6 +668,7 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
 
           model._activeVmdAction = action
           model._activeVmdClip = clip
+          setClipRoles(model, clip) // A-1: granular mask = only the bones this clip keys
 
           if (action) {
             if (!loop) {
@@ -662,6 +690,7 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
                     onRelease: () => {
                       model._vmdClipActive = false
                       model._activeVmdAction = null
+                      model._clipRoles = null // A-1
                       stashMmdMixer(model)
                     },
                   })

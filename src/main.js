@@ -31,8 +31,22 @@ import {
   createSaccadeState,
   stepPoseSpring,
   applyPose,
-  computePoseTargets
+  computePoseTargets,
+  LOCOMOTION_ROLES
 } from './poseRig.js'
+
+// A clip only needs to be handed off to procedural walking if it actually
+// owns locomotion bones (legs/hip). An arms-only talk clip can keep playing
+// while the legs walk procedurally. Legacy whole-group masks (torso) include
+// legs, so they still trigger the handoff.
+function clipMaskBlocksLocomotion(clipMask) {
+  if (!clipMask) return false
+  if (clipMask.roles) {
+    for (const r of clipMask.roles) if (LOCOMOTION_ROLES.has(r)) return true
+    return false
+  }
+  return clipMask.torso === true // legacy mask folds legs into torso
+}
 import {
   getVRMRuntime,
   getVRMUtils,
@@ -173,6 +187,7 @@ if (typeof window !== 'undefined') {
     vmd: currentModel?._vmdClipActive ?? null,
     vrma: currentModel?._vrmaClipActive ?? null,
     fbx: currentModel?._fbxClipActive ?? null,
+    clipRoles: currentModel?._clipRoles ? Array.from(currentModel._clipRoles) : null,
     state: getState?.() ?? null,
   })
   // F단계 E2E — smoothness-check가 시선 반응을 단언하고(__setLookTarget),
@@ -860,18 +875,21 @@ function updateBody(t, delta) {
   // gaze and saccade still ride on top because they touch chest/neck/head/
   // eyes which the spring blends against the clip's mixer output without
   // fighting the clip's pose.
-  const clipMask = (
+  // A-1 (granular clipMask): a clip masks ONLY the roles whose bones it
+  // actually keyframes (model._clipRoles, set by animationRuntime). An
+  // arms-only talk clip no longer freezes the legs/idle. Falls back to the
+  // legacy whole-group mask when roles couldn't be resolved (e.g. VRM/FBX
+  // bone-name mismatch) so those paths don't regress.
+  const clipActive = (
     currentModel._vmdClipActive ||
     currentModel._fbxClipActive ||
     currentModel._vrmaClipActive
   )
-    ? { arms: true, torso: true }
+  const clipMask = clipActive
+    ? (currentModel._clipRoles && currentModel._clipRoles.size
+        ? { roles: currentModel._clipRoles }
+        : { arms: true, torso: true })
     : null
-  // TODO (split when first arm-only clip lands): granular mask
-  // `{ arms, torso, legs }` so a partial-body clip can let procedural
-  // continue on the bones it doesn't own. Trigger: any motion in
-  // resolveMotionAsset / resolveMmdMotionAsset that targets only arm
-  // bones (no torso/leg tracks).
 
   // Root-position lock used to live here as a per-frame mesh.skeleton
   // walk to copy restPos into 3 root bones. Codex round 2 pointed out
@@ -897,7 +915,7 @@ function updateBody(t, delta) {
   // 캡처값이라 이번 프레임 gait는 건너뛴다(의도) — fade(0.45s)가 끝나면
   // 플래그가 풀리고 다음 프레임부터 다리가 움직인다. 호출은 매 프레임
   // 일어나도 releaseActiveClips 내부의 pending 가드가 1회로 합친다.
-  if (state === 'walk' && clipMask) {
+  if (state === 'walk' && clipMaskBlocksLocomotion(clipMask)) {
     releaseActiveClips(currentModel, animationCtx)
   }
 
