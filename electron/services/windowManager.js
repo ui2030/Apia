@@ -362,21 +362,35 @@ class WindowManager {
     const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
 
     if (this.#main && !this.#main.isDestroyed()) {
-      await this.#main.loadURL(dataUrl)
-      return
+      try {
+        await this.#main.loadURL(dataUrl)
+        return
+      } catch (loadError) {
+        // The main window can be alive-but-unusable when its initial load
+        // failed (webContents gone) — `isDestroyed()` is false yet `loadURL`
+        // throws "Object has been destroyed". Don't let the error reporter
+        // itself crash; fall through to a fresh fallback window.
+        this.#log.warn('[STARTUP_ERROR_MAIN_LOAD_FAILED]', loadError?.message || loadError)
+      }
     }
 
-    const fallback = new this.#BrowserWindow({
-      width: 860,
-      height: 620,
-      show: true,
-      backgroundColor: '#111827',
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false
-      }
-    })
-    await fallback.loadURL(dataUrl)
+    try {
+      const fallback = new this.#BrowserWindow({
+        width: 860,
+        height: 620,
+        show: true,
+        backgroundColor: '#111827',
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false
+        }
+      })
+      await fallback.loadURL(dataUrl)
+    } catch (fallbackError) {
+      // Last resort — the error reporter must never throw (it runs inside other
+      // catch blocks). The failure is already in the runtime log.
+      this.#log.error('[STARTUP_ERROR_FALLBACK_FAILED]', fallbackError?.message || fallbackError)
+    }
   }
 
   /**
