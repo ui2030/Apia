@@ -31,6 +31,29 @@ const { app, mainWindow, cleanup } = await launchApia({
   extraEnv: { APIA_E2E_DISABLE_WALLPAPER: '1' }
 })
 
+// 디스플레이 2에서 검증(사용자 요청 — 1번 말고 2번). 외부 모니터를 찾아
+// 그 work area를 꽉 채우게 창을 옮긴다. 외부 디스플레이가 없으면 primary 폴백.
+const placedOn = await app.evaluate(({ screen, BrowserWindow }) => {
+  const displays = screen.getAllDisplays()
+  const primary = screen.getPrimaryDisplay()
+  // "디스플레이 2" = primary가 아닌 외부 모니터(가상좌표 음수 x가 흔함).
+  const target = displays.find((d) => d.id !== primary.id) || primary
+  const win = BrowserWindow.getAllWindows()[0]
+  if (win) {
+    const wa = target.workArea
+    win.setBounds({ x: wa.x, y: wa.y, width: wa.width, height: wa.height })
+    win.show()
+  }
+  return {
+    id: target.id,
+    isPrimary: target.id === primary.id,
+    bounds: target.bounds,
+    scaleFactor: target.scaleFactor,
+    total: displays.length
+  }
+})
+console.log('placed window on display:', JSON.stringify(placedOn))
+
 const readBones = () => mainWindow.evaluate((names) => {
   const s = window.__apiaScene; if (!s) return null
   let mesh = null
