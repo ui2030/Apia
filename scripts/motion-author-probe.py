@@ -36,6 +36,8 @@ MOTION_SYSTEM = (
     "  moves. Frame 0 and 120 are equal (seamless loop start/return), but 30/60/90 are different.\n"
     "  If every keyframe of a bone is identical, that bone does nothing — avoid that.\n"
     "- Use 4-5 keys per moving bone (0, 30, 60, 90, 120).\n"
+    "- Make the movement CLEARLY VISIBLE, not tiny: a moving bone should change by about "
+    "0.3~0.6 rad between frame 0 and its peak (e.g. shoulder z 0.7->0.3). Avoid changes under 0.1.\n"
     "Examples (note how middle frames differ from 0):\n"
     '느긋이 좌우로 흔들 -> {"bones":{"上半身":[[0,[0,0,0]],[30,[0,0,0.06]],[60,[0,0,0]],'
     '[90,[0,0,-0.06]],[120,[0,0,0]]]}}\n'

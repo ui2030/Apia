@@ -28,7 +28,8 @@ const MOTION_LIBRARY = {
       'idle_hands_back',
       'idle_head_tilt',
       'idle_lean_in',
-      'idle_stretch_arms'
+      'idle_stretch_arms',
+      'idle_wave'
     ],
     calm: [
       'idle_breath_soft',
@@ -89,7 +90,8 @@ const ENGAGED_IDLE = new Set([
   'idle_ponder',
   'idle_look_around',
   'idle_look_around_soft',
-  'idle_lean_in'
+  'idle_lean_in',
+  'idle_wave'
 ])
 
 function randomPick(arr) {
