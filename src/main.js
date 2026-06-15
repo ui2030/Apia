@@ -28,6 +28,7 @@ import { createDirectorRunner, applyDirective, buildDirectorContext } from './be
 import { createActivityRunner } from './activityRunner.js'
 import { createPropManager } from './propManager.js'
 import { createNeedsManager } from './needsManager.js'
+import { createAdaptation } from './adaptationStore.js'
 import { resolveMotionAsset, resolveMmdMotionAsset } from './motionAssets.js'
 import {
   buildBoneRegistry,
@@ -220,6 +221,13 @@ if (typeof window !== 'undefined') {
   window.__walkTo = (minDistance = 1.4) => walkToRandomSpot({ minDistance })
   // 결정론적 직선 보행 — 보행/접지 진단(walk-check 등)이 정해진 경로로 검증.
   window.__walkToXZ = (x, z) => walkTo({ x, z })
+  // #1 적응 학습 진단 — 시간대 변조 계수·성숙도 확인. hour 인자로 특정 시간 테스트.
+  window.__adaptInfo = (hour = new Date().getHours()) => ({
+    maturity: +adaptation.maturity().toFixed(3),
+    hourBias: +adaptation.getHourBias(hour).toFixed(3),
+    serialized: adaptation.serialize(),
+  })
+  window.__recordInteractionAt = (hour) => adaptation.recordInteraction(hour)
   window.__clipFlags = () => ({
     vmd: currentModel?._vmdClipActive ?? null,
     vrma: currentModel?._vrmaClipActive ?? null,
@@ -292,8 +300,26 @@ function timeOfDayEnergy(hour = new Date().getHours()) {
 // 사용자가 읽기만 하는 동안 갱신 안 되는 것은 이 정의에서 정상.
 let lastInteractionAt = 0 // ms; 0 = 아직 대화 없음
 
+// #1 적응 학습 — 사용자의 하루 리듬을 누적해 시간대 활기를 사용자에 맞춘다.
+// localStorage 영속(렌더러). 데이터 쌓이기 전엔 중립이라 안전.
+const ADAPT_KEY = 'apia-adaptation'
+const adaptation = createAdaptation((() => {
+  try { const s = localStorage.getItem(ADAPT_KEY); return s ? JSON.parse(s) : null } catch { return null }
+})())
+let _adaptSaveAt = 0
+function saveAdaptation() {
+  try {
+    const now = Date.now()
+    if (now - _adaptSaveAt < 5000) return // 쓰기 스로틀
+    _adaptSaveAt = now
+    localStorage.setItem(ADAPT_KEY, JSON.stringify(adaptation.serialize()))
+  } catch {}
+}
+
 function markInteraction() {
   lastInteractionAt = Date.now()
+  // #1 — 이 시간대에 사용자와 함께함을 학습(자율 행동 활기 변조에 반영).
+  try { adaptation.recordInteraction(new Date().getHours()); saveAdaptation() } catch {}
   // J단계 — 사용자와의 상호작용(발화·감정 반응)은 진행 중인 자율 활동보다
   // 우선한다. 자율 활동은 중단하되, 호출 응답(priority)은 보존한다(force=false).
   interruptActivity()
@@ -324,7 +350,9 @@ function getAutoBehaviorConfig() {
 
   // base는 성격 로직이 재사용하므로 절대 변형 말고 새 객체로 변조 반환.
   // 1) 시간대 인지(활기 e): e↑(아침)=walk↑·간격 짧게, e↓(밤)=제자리/정적↑·느긋.
-  const e = timeOfDayEnergy()
+  //    #1 적응: 학습된 하루 리듬으로 변조(자주 함께한 시간대↑, 드문 시간대↓).
+  //    데이터 부족 시 getHourBias=1.0이라 기존 규칙 그대로(안전).
+  const e = timeOfDayEnergy() * adaptation.getHourBias(new Date().getHours())
   let walkShare = baseWalk * e
   let inPlaceIdleBias = baseIdle / clamp(e, 0.6, 1.3)
 
