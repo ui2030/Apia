@@ -51,15 +51,24 @@ def test_elbow_clamp():
     assert not P._metrics({"右ひじ": bones2["右ひじ"]})["safe"]  # 원본은 unsafe
 
 
-def test_arm_z_sign_clamp():
-    # 좌팔 z는 부호(음수) 너머(양수)로 못 넘어감 = 팔 뒤집힘 방지.
-    bones = {"左腕": [[0, [0, 0, -0.3]], [60, [0, 0, 0.5]], [120, [0, 0, -0.3]]]}
+def test_arm_z_symmetric_magnitude_clamp():
+    # rest=0 + hang 보정이라 어깨 z는 양방향 모두 유효(왼팔 +z/오른팔 -z=들기).
+    # 부호로 막지 않고 크기만 [-1.4,1.4]로 제한 — 들기 방향이 살아있어야 한다.
+    # 왼팔 +z(들기)는 보존되고, 과한 값만 1.4로 잘림.
+    bones = {"左腕": [[0, [0, 0, 0]], [60, [0, 0, 0.5]], [120, [0, 0, 0]]]}
     boosted, _ = P.boost_amplitude(bones)
-    zs = [rot[2] for _f, rot in boosted["左腕"]]
-    assert max(zs) <= 0.0 + 1e-9, zs
-    bones_r = {"右腕": [[0, [0, 0, 0.3]], [60, [0, 0, -0.5]], [120, [0, 0, 0.3]]]}
-    boosted_r, _ = P.boost_amplitude(bones_r)
-    assert min(rot[2] for _f, rot in boosted_r["右腕"]) >= 0.0 - 1e-9
+    assert max(rot[2] for _f, rot in boosted["左腕"]) > 0.0  # 들기 방향 안 막힘
+    assert max(abs(rot[2]) for _f, rot in boosted["左腕"]) <= P.ARM_Z_MAX + 1e-9
+    # 오른팔 -z(들기)도 보존, 과한 음수는 -1.4로 잘림.
+    big = {"右腕": [[0, [0, 0, 0]], [30, [0, 0, -3.0]], [60, [0, 0, -0.5]], [120, [0, 0, 0]]]}
+    boosted_r, _ = P.boost_amplitude(big)
+    zs = [rot[2] for _f, rot in boosted_r["右腕"]]
+    assert min(zs) < 0.0  # 들기(음수) 방향 살아있음
+    assert min(zs) >= -P.ARM_Z_MAX - 1e-9  # 크기 클램프
+    # 왼팔 양수 과대값도 +1.4로 포화(대칭).
+    big_l = {"左腕": [[0, [0, 0, 0]], [30, [0, 0, 3.0]], [60, [0, 0, 0.5]], [120, [0, 0, 0]]]}
+    boosted_l, _ = P.boost_amplitude(big_l)
+    assert max(rot[2] for _f, rot in boosted_l["左腕"]) <= P.ARM_Z_MAX + 1e-9
 
 
 def test_unsafe_shoulder_elbow_combo():

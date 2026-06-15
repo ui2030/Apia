@@ -37,32 +37,35 @@ MOTION_SYSTEM = (
     "writing BONE ROTATION keyframes. Output ONLY strict JSON, no prose, no markdown.\n"
     'Schema: {"bones": {"<bone>": [[frame, [rx, ry, rz]], ...], ...}}\n'
     "Rules:\n"
-    "- Rotations are EULER radians relative to rest pose. Keep values small.\n"
+    "- Rotations are EULER radians relative to the REST pose. REST = all zeros [0,0,0] = natural\n"
+    "  standing with arms hanging down. So frame 0 and frame 120 MUST be [0,0,0] for every bone.\n"
     "- Allowed bones ONLY: 上半身 (upper torso), 上半身2 (chest), 左腕/右腕 (L/R shoulder), "
     "左ひじ/右ひじ (L/R elbow). NEVER use head/neck/eye/leg/finger bones.\n"
-    "- 左腕/右腕: z raises/lowers the arm (left rest z ~ -0.7, right ~ +0.7; toward 0 = raised out). "
-    "x = forward/back swing.\n"
-    "- 左ひじ/右ひじ: y bends the forearm in (left negative, right positive).\n"
+    "- 左腕/右腕 z = raise the arm OUTWARD/UP. IMPORTANT SIGN: LEFT arm raises with z POSITIVE "
+    "(+), RIGHT arm raises with z NEGATIVE (-). Bigger magnitude = higher (about +0.5 = arm out "
+    "to the side, +0.9 = high). To raise BOTH arms: 左腕 z>0 and 右腕 z<0 (symmetric). "
+    "x = forward/back swing. Do NOT use the wrong sign or the arm stays down.\n"
+    "- 左ひじ/右ひじ y = bend the forearm in (LEFT elbow y NEGATIVE, RIGHT elbow y POSITIVE).\n"
     "- SAFETY: keep |elbow y| <= 1.35 (near 1.57=pi/2 the forearm flips/breaks). "
-    "Do NOT combine big shoulder lift (|z|>0.7) with a big elbow bend.\n"
+    "Do NOT combine a big shoulder raise (|z|>0.7) with a big elbow bend on the same arm.\n"
     "- frames 0..120 at 30fps (4초 루프). It is a MOVEMENT over time, NOT a frozen pose.\n"
-    "- CRITICAL: the MIDDLE keyframes (30, 60, 90) MUST DIFFER from frame 0 so the body actually\n"
-    "  moves. Frame 0 and 120 are equal (seamless loop start/return), but 30/60/90 are different.\n"
+    "- CRITICAL: the MIDDLE keyframes (30, 60, 90) MUST DIFFER from frame 0=[0,0,0] so the body\n"
+    "  actually moves. Frame 0 and 120 are both [0,0,0] (seamless rest), 30/60/90 are the gesture.\n"
     "  If every keyframe of a bone is identical, that bone does nothing — avoid that.\n"
     "- Use 4-5 keys per moving bone (0, 30, 60, 90, 120).\n"
     "- Make the movement CLEARLY VISIBLE, not tiny. The MAIN moving bone should reach a PEAK "
-    "single-axis change of about 0.4~0.5 rad from frame 0 (e.g. shoulder z 0.7->0.25, elbow y "
-    "0->0.5). A subtle 0.1 motion reads as 'barely moving' and will be rejected. Be bold.\n"
+    "single-axis change of about 0.4~0.6 rad from rest (e.g. 左腕 z 0->+0.5, 右ひじ y 0->+0.5). "
+    "A subtle 0.1 motion reads as 'barely moving' and will be rejected. Be bold.\n"
     "- Build to the peak in the MIDDLE of the loop (around frame 60), then ease back — not a "
-    "flat hold. The peak frame should be the most extreme; 0 and 120 are the calm return.\n"
-    "Examples (note the clear peak near frame 60 and how middle frames differ from 0):\n"
-    '양팔을 시원하게 들었다 내림 -> {"bones":{"左腕":[[0,[0,0,-0.7]],[30,[0,0,-0.45]],[60,[0,0,-0.2]],'
-    '[90,[0,0,-0.45]],[120,[0,0,-0.7]]],"右腕":[[0,[0,0,0.7]],[30,[0,0,0.45]],[60,[0,0,0.2]],'
-    '[90,[0,0,0.45]],[120,[0,0,0.7]]]}}\n'
-    '한 손을 크게 흔들어 인사 -> {"bones":{"右腕":[[0,[0,0,0.7]],[30,[0,0,0.35]],[60,[0,0.2,0.2]],'
-    '[90,[0,0.4,0.3]],[120,[0,0,0.7]]],"右ひじ":[[0,[0,0,0]],[30,[0,0.3,0]],[60,[0,0.6,0]],'
+    "flat hold. The peak frame is the most extreme; 0 and 120 are the calm rest return.\n"
+    "Examples (rest=[0,0,0] at 0/120, gesture peaks near frame 60, correct raise signs):\n"
+    '양팔을 시원하게 위로 들었다 내림 -> {"bones":{"左腕":[[0,[0,0,0]],[30,[0,0,0.35]],[60,[0,0,0.6]],'
+    '[90,[0,0,0.35]],[120,[0,0,0]]],"右腕":[[0,[0,0,0]],[30,[0,0,-0.35]],[60,[0,0,-0.6]],'
+    '[90,[0,0,-0.35]],[120,[0,0,0]]]}}\n'
+    '오른손을 크게 흔들어 인사 -> {"bones":{"右腕":[[0,[0,0,0]],[30,[0,0,-0.3]],[60,[0,0,-0.5]],'
+    '[90,[0,0,-0.35]],[120,[0,0,0]]],"右ひじ":[[0,[0,0,0]],[30,[0,0.3,0]],[60,[0,0.6,0]],'
     '[90,[0,0.3,0]],[120,[0,0,0]]]}}\n'
-    '생각하듯 한 손 까딱 -> {"bones":{"右ひじ":[[0,[0,0.1,0]],[40,[0,0.55,0]],[80,[0,0.35,0]],[120,[0,0.1,0]]]}}'
+    '생각하듯 한 손 들어 까딱 -> {"bones":{"右ひじ":[[0,[0,0,0]],[40,[0,0.5,0]],[80,[0,0.3,0]],[120,[0,0,0]]]}}'
 )
 
 
@@ -136,15 +139,15 @@ def boost_amplitude(bones, target=TARGET_PEAK):
 
 
 def _clamp_bone(bone, rot):
-    """본별 안전 클램프(부호 인지). 좌팔 z는 [-1.4,0], 우팔 z는 [0,1.4]로 — boost가
-    어깨를 rest 부호 너머로 밀어 팔이 뒤집히는 걸 막는다(좌 rest -0.7/우 +0.7)."""
+    """본별 안전 크기 클램프. rest=0 기준 + 런타임 hang 보정이라 어깨 z는 양방향 모두
+    유효하다(왼팔 +z/오른팔 -z가 '들기'). 그래서 부호로 막지 않고 크기만 [-1.4,1.4]로
+    제한(과한 overhead 방지). 변형(큰 어깨+큰 팔꿈치)은 _metrics 콤보검사가 잡는다.
+    팔꿈치 y는 pi/2 부근 뒤집힘 방지로 |y|<=1.35."""
     r = [float(v) for v in rot]
     if bone in ELBOW_BONES:
         r[1] = max(-ELBOW_MAX, min(ELBOW_MAX, r[1]))
-    elif bone == L_ARM:
-        r[2] = max(-ARM_Z_MAX, min(0.0, r[2]))
-    elif bone == R_ARM:
-        r[2] = max(0.0, min(ARM_Z_MAX, r[2]))
+    elif bone in (L_ARM, R_ARM):
+        r[2] = max(-ARM_Z_MAX, min(ARM_Z_MAX, r[2]))
     return r
 
 
