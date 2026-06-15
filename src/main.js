@@ -1826,6 +1826,44 @@ initWorld({
     worldManager = null
   })
 
+// 5단계 — 직접 상호작용 반응. 쓰다듬기=기쁨/수줍, 잡기(드래그)=놀람. 명시 모션
+// 선택(pickReactMotion 감정 보장 안 됨, Codex). 터치는 markInteraction(recency·자율
+// 억제)+onUserEngaged(4단계 보상·페이스) 둘 다 갱신. 쿨다운으로 과반응 억제.
+let _lastPetAt = 0
+let _lastTouchReaction = null // 디버그/검증용(__touchInfo)
+function petReaction() {
+  // 터치 입력 자체는 항상 recency·보상·페이스 갱신(쿨다운은 반응 모션만 억제, Codex).
+  markInteraction()
+  onUserEngaged()
+  const now = Date.now()
+  if (now - _lastPetAt < 2500) return
+  _lastPetAt = now
+  setEmotion('happy')
+  applyEmotion('happy')
+  const name = motionManager.getPersonality?.() === 'shy' ? 'react_shy' : 'react_happy'
+  playMotion({ category: 'react', name, intensity: 0.9 })
+  _lastTouchReaction = { kind: 'pet', emotion: 'happy', motion: name }
+}
+let _lastGrabAt = 0
+function grabReaction() {
+  markInteraction()
+  onUserEngaged()
+  const now = Date.now()
+  if (now - _lastGrabAt < 1500) return
+  _lastGrabAt = now
+  setEmotion('surprised')
+  applyEmotion('surprised')
+  const name = motionManager.getPersonality?.() === 'active' ? 'react_surprised' : 'react_small_surprised'
+  playMotion({ category: 'react', name, intensity: 1.0 })
+  _lastTouchReaction = { kind: 'grab', emotion: 'surprised', motion: name }
+}
+if (typeof window !== 'undefined') {
+  // 5단계 디버그 — 쿨다운 무시하고 반응 트리거, 결과 스냅샷 반환(라이브 검증).
+  window.__pet = () => { _lastPetAt = 0; petReaction(); return _lastTouchReaction }
+  window.__grab = () => { _lastGrabAt = 0; grabReaction(); return _lastTouchReaction }
+  window.__touchInfo = () => _lastTouchReaction
+}
+
 initChat({
   showBubble,
   startSpeaking,
@@ -1845,7 +1883,9 @@ initChat({
   },
   // 호출 응답 = 최우선 인터럽트 — 사용자가 메시지를 보내면(부르면) 하던 일을 멈추고
   // 컴퓨터 앞으로 와 앉아 "불렀어?". 성격이 타이밍을 표현.
-  onUserCall: () => { onUserEngaged(); respondToCall() } // 4단계: 사용자 입력=제스처 보상 신호
+  onUserCall: () => { onUserEngaged(); respondToCall() }, // 4단계: 사용자 입력=제스처 보상 신호
+  onPet: () => petReaction(),   // 5단계: 쓰다듬기 반응
+  onGrab: () => grabReaction()  // 5단계: 잡기/드래그 반응
 })
 
 // Step 3 — click on the character to open the chat panel.

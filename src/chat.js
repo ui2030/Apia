@@ -2,6 +2,7 @@
 import { setState, getState } from './characterController.js'
 import { setEmotion, requestFaceCamera } from './characterController.js'
 import { analyzeWav, playTimeline, stopTimeline } from './lipsyncRuntime.js'
+import { createTouchClassifier } from './touchInteraction.js'
 
 // Step 3: character raycaster injected by main.js. null = wallpaper mode
 // active (or just no character loaded) — click-through manager skips the
@@ -12,7 +13,7 @@ export function setCharacterRaycaster(fn) {
   _characterRaycaster = typeof fn === 'function' ? fn : null
 }
 let _showBubble, _startSpeaking, _stopSpeaking, _applyEmotion
-let _getTalkMotion, _getIdleMotion, _onUserCall
+let _getTalkMotion, _getIdleMotion, _onUserCall, _onPet, _onGrab
 
 const state = {
   chatOpen: false,
@@ -33,7 +34,9 @@ export function initChat({
   applyEmotion,
   getTalkMotion,
   getIdleMotion,
-  onUserCall
+  onUserCall,
+  onPet,
+  onGrab
 }) {
   _showBubble = showBubble
   _startSpeaking = startSpeaking
@@ -42,6 +45,8 @@ export function initChat({
   _getTalkMotion = getTalkMotion
   _getIdleMotion = getIdleMotion
   _onUserCall = onUserCall
+  _onPet = onPet
+  _onGrab = onGrab
 
   setupUI()
   startClickThroughManager()
@@ -118,24 +123,47 @@ function startClickThroughManager() {
     mouseY = e.clientY
   }, { passive: true })
 
-  // Click on the character → toggle the chat panel (same as the chat
-  // button). Only fires when raycast hit AND a raycaster is installed
-  // (which main.js refuses to install when wallpaper mode is on).
+  // 5단계 — 캐릭터 직접 상호작용(클릭·쓰다듬기·드래그). 포인터 시퀀스를 순수
+  // 분류기에 흘려 tap/pet/grab으로 배타 분류한다. tap = 기존 채팅 토글(계약 유지),
+  // pet/grab = main 주입 반응. 벽지모드는 _characterRaycaster=null이라 dormant(클릭과
+  // 동일 제약). raycast는 제스처 중에만 수행해 비용 제한.
+  let gestureActive = false
+  const onCharAt = (x, y) => !!_characterRaycaster && _characterRaycaster(x, y) === true
+  const touch = createTouchClassifier({
+    onTap: () => { document.getElementById('chat-toggle')?.click() }, // 기존 토글 계약 유지
+    onPet: () => { if (typeof _onPet === 'function') _onPet() },
+    onGrab: () => { if (typeof _onGrab === 'function') _onGrab() }
+  })
+
   window.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return // primary button only — right-click is OS
     if (!_characterRaycaster) return
-    if (!_characterRaycaster(e.clientX, e.clientY)) return
-    const toggle = document.getElementById('chat-toggle')
-    toggle?.click()
+    if (!onCharAt(e.clientX, e.clientY)) return
+    gestureActive = true // Codex MUST-FIX: 제스처 동안 click-through 복구 잠금
+    touch.feed({ type: 'down', x: e.clientX, y: e.clientY, t: e.timeStamp, onChar: true })
   })
+  window.addEventListener('pointermove', (e) => {
+    if (!gestureActive) return
+    touch.feed({ type: 'move', x: e.clientX, y: e.clientY, t: e.timeStamp, onChar: onCharAt(e.clientX, e.clientY) })
+  })
+  const endGesture = (e, type) => {
+    if (!gestureActive) return
+    touch.feed({ type, x: e.clientX ?? mouseX ?? 0, y: e.clientY ?? mouseY ?? 0, t: e.timeStamp ?? 0, onChar: false })
+    gestureActive = false
+  }
+  window.addEventListener('pointerup', (e) => endGesture(e, 'up'))
+  window.addEventListener('pointercancel', (e) => endGesture(e, 'cancel'))
+  window.addEventListener('blur', () => { if (gestureActive) { touch.feed({ type: 'cancel', x: 0, y: 0, t: 0, onChar: false }); gestureActive = false } })
 
   function characterHover() {
     if (!_characterRaycaster || mouseX == null) return false
     return _characterRaycaster(mouseX, mouseY) === true
   }
+  // 제스처 진행 중엔 항상 캡처 유지(드래그가 캐릭터를 벗어나도 move/up 유실 방지).
+  function gestureHolding() { return gestureActive }
 
   function poll() {
-    const hovered = document.querySelector(
+    const hovered = gestureHolding() || document.querySelector(
       '#chat-toggle:hover, #settings-btn:hover, ' +
       '#chat-panel.visible:hover, .world-object:hover'
     ) || characterHover()
@@ -149,7 +177,7 @@ function startClickThroughManager() {
       if (!restoreTimer) {
         restoreTimer = setTimeout(() => {
           restoreTimer = null
-          const stillHovered = document.querySelector(
+          const stillHovered = gestureHolding() || document.querySelector(
             '#chat-toggle:hover, #settings-btn:hover, ' +
             '#chat-panel.visible:hover, .world-object:hover'
           ) || characterHover()
