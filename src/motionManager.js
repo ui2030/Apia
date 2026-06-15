@@ -27,7 +27,8 @@ const MOTION_LIBRARY = {
       'idle_hand_on_hip',
       'idle_hands_back',
       'idle_head_tilt',
-      'idle_lean_in'
+      'idle_lean_in',
+      'idle_stretch_arms'
     ],
     calm: [
       'idle_breath_soft',

@@ -46,37 +46,61 @@ MOTION_SYSTEM = (
 )
 
 
-async def main():
-    desc = sys.argv[1] if len(sys.argv) > 1 else "수줍게 양손을 배 앞에 모으고 몸을 살짝 비트는 차분한 idle"
-    svc = ClaudeService()
-    mode = await svc.ensure_mode("local")
-    print(f"[probe] mode={mode}  desc={desc!r}", flush=True)
-    if mode != "local":
-        print("[probe] local 모드 아님 — 중단", flush=True)
-        return
-    bones = None
+DEFAULT_BATCH = [
+    "수줍게 양손을 배 앞에 모으는 차분한 idle",
+    "양팔을 천천히 들어올렸다 내리며 기지개 켜듯",
+    "느긋이 좌우로 몸을 살짝 흔드는 idle",
+]
+
+
+async def gen_validated(svc, desc):
+    """한 동작 묘사 → 키프레임 저작 + 동적/안전 검증(정적이면 1회 재시도).
+    반환: (bones|None, metrics|None, accepted:bool)."""
+    best = None
     for attempt in range(2):
         nudge = "" if attempt == 0 else (
             "\n(이전 출력이 모든 프레임이 같아 움직임이 없었다. 중간 프레임 30/60/90을 "
             "frame 0과 다르게 만들어 실제로 움직이게 하라.)")
         raw = await svc._summarize_local(MOTION_SYSTEM, f"Motion: {desc}\nJSON:" + nudge)
         b = _parse_bones(raw)
-        print(f"=== attempt {attempt + 1} ===\n{raw}", flush=True)
         if b is None:
-            print("[verdict] parse FAIL", flush=True); continue
-        metrics = _metrics(b)
-        print(f"[verdict] bones={list(b)} dynamic={metrics['dynamic']} "
-              f"maxVar={metrics['maxVar']:.3f} safe={metrics['safe']} "
-              f"badBones={metrics['bad']}", flush=True)
-        bones = b
-        if metrics['dynamic'] and metrics['safe']:
-            break  # 좋은 결과 — 재시도 불필요
-    if not isinstance(bones, dict):
-        print("[probe] 사용 가능한 결과 없음", flush=True); return
-    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_ai_motion_out.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"clips": {"idle/_ai_authored.vmd": bones}}, f, ensure_ascii=False, indent=2)
-    print("wrote", out_path, flush=True)
+            continue
+        m = _metrics(b)
+        best = (b, m)
+        if m["dynamic"] and m["safe"]:
+            return b, m, True
+    if best is None:
+        return None, None, False
+    return best[0], best[1], False  # 마지막 후보(부적합) — 참고용
+
+
+async def main():
+    descs = sys.argv[1:] or DEFAULT_BATCH
+    svc = ClaudeService()
+    mode = await svc.ensure_mode("local")
+    print(f"[gen] mode={mode}  motions={len(descs)}", flush=True)
+    if mode != "local":
+        print("[gen] local 모드 아님 — 중단", flush=True)
+        return
+    clips, meta = {}, {}
+    for i, desc in enumerate(descs):
+        bones, m, ok = await gen_validated(svc, desc)
+        tag = "OK" if ok else "SKIP"
+        info = (f"dynamic={m['dynamic']} maxVar={m['maxVar']:.2f} safe={m['safe']} bad={m['bad']}"
+                if m else "parse-fail")
+        print(f"[{tag}] {desc!r} -> {info}", flush=True)
+        if ok:
+            name = f"ai_{i:02d}"
+            clips[f"idle/{name}.vmd"] = bones
+            meta[f"idle_{name}"] = {"desc": desc, "bones": list(bones), "maxVar": round(m["maxVar"], 3)}
+    if not clips:
+        print("[gen] 채택된 모션 없음", flush=True)
+        return
+    base = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(base, "_ai_motion_batch.json"), "w", encoding="utf-8") as f:
+        json.dump({"clips": clips, "_meta": meta}, f, ensure_ascii=False, indent=2)
+    print(f"[gen] 채택 {len(clips)}개 -> _ai_motion_batch.json (베이크: gen-vmd --from-json)", flush=True)
+    print(f"[gen] 후보 모션명: {list(meta)}", flush=True)
 
 
 def _parse_bones(raw):
