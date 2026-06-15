@@ -18,7 +18,9 @@ VMD 포맷 (리틀엔디안, Codex 사전검토 반영):
 
 사용:
   python scripts/gen-vmd.py            # 모든 클립을 매니페스트 경로로 생성
-  python scripts/gen-vmd.py --dump <file.vmd>   # 파싱 검증(헤더/본프레임 덤프)
+  python scripts/gen-vmd.py --dump <file.vmd>       # 파싱 검증(헤더/본프레임 덤프)
+  python scripts/gen-vmd.py --from-json <file.json> # 외부(AI/도구) 키프레임 JSON→VMD
+      # JSON: {"clips":{"idle/foo.vmd":{"左腕":[[frame,[rx,ry,rz]],...]}}} — #2 파이프라인 입구
 
 상태/한계 (Codex 검토 반영, 2026-06-14):
   - 검증됨: 팔 제스처 talk 클립이 kisaki(PMX)에서 자연스럽게 재생(라이브 확인).
@@ -282,9 +284,50 @@ def dump(path):
     print(f"total bytes: {len(data)}, parsed to: {off}")
 
 
+# #2 AI 모션 파이프라인 입구 — 외부(LLM/도구)가 만든 키프레임 JSON을 VMD로 굽는다.
+# 무거운 SMPL→PMX 리타겟 없이, "AI가 PMX 본 회전 키프레임을 직접 저작 → 여기서
+# 베이크 → 자동 등록"으로 모션을 자급한다([[apia-motion-supply-fit]]).
+# JSON 형식: {"clips": {"idle/foo.vmd": {"左腕": [[frame,[rx,ry,rz]], ...], ...}, ...}}
+# euler(rad), build_frames/write_vmd가 리스트도 그대로 처리.
+ELBOW_BONES = {"左ひじ", "右ひじ", "左ヒジ", "右ヒジ", "左肘", "右肘"}
+ARM_BONES = {"左腕", "右腕"}
+
+def validate_clip(rel, clip):
+    """변형 함정 경고(직접 겪은 것): 팔꿈치 |회전|이 π/2 부근이면 짐벌/뒤집힘 위험,
+    어깨 큰 들기(|z|>0.7)+팔꿈치 큰 굽힘 조합은 전완이 몸에 꽂힐 수 있음. 하드 실패는
+    아니고 경고만 — 저작자가 눈검증 다각도로 확인하도록."""
+    warns = []
+    arm_lift = {}
+    for bone, keys in clip.items():
+        for _f, rot in keys:
+            mx = max(abs(float(v)) for v in rot)
+            if bone in ELBOW_BONES and 1.45 <= mx <= 1.70:
+                warns.append(f"{bone} 회전 {mx:.2f} (pi/2 부근) - 짐벌/뒤집힘 위험(값 조정 권장)")
+            if bone in ARM_BONES:
+                arm_lift[bone] = max(arm_lift.get(bone, 0), abs(float(rot[2])))
+    for bone in ARM_BONES & set(clip):
+        if arm_lift.get(bone, 0) > 0.7:
+            warns.append(f"{bone} 어깨 들기 z>0.7 - 큰 팔꿈치 굽힘과 겹치면 전완이 몸에 꽂힐 수 있음(다각도 검수)")
+    for w in dict.fromkeys(warns):
+        print(f"  [warn] {rel}: {w}")
+
+
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "--dump":
         dump(sys.argv[2])
+        return
+    if len(sys.argv) >= 3 and sys.argv[1] == "--from-json":
+        import json
+        with open(sys.argv[2], "r", encoding="utf-8") as f:
+            data = json.load(f)
+        clips = data.get("clips", data) if isinstance(data, dict) else {}
+        for rel, clip in clips.items():
+            validate_clip(rel, clip)
+            path = os.path.join(VMD_DIR, rel.replace("/", os.sep))
+            frames = build_frames({b: [(int(fr), tuple(float(v) for v in rot)) for fr, rot in keys]
+                                   for b, keys in clip.items()})
+            write_vmd(path, frames)
+            print(f"wrote {rel}  ({len(frames)} bone frames) [from json]")
         return
     for rel, clip in CLIPS.items():
         path = os.path.join(VMD_DIR, rel.replace("/", os.sep))
