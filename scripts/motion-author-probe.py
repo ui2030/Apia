@@ -31,13 +31,18 @@ MOTION_SYSTEM = (
     "- 左ひじ/右ひじ: y bends the forearm in (left negative, right positive).\n"
     "- SAFETY: keep |elbow y| <= 1.35 (near 1.57=pi/2 the forearm flips/breaks). "
     "Do NOT combine big shoulder lift (|z|>0.7) with a big elbow bend.\n"
-    "- frames 0..120. It MUST loop: keyframe at frame 120 equals frame 0. 2-4 keys per bone.\n"
-    "Examples:\n"
-    '손을 배 앞에 모음 -> {"bones":{"左腕":[[0,[-0.12,0.11,-0.64]],[120,[-0.12,0.11,-0.64]]],'
-    '"右腕":[[0,[-0.12,-0.11,0.64]],[120,[-0.12,-0.11,0.64]]],'
-    '"左ひじ":[[0,[0,-0.8,0]],[120,[0,-0.8,0]]],"右ひじ":[[0,[0,0.8,0]],[120,[0,0.8,0]]]}}\n'
-    '느긋이 좌우로 흔들 -> {"bones":{"上半身":[[0,[0,0,0]],[30,[0,0,0.05]],[60,[0,0,0]],'
-    '[90,[0,0,-0.05]],[120,[0,0,0]]]}}'
+    "- frames 0..120 at 30fps (4초 루프). It is a MOVEMENT over time, NOT a frozen pose.\n"
+    "- CRITICAL: the MIDDLE keyframes (30, 60, 90) MUST DIFFER from frame 0 so the body actually\n"
+    "  moves. Frame 0 and 120 are equal (seamless loop start/return), but 30/60/90 are different.\n"
+    "  If every keyframe of a bone is identical, that bone does nothing — avoid that.\n"
+    "- Use 4-5 keys per moving bone (0, 30, 60, 90, 120).\n"
+    "Examples (note how middle frames differ from 0):\n"
+    '느긋이 좌우로 흔들 -> {"bones":{"上半身":[[0,[0,0,0]],[30,[0,0,0.06]],[60,[0,0,0]],'
+    '[90,[0,0,-0.06]],[120,[0,0,0]]]}}\n'
+    '양팔을 천천히 들었다 내림 -> {"bones":{"左腕":[[0,[0,0,-0.7]],[30,[0,0,-0.4]],[60,[0,0,-0.2]],'
+    '[90,[0,0,-0.45]],[120,[0,0,-0.7]]],"右腕":[[0,[0,0,0.7]],[30,[0,0,0.4]],[60,[0,0,0.2]],'
+    '[90,[0,0,0.45]],[120,[0,0,0.7]]]}}\n'
+    '생각하듯 한 손 까딱 -> {"bones":{"右ひじ":[[0,[0,0.2,0]],[40,[0,0.6,0]],[80,[0,0.4,0]],[120,[0,0.2,0]]]}}'
 )
 
 
@@ -49,26 +54,59 @@ async def main():
     if mode != "local":
         print("[probe] local 모드 아님 — 중단", flush=True)
         return
-    raw = await svc._summarize_local(MOTION_SYSTEM, f"Motion: {desc}\nJSON:")
-    print("=== RAW OUTPUT ===", flush=True)
-    print(raw, flush=True)
-    print("=== PARSE CHECK ===", flush=True)
+    bones = None
+    for attempt in range(2):
+        nudge = "" if attempt == 0 else (
+            "\n(이전 출력이 모든 프레임이 같아 움직임이 없었다. 중간 프레임 30/60/90을 "
+            "frame 0과 다르게 만들어 실제로 움직이게 하라.)")
+        raw = await svc._summarize_local(MOTION_SYSTEM, f"Motion: {desc}\nJSON:" + nudge)
+        b = _parse_bones(raw)
+        print(f"=== attempt {attempt + 1} ===\n{raw}", flush=True)
+        if b is None:
+            print("[verdict] parse FAIL", flush=True); continue
+        metrics = _metrics(b)
+        print(f"[verdict] bones={list(b)} dynamic={metrics['dynamic']} "
+              f"maxVar={metrics['maxVar']:.3f} safe={metrics['safe']} "
+              f"badBones={metrics['bad']}", flush=True)
+        bones = b
+        if metrics['dynamic'] and metrics['safe']:
+            break  # 좋은 결과 — 재시도 불필요
+    if not isinstance(bones, dict):
+        print("[probe] 사용 가능한 결과 없음", flush=True); return
+    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_ai_motion_out.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"clips": {"idle/_ai_authored.vmd": bones}}, f, ensure_ascii=False, indent=2)
+    print("wrote", out_path, flush=True)
+
+
+def _parse_bones(raw):
     try:
-        # JSON-in-prose 대비 첫 { ~ 마지막 } 추출
         s, e = raw.find("{"), raw.rfind("}")
         obj = json.loads(raw[s:e + 1]) if s >= 0 and e > s else None
         bones = (obj or {}).get("bones", obj)
-        if not isinstance(bones, dict):
-            print("parsed bones: FAIL")
-            return
-        print("parsed bones:", list(bones.keys()))
-        # gen-vmd --from-json 형식으로 저장(베이크용).
-        out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_ai_motion_out.json")
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump({"clips": {"idle/_ai_authored.vmd": bones}}, f, ensure_ascii=False, indent=2)
-        print("wrote", out_path)
-    except Exception as err:
-        print("parse FAIL:", err)
+        return bones if isinstance(bones, dict) else None
+    except Exception:
+        return None
+
+
+def _metrics(bones):
+    """동적성(키프레임이 변하나)·안전(팔꿈치 pi/2 회피) 자동 판정."""
+    elbows = {"左ひじ", "右ひじ", "左ヒジ", "右ヒジ", "左肘", "右肘"}
+    max_var = 0.0
+    bad = []
+    for bone, keys in bones.items():
+        try:
+            axes = list(zip(*[[float(v) for v in rot] for _f, rot in keys]))
+        except Exception:
+            bad.append(f"{bone}:형식")
+            continue
+        for ax in axes:
+            max_var = max(max_var, max(ax) - min(ax))
+        if bone in elbows:
+            for _f, rot in keys:
+                if 1.45 <= abs(float(rot[1])) <= 1.70:
+                    bad.append(f"{bone}:pi/2")
+    return {"dynamic": max_var >= 0.08, "maxVar": max_var, "safe": len(bad) == 0, "bad": bad}
 
 
 if __name__ == "__main__":
