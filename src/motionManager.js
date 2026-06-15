@@ -17,7 +17,8 @@ const MOTION_LIBRARY = {
       'idle_small_fidget',
       'idle_hands_clasped',
       'idle_ponder',
-      'idle_head_tilt_soft'
+      'idle_head_tilt_soft',
+      'idle_sway_relax'
     ],
     active: [
       'idle_shift_weight',
@@ -25,7 +26,8 @@ const MOTION_LIBRARY = {
       'idle_breath_lively',
       'idle_hand_on_hip',
       'idle_hands_back',
-      'idle_head_tilt'
+      'idle_head_tilt',
+      'idle_lean_in'
     ],
     calm: [
       'idle_breath_soft',
@@ -33,7 +35,9 @@ const MOTION_LIBRARY = {
       'idle_look_around_soft',
       'idle_arms_crossed',
       'idle_relaxed',
-      'idle_head_tilt_soft'
+      'idle_head_tilt_soft',
+      'idle_lean_in',
+      'idle_sway_relax'
     ]
   },
 
@@ -83,7 +87,8 @@ const ENGAGED_IDLE = new Set([
   'idle_hands_clasped',
   'idle_ponder',
   'idle_look_around',
-  'idle_look_around_soft'
+  'idle_look_around_soft',
+  'idle_lean_in'
 ])
 
 function randomPick(arr) {
