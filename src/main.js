@@ -225,9 +225,15 @@ if (typeof window !== 'undefined') {
   window.__adaptInfo = (hour = new Date().getHours()) => ({
     maturity: +adaptation.maturity().toFixed(3),
     hourBias: +adaptation.getHourBias(hour).toFixed(3),
+    // 4단계 — 제스처 선호·페이스 학습 상태(라이브 검증용).
+    gestureBias: (name) => +adaptation.getGestureBias(name).toFixed(3),
+    paceBias: adaptation.getPaceBias(),
     serialized: adaptation.serialize(),
   })
   window.__recordInteractionAt = (hour) => adaptation.recordInteraction(hour)
+  // 4단계 디버그 — 제스처 보상/페이스 직접 주입(하니스·수동 검증).
+  window.__rewardGesture = (name, r) => { adaptation.rewardGesture(name, r); saveAdaptation() }
+  window.__recordPace = (engaged) => { adaptation.recordPace(!!engaged); saveAdaptation() }
   window.__clipFlags = () => ({
     vmd: currentModel?._vmdClipActive ?? null,
     vrma: currentModel?._vrmaClipActive ?? null,
@@ -307,13 +313,35 @@ const adaptation = createAdaptation((() => {
   try { const s = localStorage.getItem(ADAPT_KEY); return s ? JSON.parse(s) : null } catch { return null }
 })())
 let _adaptSaveAt = 0
-function saveAdaptation() {
+function saveAdaptation(force = false) {
   try {
     const now = Date.now()
-    if (now - _adaptSaveAt < 5000) return // 쓰기 스로틀
+    if (!force && now - _adaptSaveAt < 5000) return // 쓰기 스로틀(force면 즉시=유실 방지)
     _adaptSaveAt = now
     localStorage.setItem(ADAPT_KEY, JSON.stringify(adaptation.serialize()))
   } catch {}
+}
+
+// 4단계 적응 — 제스처 선호. 자율 idle 제스처가 *실제로 재생*된 것만 기록(Codex
+// MUST-FIX: pickIdleMotion 호출이 아니라 playMotion된 자율 제스처만). 일정 창 내
+// 사용자가 관여하면 그 제스처에 보상 = "이 제스처 뒤 사용자가 다가옴" 선호 학습.
+const GESTURE_REWARD_WINDOW_MS = 45000
+const USER_ENGAGED_RECENT_MS = 90000
+let lastAutoGesture = null
+let lastAutoGestureAt = 0
+let lastUserEngagedAt = 0 // 엄격 user-initiated 시점(페이스·보상 신호 전용, markInteraction과 분리)
+function noteAutoGesture(name) {
+  if (typeof name === 'string' && name) { lastAutoGesture = name; lastAutoGestureAt = Date.now() }
+}
+// 실제 사용자 입력 경로에서만 호출(onUserCall = 채팅 전송·열기·STT). markInteraction은
+// 캐릭터 발화/감정에서도 불려 user-initiated가 아니므로 여기 쓰지 않는다(Codex).
+function onUserEngaged() {
+  lastUserEngagedAt = Date.now()
+  if (lastAutoGesture && Date.now() - lastAutoGestureAt < GESTURE_REWARD_WINDOW_MS) {
+    // force-save: 보상은 드물고 종료 직전 유실되면 학습이 사라지므로 즉시 영속(Codex).
+    try { adaptation.rewardGesture(lastAutoGesture); saveAdaptation(true) } catch {}
+    lastAutoGesture = null // 제스처당 1회만 보상
+  }
 }
 
 function markInteraction() {
@@ -361,6 +389,12 @@ function getAutoBehaviorConfig() {
   const att = interactionRecencyFactor()
   walkShare *= (1 - att * 0.35)
   inPlaceIdleBias *= (1 + att * 0.30)
+
+  // 2.5) 4단계 적응 — 학습된 페이스(곁/독립). 자주 곁에 있길 원하면 walk↓·idle↑,
+  //      독립적이면 반대. 데이터 부족 시 {1,1}(중립=무회귀).
+  const pace = adaptation.getPaceBias()
+  walkShare *= pace.walkMul
+  inPlaceIdleBias *= pace.idleMul
 
   // 3) 최종 clamp + 합 0.94 캡(가구/폴백 슬롯 항상 보존).
   walkShare = clamp(walkShare, 0.15, 0.6)
@@ -581,6 +615,13 @@ function scheduleAutoBehavior() {
       // 자체 스로틀). fire-and-forget이라 이번 틱은 직전 directive로 동작.
       runBehaviorDirector()
 
+      // 4단계 적응 — 페이스 샘플(자율 idle 틱마다 1회). 이 순간 사용자가 최근(90s)
+      // *직접 입력*했는가를 표로 던져 장기 곁/독립 성향을 학습한다. tick 단위 균형
+      // 샘플이라 입력-true/틱-false 비대칭(독립 쏠림)을 피하고, lastUserEngagedAt
+      // 기반이라 캐릭터 발화/감정은 안 섞인다(Codex — 엄격 user-initiated).
+      const userRecent = lastUserEngagedAt > 0 && (Date.now() - lastUserEngagedAt < USER_ENGAGED_RECENT_MS)
+      try { adaptation.recordPace(userRecent); saveAdaptation() } catch {}
+
       // J단계 스마트 오브젝트 — 별도 저확률 "활동" 슬롯. 일반 가구 폴백에 숨기지
       // 않고 독립 확률로 둬 사물 행동 빈도를 따로 튜닝(Codex NICE-TO-HAVE).
       // 디렉터 focus:'self'(혼자 시간) + 차분/밤이면 약간 더 자주. 활동이 시작되면
@@ -607,12 +648,15 @@ function scheduleAutoBehavior() {
       // 방금 대화했으면(attentiveness 높음) "듣는 듯한" 제스처 선호. 디렉터가
       // 명시적으로 무드를 지시(config.idleMood)하면 그게 우선.
       const idleMood = behaviorConfig.idleMood || (behaviorConfig.attentiveness > 0.4 ? 'engaged' : undefined)
+      // 4단계 적응 — 학습된 제스처 선호로 가중. 데이터 부족/미지 제스처는 1.0(탐험).
+      const gestureBias = (m) => adaptation.getGestureBias(m)
       const roll = Math.random()
       let handled = false
       if (roll < idleBias) {
-        const idleGesture = motionManager.pickIdleMotion({ mood: idleMood })
+        const idleGesture = motionManager.pickIdleMotion({ mood: idleMood, bias: gestureBias })
         if (idleGesture) {
           playMotion(idleGesture)
+          noteAutoGesture(idleGesture.name) // 자율 재생된 제스처만 보상 후보(Codex)
           handled = true
         }
       } else if (roll < walkCut) {
@@ -630,8 +674,9 @@ function scheduleAutoBehavior() {
           }) === true
       }
       if (!handled) {
-        const idleMotion = motionManager.pickIdleMotion({ mood: idleMood })
+        const idleMotion = motionManager.pickIdleMotion({ mood: idleMood, bias: gestureBias })
         playMotion(idleMotion)
+        noteAutoGesture(idleMotion.name)
       }
     }
 
@@ -1800,7 +1845,7 @@ initChat({
   },
   // 호출 응답 = 최우선 인터럽트 — 사용자가 메시지를 보내면(부르면) 하던 일을 멈추고
   // 컴퓨터 앞으로 와 앉아 "불렀어?". 성격이 타이밍을 표현.
-  onUserCall: () => respondToCall()
+  onUserCall: () => { onUserEngaged(); respondToCall() } // 4단계: 사용자 입력=제스처 보상 신호
 })
 
 // Step 3 — click on the character to open the chat panel.

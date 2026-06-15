@@ -54,6 +54,30 @@ describe('pickIdleMotion flavor steering', () => {
     expect(GESTURE_FLAVORS.engaged.has('idle_wave')).toBe(true)
   })
 
+  it('bias 미주입이면 기존 균등 무작위(무회귀)', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const name = new MotionManager({ personality: 'active' }).pickIdleMotion({}).name
+    expect(MOTION_LIBRARY.idle.active).toContain(name)
+  })
+
+  it('bias 함수로 가중 — 큰 가중 제스처가 선택됨(4단계)', () => {
+    // 모든 후보 bias=1, 단 한 후보만 매우 큼 → 가중 무작위가 그걸 고름.
+    const target = MOTION_LIBRARY.idle.active.find((m) => m === 'idle_stretch_arms')
+    vi.spyOn(Math, 'random').mockReturnValue(0.999) // 누적 분포 끝쪽
+    const mgr = new MotionManager({ personality: 'active' })
+    const bias = (m) => (m === target ? 100 : 0.01)
+    const name = mgr.pickIdleMotion({ bias }).name
+    expect(name).toBe(target)
+  })
+
+  it('가중 floor — bias가 0/음수/NaN이어도 후보 배제 안 됨(탐험), 크래시 없음', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const mgr = new MotionManager({ personality: 'calm' })
+    const name = mgr.pickIdleMotion({ bias: () => 0 }).name // 전부 0 → floor로 균등
+    expect(MOTION_LIBRARY.idle.calm).toContain(name)
+    expect(() => new MotionManager({ personality: 'calm' }).pickIdleMotion({ bias: () => NaN })).not.toThrow()
+  })
+
   it('natural personality×flavor pairings each have ≥1 reachable clip', () => {
     // "mood가 실제로 닿는가"를 잠근다(Codex NICE-TO-HAVE). 부자연 쌍(shy×energetic,
     // active×quiet)은 의도적으로 비어 폴백되므로 제외.

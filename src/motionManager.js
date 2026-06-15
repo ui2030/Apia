@@ -137,6 +137,27 @@ function randomPick(arr) {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
+// 4단계 — 학습된 선호(bias: name->배수)로 가중 무작위. floor로 어떤 후보도 0이 되지
+// 않게(탐험 보장). bias 비정상/0이면 1로 대체. bias 미주입 경로는 randomPick 사용.
+function weightedPick(arr, bias) {
+  if (!Array.isArray(arr) || arr.length === 0) return null
+  const weights = []
+  let total = 0
+  for (const m of arr) {
+    const w = Number(bias(m))
+    const ww = Number.isFinite(w) && w > 0 ? w : 1
+    weights.push(ww)
+    total += ww
+  }
+  if (total <= 0) return randomPick(arr)
+  let r = Math.random() * total
+  for (let i = 0; i < arr.length; i++) {
+    r -= weights[i]
+    if (r < 0) return arr[i]
+  }
+  return arr[arr.length - 1]
+}
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max)
 }
@@ -522,7 +543,7 @@ export class MotionManager {
     this.cooldowns.set(motionName, Date.now() + this.cooldownMs)
   }
 
-  pickIdleMotion({ mood } = {}) {
+  pickIdleMotion({ mood, bias } = {}) {
     const candidates = this.getMotionCandidates('idle')
     // J/2단계 — 디렉터(또는 attentiveness)가 제스처 flavor를 지시하면 그 flavor로
     // 후보를 좁힌다. mood가 알 수 없거나 null이면 전체 풀(무회귀), 알려진 flavor라도
@@ -537,11 +558,14 @@ export class MotionManager {
       const flavored = candidates.filter((m) => flavor.has(m))
       if (flavored.length > 0) pool = flavored
     }
-    let motion = randomPick(pool)
+    // 4단계 — 순서: 성격 후보 → flavor 필터 → (학습 선호) 가중 선택 → lastMotion
+    // dedup(재선택도 같은 가중). bias 미주입이면 기존 균등 무작위(무회귀).
+    const pick = (arr) => (typeof bias === 'function' ? weightedPick(arr, bias) : randomPick(arr))
+    let motion = pick(pool)
 
     if (motion && motion === this.lastMotion && pool.length > 1) {
       const filtered = pool.filter((m) => m !== this.lastMotion)
-      motion = randomPick(filtered)
+      motion = pick(filtered)
     }
 
     if (motion) this.markUsed(motion)
