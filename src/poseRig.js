@@ -963,7 +963,7 @@ export function computePoseTargets({
   const breath = Math.sin(t * breathOmega)
   const breathLagged = Math.sin(t * breathOmega - 0.4)
   const breathHead = Math.sin(t * breathOmega - 0.7)
-  const breathAmp = 0.012 * intensity * (0.7 + expr * 0.5)
+  const breathAmp = 0.015 * intensity * (0.7 + expr * 0.5) // 소폭 상향(숨결 가시성 — 뻣뻣함 완화)
 
   add('breath', 'spine', breath * breathAmp * 0.6, 0, 0)
   add('breath', 'chest', breathLagged * breathAmp * 1.0, 0, 0)
@@ -984,6 +984,27 @@ export function computePoseTargets({
     add('weightShift', 'lowerBody', 0, 0, ws * wsAmp * 0.7)
     add('weightShift', 'lAnkle', 0, 0, ws * wsAmp * 0.2)
     add('weightShift', 'rAnkle', 0, 0, -ws * wsAmp * 0.2)
+  }
+
+  // — Layer 2.6: postural drift (idle ambient). "서있을 때 뻣뻣" 해소 — 척추·가슴·
+  // 머리에 아주 느린 다주파 lean을 줘 서 있는 포즈가 얼어붙지 않게 한다. 엉덩이는
+  // 안 건드림(발 미끄럼·좌우 wobble 회피, 이전 피드백 존중). 축별 비공약 주파수
+  // 가중합(0.6+0.4=±1.0로 정규화 — 폭주 없음)이라 비반복 유기적. 페르소나 'alive'로
+  // 진폭 구동(차분=우아한 미세 드리프트, 활발=더 큼) → 모델불문 일반 동작.
+  // torso 소유 클립(spine/chest 키프레임) 중엔 통째로 끔(머리 countertilt 포함) —
+  // "몸은 클립, 머리만 드리프트" 방지(Codex). 최대 lean ~1°(척추)로 wobble 아님.
+  const torsoOwned = clipMask?.torso === true ||
+    clipMask?.roles?.has?.('spine') || clipMask?.roles?.has?.('chest') ||
+    clipMask?.roles?.has?.('上半身') || clipMask?.roles?.has?.('上半身2')
+  if (!isSit && state !== 'walk' && !torsoOwned) {
+    const alive = Math.min(1.4, Math.max(0.6, 0.6 + energy * 0.5 + expr * 0.3))
+    const driftAmp = 0.018 * intensity * alive
+    // 비공약 주파수 가중합 → [-1,1] 범위. 축마다 다른 위상·주파수로 비대칭 드리프트.
+    const dx = Math.sin(t * 0.061) * 0.6 + Math.sin(t * 0.103 + 1.3) * 0.4         // 앞뒤 미세 lean
+    const dz = Math.sin(t * 0.047 + 2.1) * 0.6 + Math.sin(t * 0.089 + 0.5) * 0.4   // 좌우 미세 lean
+    add('idleSubtle', 'spine', dx * driftAmp * 0.7, 0, dz * driftAmp * 0.7)
+    add('idleSubtle', 'chest', dx * driftAmp * 0.45, 0, dz * driftAmp * 0.5)
+    add('idleSubtle', 'head', 0, 0, -dz * driftAmp * 0.3) // 머리 살짝 카운터틸트(상체와 반대)
   }
 
   // — Layer 2.5: toe settle. 발끝이 판자처럼 굳지 않게 숨결에 맞춰 아주 미세하게
