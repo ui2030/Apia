@@ -1,5 +1,49 @@
 // src/characterController.js
 import { Vector3 } from 'three'
+import { FURNITURE_DEFAULT } from './furnitureLayout.js'
+
+// ── 가구 충돌(사물 통과 방지) ─────────────────────────────────────────
+// 각 솔리드 가구를 footprint 원으로 근사한다. 평평한 것(러그·매트, h≈0)과
+// 아주 작은 소품은 제외. 반지름은 (w+d)/4 — 코너 과·미차단의 절충.
+const CHAR_RADIUS = 0.26
+const OBSTACLES = FURNITURE_DEFAULT
+  .filter((f) => f.size && f.size.h > 0.2 && (f.size.w + f.size.d) > 0.7)
+  .map((f) => ({ x: f.position.x, z: f.position.z, r: (f.size.w + f.size.d) / 4 }))
+
+function _insideObstacle(x, z) {
+  for (const o of OBSTACLES) {
+    if (Math.hypot(x - o.x, z - o.z) < o.r + CHAR_RADIUS) return true
+  }
+  return false
+}
+
+// 다음 위치를 모든 장애물 밖으로 밀어낸다(접선으로 미끄러짐).
+function _resolveCollision(x, z) {
+  let px = x, pz = z
+  for (const o of OBSTACLES) {
+    const dx = px - o.x, dz = pz - o.z
+    const d = Math.hypot(dx, dz)
+    const ring = o.r + CHAR_RADIUS
+    if (d < ring && d > 1e-4) { px = o.x + (dx / d) * ring; pz = o.z + (dz / d) * ring }
+  }
+  return { x: px, z: pz }
+}
+
+// 타깃이 가구 안이면(걷기 목적지=가구 중심), 캐릭터 쪽 ring 위 "접근점"으로
+// 옮겨 가구 앞에 서게 한다(가구를 뚫고 들어가지 않게 — Codex MUST-FIX).
+function _approachTarget(tx, tz, fromX, fromZ) {
+  let x = tx, z = tz
+  for (const o of OBSTACLES) {
+    const ring = o.r + CHAR_RADIUS + 0.06
+    if (Math.hypot(x - o.x, z - o.z) < ring) {
+      let dx = fromX - o.x, dz = fromZ - o.z
+      const dl = Math.hypot(dx, dz) || 1
+      x = o.x + (dx / dl) * ring
+      z = o.z + (dz / dl) * ring
+    }
+  }
+  return { x, z }
+}
 
 const STATE = { IDLE: 'idle', WALK: 'walk', SIT: 'sit', TALK: 'talk' }
 
@@ -8,17 +52,29 @@ const STATE = { IDLE: 'idle', WALK: 'walk', SIT: 'sit', TALK: 'talk' }
 // (width 8, depth 6). 0.5 inset on every wall so the character never
 // clips into a wall mesh; minZ also keeps a buffer so they don't push
 // into the 4th wall (= the camera glass).
+// Phase G — keep the character ON-SCREEN (사용자: 평소엔 화면 밖으로 안
+// 나가게). Room is width9/depth9, one-point camera at z≈9.7 looking to z=0.
+// The binding constraint is the FRONT: past z≈5.4 her feet drop below the
+// frame, and near the front the frustum is narrow so x must stay tighter.
+// minZ stays low enough to reach the bed/back furniture; the back of the
+// room is small but fully in frame. Tuned by screenshot.
 const BOUNDS = {
-  minX: -3.5, maxX: 3.5,
-  minZ: 0.7,  maxZ: 5.5,
+  minX: -1.7, maxX: 1.7,
+  minZ: 1.2,  maxZ: 5.5,
 }
 
 let state = STATE.IDLE
 let target = new Vector3()
 let moveConfig = null
+let _prevWalkDist = Infinity
+let _stuckFrames = 0
 let activeSitPose = null
 let mesh3D = null
 let sitUntil = 0
+// J단계 스마트 오브젝트 — 활동 시퀀서(activityRunner)가 마시기 같은 단계 동안
+// 앉은 자세를 직접 통제할 수 있게 하는 "수동 앉기". held면 _sit의 sitUntil 자동
+// 기상이 비활성화되고, releaseSit()으로만 일어선다(Codex MUST-FIX).
+let sitHeld = false
 let emotion = 'neutral'
 
 let pose = {
@@ -76,6 +132,16 @@ const CAM_LOOK_ROT = Math.PI
 const ARRIVE_DIST = 0.22
 let _personalityVector = null
 
+// 앉기 높이 보정 — 서 있을 때의 골반(腰) world Y. main.js가 모델 로드 후
+// 1회 측정해 주입한다. 앉을 때 루트를 (seatHeight + 여유 − 골반높이)로 내려
+// 골반이 좌면 살짝 위에 놓이게 한다(=공중부양 버그 수정). 캐릭터마다 골반
+// 높이가 달라도 측정값을 쓰므로 교체 시에도 맞는다.
+let _seatedHipHeight = null
+const SEAT_BUTT_MARGIN = 0.05 // 엉덩이 두께만큼 좌면 위로
+export function setSeatedHipHeight(h) {
+  _seatedHipHeight = Number.isFinite(h) && h > 0 ? h : null
+}
+
 function _vec() {
   return _personalityVector
 }
@@ -86,6 +152,12 @@ function _walkSpeed() {
   // 0.8 .. 2.2 range. Energy is the headline driver, movementRange adds a
   // tail. Clamped so an out-of-range slider can't make the character glide.
   return Math.max(0.8, Math.min(2.2, 1.0 + v.energy * 0.9 + v.movementRange * 0.3))
+}
+
+// 보행 다리 IK(main.js applyWalkLegs)가 no-slip 보폭을 몸 진행속도에 맞추는 데
+// 필요. _walkSpeed와 같은 출처라 항상 일치.
+export function getWalkSpeed() {
+  return _walkSpeed()
 }
 
 function _sitDuration() {
@@ -130,10 +202,11 @@ export function walkToRandomSpot({ minDistance = 1.2, onArrive = null } = {}) {
   if (!mesh3D) return false
   const cx = mesh3D.position.x
   const cz = mesh3D.position.z
-  for (let i = 0; i < 8; i += 1) {
+  for (let i = 0; i < 16; i += 1) {
     const x = BOUNDS.minX + Math.random() * (BOUNDS.maxX - BOUNDS.minX)
     const z = BOUNDS.minZ + Math.random() * (BOUNDS.maxZ - BOUNDS.minZ)
-    if (Math.hypot(x - cx, z - cz) >= minDistance) {
+    // 가구 안 지점은 버린다 — 빈 바닥으로만 배회(통과·끼임 방지).
+    if (Math.hypot(x - cx, z - cz) >= minDistance && !_insideObstacle(x, z)) {
       walkTo({ x, z, onArrive })
       return true
     }
@@ -171,8 +244,9 @@ function _isFacingCameraActive() {
   return faceCameraUntil > 0 && Date.now() < faceCameraUntil
 }
 
-export function walkTo({ x, z, sitOffset = null, sitRotY = 0, onArrive = null }) {
+export function walkTo({ x, z, sitOffset = null, sitRotY = 0, seatHeight = null, onArrive = null, holdSit = false, sitDurationMs = null }) {
   sitUntil = 0
+  sitHeld = false
 
   if (mesh3D && state === STATE.SIT) {
     mesh3D.position.y = 0
@@ -180,11 +254,23 @@ export function walkTo({ x, z, sitOffset = null, sitRotY = 0, onArrive = null })
 
   activeSitPose = null
 
-  const clampedX = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, x))
-  const clampedZ = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, z))
+  let clampedX = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, x))
+  let clampedZ = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, z))
+
+  // 가구 안이 목적지면 그 앞 접근점으로(통과 방지). 앉기(offset)는 가구 자체에
+  // 앉는 것이라 접근점 보정을 건너뛴다 — 의자/침대 위에 정확히 놓여야 함.
+  if (!sitOffset) {
+    const fromX = mesh3D ? mesh3D.position.x : clampedX
+    const fromZ = mesh3D ? mesh3D.position.z : clampedZ
+    const ap = _approachTarget(clampedX, clampedZ, fromX, fromZ)
+    clampedX = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, ap.x))
+    clampedZ = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, ap.z))
+  }
 
   target.set(clampedX, 0, clampedZ)
-  moveConfig = { offset: sitOffset, rotY: sitRotY, onArrive }
+  moveConfig = { offset: sitOffset, rotY: sitRotY, seatHeight, onArrive, holdSit, sitDurationMs }
+  _prevWalkDist = Infinity
+  _stuckFrames = 0
   setState(STATE.WALK)
 }
 
@@ -194,6 +280,19 @@ export function setState(s) {
 
 export function getState() {
   return state
+}
+
+// J단계 스마트 오브젝트 — held(수동) 앉기를 풀고 일어선다. 활동 시퀀서가 마시기
+// 단계를 끝냈거나, 인터럽트(호출 응답 등)로 활동을 중단할 때 호출. 앉아있지 않으면
+// 무해한 no-op. mesh3D가 있으면 즉시 바닥 높이로 복귀.
+export function releaseSit() {
+  sitHeld = false
+  if (state === STATE.SIT) {
+    activeSitPose = null
+    sitUntil = 0
+    if (mesh3D) mesh3D.position.y = 0
+    setState(STATE.IDLE)
+  }
 }
 
 export function onMouseMove(x, y) {
@@ -206,7 +305,11 @@ export function setLookTarget(nx, ny, { source = 'canvas' } = {}) {
   if (source === 'global') globalCursorFeed = true
   else if (globalCursorFeed) return
   lookTargetX = Math.max(-1, Math.min(1, nx))
-  lookTargetY = Math.max(-1, Math.min(1, ny))
+  // 상하 반전 수정: 입력 ny는 화면 위가 음수(top=-1, bottom=+1)인데 본 pitch에
+  // 그대로 먹이면 "마우스 위 → 시선 아래"가 됐다. 여기서 부호를 한 번 뒤집어
+  // lookTargetY는 "위가 +"가 되게 통일한다(눈·머리·목·가슴·루트 pitch 전부 동조).
+  // 좌우(nx)는 정상이라 그대로 둔다.
+  lookTargetY = Math.max(-1, Math.min(1, -ny))
   lastLookInputMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
 }
 
@@ -295,7 +398,9 @@ function _idle(mesh, t) {
   const motionPower = currentMotion.intensity || 1
 
   mesh.position.y = Math.sin(t * 1.1) * (0.012 * motionPower)
-  mesh.rotation.z = Math.sin(t * 0.7 + pose.swaySeed) * (0.012 * motionPower)
+  // 좌우 흔들림(roll)을 줄여 몸이 덜 흔들리게 — 사용자 피드백. 숨쉬는 상하
+  // bob(position.y)은 유지.
+  mesh.rotation.z = Math.sin(t * 0.7 + pose.swaySeed) * (0.006 * motionPower)
 
   mesh.rotation.x = pose.tiltX + Math.sin(t * 0.5) * 0.01 + lookPitch
   mesh.rotation.z += pose.tiltZ
@@ -347,8 +452,17 @@ function _walk(mesh, t, dt) {
   const nx = dx / dist
   const nz = dz / dist
 
-  mesh.position.x = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, mesh.position.x + nx * spd))
-  mesh.position.z = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, mesh.position.z + nz * spd))
+  // 다음 위치를 가구 밖으로 밀어낸 뒤 벽 경계로 클램프 → 사물 통과 방지.
+  const resolved = _resolveCollision(mesh.position.x + nx * spd, mesh.position.z + nz * spd)
+  mesh.position.x = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, resolved.x))
+  mesh.position.z = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, resolved.z))
+
+  // 막힘 감지 — 충돌로 목적지에 못 다가가면 영원히 걷지 않게 도착 처리.
+  const newDist = Math.hypot(target.x - mesh.position.x, target.z - mesh.position.z)
+  if (newDist > _prevWalkDist - 0.002) _stuckFrames += 1
+  else _stuckFrames = 0
+  _prevWalkDist = newDist
+  if (_stuckFrames > 45) { _onArrive(mesh); return }
 
   // Codex MUST-FIX (Phase A): the previous bob of 0.025 made the whole body
   // pogo-stick, which combined with a T-pose looked like the character was
@@ -363,7 +477,8 @@ function _walk(mesh, t, dt) {
 }
 
 function _sit(mesh, t) {
-  if (sitUntil > 0 && Date.now() >= sitUntil) {
+  // held(수동 앉기)면 자동 기상 안 함 — releaseSit()으로만 일어선다.
+  if (!sitHeld && sitUntil > 0 && Date.now() >= sitUntil) {
     activeSitPose = null
     sitUntil = 0
     mesh.position.y = 0
@@ -435,12 +550,18 @@ function _onArrive(mesh) {
     return
   }
 
-  const { offset, rotY, onArrive } = moveConfig
+  const { offset, rotY, seatHeight, onArrive, holdSit, sitDurationMs } = moveConfig
 
   if (offset) {
+    // 루트 Y: 좌면 높이를 알고 골반 높이를 측정했으면 골반이 좌면 살짝 위에
+    // 놓이도록 계산(공중부양 수정, 캐릭터 무관). 둘 중 하나라도 없으면 예전
+    // offset.y(레거시)로 폴백.
+    const rootY = (Number.isFinite(seatHeight) && _seatedHipHeight != null)
+      ? seatHeight + SEAT_BUTT_MARGIN - _seatedHipHeight
+      : offset.y
     activeSitPose = {
       x: target.x + offset.x,
-      y: offset.y,
+      y: rootY,
       z: target.z + offset.z,
       rotY: rotY ?? CAM_LOOK_ROT
     }
@@ -448,10 +569,19 @@ function _onArrive(mesh) {
     mesh.position.set(activeSitPose.x, activeSitPose.y, activeSitPose.z)
     mesh.rotation.y = activeSitPose.rotY
     setState(STATE.SIT)
-    sitUntil = Date.now() + _sitDuration()
+    // held 앉기(활동 시퀀서가 통제) → 자동 기상 끔. 아니면 명시 지속시간 또는
+    // 성격 기반 기본 지속시간 후 자동 기상(Codex MUST-FIX: 마시기와 충돌 방지).
+    if (holdSit) {
+      sitHeld = true
+      sitUntil = 0
+    } else {
+      sitHeld = false
+      sitUntil = Date.now() + (Number.isFinite(sitDurationMs) ? sitDurationMs : _sitDuration())
+    }
   } else {
     activeSitPose = null
     sitUntil = 0
+    sitHeld = false
     mesh.position.x = target.x
     mesh.position.z = target.z
     // Codex MUST-FIX (Phase C): when facing override is active, don't snap
@@ -470,8 +600,8 @@ function _onArrive(mesh) {
 function _updateNaturalPose(t) {
   if (pose.nextPoseAt === 0 || t >= pose.nextPoseAt) {
     pose.nextPoseAt = t + 2.5 + Math.random() * 3.5
-    pose.tiltX = (Math.random() - 0.5) * 0.04
-    pose.tiltZ = (Math.random() - 0.5) * 0.05
+    pose.tiltX = (Math.random() - 0.5) * 0.025
+    pose.tiltZ = (Math.random() - 0.5) * 0.03
     pose.swaySeed = Math.random() * 10
   }
 }
@@ -542,11 +672,18 @@ function _updateIdleTurn(t) {
 }
 
 function _getLookYaw() {
+  // 루트(몸 전체) yaw는 커서를 통째로 따라가지 않는다 — 그게 "몸통이 한 덩어리로
+  // 도는" 뻣뻣함의 원인이었다. 일반적인 시선 추적은 눈·머리·목 본(poseRig gaze)이
+  // 담당하고, 여기 루트는 화면 가장자리(|x|>0.65)를 한참 볼 때만 그쪽으로 아주
+  // 조금 천천히 오리엔트한다. deadzone 안(|x|<=0.65)에선 0 → 몸통·다리는 정면 유지.
+  // gazeStrength는 "가장자리에서 몸을 얼마나 트는지"로만 남긴다(최대 ~2.6~5°).
+  const ax = Math.abs(lookTargetX)
+  const DEAD = 0.65
+  if (ax <= DEAD) return 0
   const v = _vec()
-  // gazeStrength tunes how committedly the character tracks the cursor.
-  // Default (0.45) hits the old 0.18 baseline within 0.005.
-  const strength = v ? 0.10 + v.gazeStrength * 0.18 : 0.18
-  return lookTargetX * strength
+  const maxRoot = v ? 0.045 + v.gazeStrength * 0.045 : 0.06
+  const beyond = (ax - DEAD) / (1 - DEAD) // 0..1
+  return Math.sign(lookTargetX) * beyond * maxRoot
 }
 
 function _getLookPitch() {
@@ -556,7 +693,10 @@ function _getLookPitch() {
   if (_isFacingCameraActive()) {
     return FACE_CAMERA_PITCH_BIAS * 0.08
   }
-  return -lookTargetY * 0.08
+  // 루트(몸 전체) pitch는 거의 죽인다 — 루트가 기울면 캐릭터가 "넘어지는" 느낌이
+  // 난다(Codex). 시선의 상하 추적은 눈·머리·목 본 pitch(poseRig gaze)가 맡고,
+  // 여기 루트엔 ~1° 정도의 미세 동조만 남긴다.
+  return -lookTargetY * 0.02
 }
 
 function _shortAngle(tgt, cur) {

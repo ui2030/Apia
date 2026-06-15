@@ -50,6 +50,12 @@ const steps = [
     timeoutMs: 240_000
   },
   {
+    name: 'walk-check',
+    label: '걷기 gait — 다리·팔 진동 + 클립중 gait + 발 접지(3단언+slip측정)',
+    args: [path.join(__dirname, 'walk-check.mjs')],
+    timeoutMs: 180_000
+  },
+  {
     name: 'tail-check',
     label: '꼬리 들림 (3단언)',
     args: [path.join(__dirname, 'tail-check.mjs')],
@@ -71,6 +77,12 @@ const steps = [
     name: 'lipsync-check',
     label: '비짐 타임라인 → 입모양 (5단언)',
     args: [path.join(__dirname, 'lipsync-check.mjs')],
+    timeoutMs: 180_000
+  },
+  {
+    name: 'voice-clone-ui-check',
+    label: '음성 복제 설정 UI 배선 (4단언)',
+    args: [path.join(__dirname, 'voice-clone-ui-check.mjs')],
     timeoutMs: 180_000
   },
   {

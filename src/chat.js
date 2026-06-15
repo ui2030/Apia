@@ -12,7 +12,7 @@ export function setCharacterRaycaster(fn) {
   _characterRaycaster = typeof fn === 'function' ? fn : null
 }
 let _showBubble, _startSpeaking, _stopSpeaking, _applyEmotion
-let _getTalkMotion, _getIdleMotion
+let _getTalkMotion, _getIdleMotion, _onUserCall
 
 const state = {
   chatOpen: false,
@@ -32,7 +32,8 @@ export function initChat({
   stopSpeaking,
   applyEmotion,
   getTalkMotion,
-  getIdleMotion
+  getIdleMotion,
+  onUserCall
 }) {
   _showBubble = showBubble
   _startSpeaking = startSpeaking
@@ -40,6 +41,7 @@ export function initChat({
   _applyEmotion = applyEmotion
   _getTalkMotion = getTalkMotion
   _getIdleMotion = getIdleMotion
+  _onUserCall = onUserCall
 
   setupUI()
   startClickThroughManager()
@@ -173,11 +175,7 @@ function setupUI() {
   const sendBtn     = document.getElementById('send-btn')
   const micBtn      = document.getElementById('mic-btn')
 
-  chatToggle?.addEventListener('click', () => {
-    state.chatOpen = !state.chatOpen
-    chatPanel?.classList.toggle('visible', state.chatOpen)
-    if (state.chatOpen) chatInput?.focus()
-  })
+  chatToggle?.addEventListener('click', () => setChatOpen(!state.chatOpen))
 
   settingsBtn?.addEventListener('click', () => window.api?.openSettings())
 
@@ -187,6 +185,21 @@ function setupUI() {
   sendBtn?.addEventListener('click', () => sendMessage(chatInput?.value || ''))
 
   setupSTT(micBtn)
+}
+
+// 채팅 패널 열고/닫기 — state.chatOpen을 항상 동기화한다(Codex MUST-FIX: 외부
+// 경로 show-main-chat가 DOM만 바꾸면 다음 토글이 상태 불일치로 오동작). 여는 것은
+// "부름"이라 onUserCall(컴퓨터 앞으로)도 호출.
+export function setChatOpen(open) {
+  state.chatOpen = !!open
+  const panel = document.getElementById('chat-panel')
+  const toggle = document.getElementById('chat-toggle')
+  if (panel) panel.classList.toggle('visible', state.chatOpen)
+  if (state.chatOpen) {
+    if (toggle) toggle.style.display = ''
+    document.getElementById('chat-input')?.focus()
+    if (typeof _onUserCall === 'function') _onUserCall()
+  }
 }
 
 function setComposerBusy(isBusy) {
@@ -234,12 +247,11 @@ async function sendMessage(text) {
   if (inp) inp.value = ''
   const loading = appendMessage('ai', '● ● ●', true)
 
-  // Phase C: ask the character to face the user (and walk a step closer to
-  // the 4th wall) for the duration of the exchange. ~12s covers most LLM
-  // replies; if a longer reply runs over, the next sendMessage extends the
-  // timer automatically. _onArrive/idleTurn honor this override so the
-  // character stays oriented at the monitor.
-  requestFaceCamera({ durationMs: 12000, approach: true })
+  // 호출 응답 = 최우선 인터럽트 — 사용자가 부르면(메시지 전송) 하던 일을 멈추고
+  // 컴퓨터 앞으로 와 앉아 마주본다. main.js가 onUserCall로 관할(성격 타이밍·priority).
+  // 핸들러 없으면 기존 동작(쳐다보며 한 발 다가옴)으로 폴백.
+  if (typeof _onUserCall === 'function') _onUserCall()
+  else requestFaceCamera({ durationMs: 12000, approach: true })
 
   try {
     let reply = '백엔드가 연결되지 않아 오프라인 모드예요. 백엔드를 실행해주세요! 🔧'

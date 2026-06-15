@@ -19,12 +19,19 @@ const DEFAULT_WORLD_OBJECTS = FURNITURE_DEFAULT.map((f) => {
     z: f.position.z,
     bubbleText: f.bubbleText,
     autoBehavior: f.autoBehavior !== false,
-    clickable: f.clickable !== false
+    clickable: f.clickable !== false,
+    hidden: f.hidden === true // 시각 소품은 라벨 없이 메시만 (sceneRuntime이 그림)
   }
-  if (f.type === 'chair' && f.interaction) {
+  // 앉기 affordance는 type에 무관하게 interaction.sitOffset이 있으면 옮긴다
+  // (chair뿐 아니라 활동 좌석으로 쓰는 어떤 가구든). 활동 시퀀서가 좌석 데이터를
+  // worldManager.getObjectById로 읽기 때문.
+  if (f.interaction && f.interaction.sitOffset) {
     base.sitOffset = f.interaction.sitOffset
     base.sitRotY = f.interaction.sitRotY
+    base.seatHeight = f.interaction.seatHeight
   }
+  // J단계 스마트 오브젝트 — 사물이 선언한 activity 어포던스를 월드 객체로 옮긴다.
+  if (f.activity) base.activity = f.activity
   return base
 })
 
@@ -100,6 +107,65 @@ function normalizeSitOffset(offset, fallback = null) {
   }
 }
 
+// J단계 스마트 오브젝트 — 사물이 선언한 activity 어포던스를 검증/정규화한다.
+// normalizeWorldObject가 화이트리스트라 이 단계 없이는 activity가 통째로 사라진다
+// (Codex MUST-FIX). 알 수 없는 step kind나 빈 steps면 활동을 버린다(null).
+const ACTIVITY_STEP_KINDS = new Set(['goto', 'pose', 'sit', 'cleanup', 'prop'])
+const PROP_KINDS = new Set(['cup', 'glass', 'book'])
+const PROP_OPS = new Set(['attach', 'detach'])
+const PROP_HANDS = new Set(['right', 'left'])
+// 욕구 유틸리티 AI가 읽는 need 차원(0..1 압력). 활동이 채워주는 양(needFill).
+const NEED_KEYS = new Set(['thirst', 'tiredness', 'boredom', 'comfort', 'care', 'hygiene'])
+
+function normalizeNeedFill(needFill) {
+  if (!needFill || typeof needFill !== 'object') return {}
+  const out = {}
+  for (const k of Object.keys(needFill)) {
+    if (NEED_KEYS.has(k) && Number.isFinite(needFill[k])) out[k] = clamp(needFill[k], 0, 1)
+  }
+  return out
+}
+
+function normalizeActivity(activity) {
+  if (!activity || typeof activity !== 'object') return null
+  if (!Array.isArray(activity.steps) || activity.steps.length === 0) return null
+
+  const steps = []
+  for (const raw of activity.steps) {
+    if (!raw || typeof raw !== 'object') continue
+    if (!ACTIVITY_STEP_KINDS.has(raw.kind)) continue
+    const step = { kind: raw.kind }
+    if (typeof raw.targetId === 'string') step.targetId = raw.targetId
+    if (Number.isFinite(raw.durationMs)) step.durationMs = clamp(raw.durationMs, 200, 60000)
+    if (typeof raw.bubble === 'string') step.bubble = raw.bubble
+    if (typeof raw.motion === 'string') step.motion = raw.motion
+    if (raw.faceCamera === true) step.faceCamera = true
+    if (raw.reach === true) step.reach = true // 마시기/읽기 — 팔 IK 입-도달
+    // prop 스텝 — 손에 소품 들기/내려놓기. op·propKind·hand 화이트리스트.
+    if (step.kind === 'prop') {
+      step.op = PROP_OPS.has(raw.op) ? raw.op : 'attach'
+      if (PROP_KINDS.has(raw.propKind)) step.propKind = raw.propKind
+      step.hand = PROP_HANDS.has(raw.hand) ? raw.hand : 'right'
+      if (step.op === 'attach' && !step.propKind) continue // 붙일 소품 미지정 → 무의미
+    }
+    // goto/sit은 어디로 갈지(targetId) 없으면 의미가 없다.
+    if ((step.kind === 'goto' || step.kind === 'sit') && !step.targetId) continue
+    steps.push(step)
+  }
+  if (steps.length === 0) return null
+
+  return {
+    id: typeof activity.id === 'string' ? activity.id : 'activity',
+    label: typeof activity.label === 'string' ? activity.label : '',
+    focus: typeof activity.focus === 'string' ? activity.focus : null,
+    needFill: normalizeNeedFill(activity.needFill),
+    // autonomous:false면 자율(욕구 AI) 선택 대상에서 제외 — 클릭으로만 발동.
+    // 사용자 제작 월드의 숨김 헬퍼 활동을 옵트인으로(Codex NICE-TO-HAVE).
+    autonomous: activity.autonomous !== false,
+    steps
+  }
+}
+
 function normalizeWorldObject(object = {}, index = 0) {
   const type = normalizeWorldType(object.type)
   const defaults = TYPE_DEFAULTS[type]
@@ -118,16 +184,31 @@ function normalizeWorldObject(object = {}, index = 0) {
     screenOffsetY: normalizeNumber(object.screenOffsetY, defaults.screenOffsetY),
     sitOffset: normalizeSitOffset(object.sitOffset, defaults.sitOffset),
     sitRotY: normalizeNumber(object.sitRotY, defaults.sitRotY),
+    seatHeight: Number.isFinite(object.seatHeight) ? object.seatHeight : null,
     autoBehavior: object.autoBehavior !== false && defaults.autoBehavior !== false,
     clickable: object.clickable !== false && defaults.clickable !== false,
     hidden: object.hidden === true,
-    bubbleText: typeof object.bubbleText === 'string' ? object.bubbleText : defaults.bubbleText
+    bubbleText: typeof object.bubbleText === 'string' ? object.bubbleText : defaults.bubbleText,
+    activity: normalizeActivity(object.activity)
   }
 }
 
+// Phase G — bumped to 2 for the 자취방 redesign. A saved world.json from the
+// old layout (e.g. with the now-removed 'desk' point) must NOT linger as a
+// clickable/auto target; on a version mismatch we regenerate from the current
+// FURNITURE_DEFAULT (Codex MUST-FIX). User edits to the old layout are dropped
+// — unavoidable when the room itself changed.
+// J단계 — 3으로 올림: 새 chair + coffeeMachine(activity 어포던스)를 기존 저장
+// 월드(v2)가 못 받아 기능이 조용히 사라지는 문제(Codex MUST-FIX). 버전 불일치 시
+// 현재 FURNITURE_DEFAULT로 재생성된다.
+// J단계 — 4로 올림: 여러 스마트 오브젝트(물·휴식·독서·화분) + prop/needFill 메타가
+// 추가돼 저장 월드(v3)가 못 받던 것(Codex MUST-FIX).
+// J단계 — 5로 올림: 화장실(door 활동)·컴퓨터 데스크/의자/모니터 추가(Codex MUST-FIX).
+const WORLD_VERSION = 5
+
 export function createDefaultWorld() {
   return {
-    version: 1,
+    version: WORLD_VERSION,
     objects: DEFAULT_WORLD_OBJECTS.map((object, index) =>
       normalizeWorldObject(cloneJson(object), index)
     )
@@ -169,12 +250,14 @@ export async function initWorld(options = {}) {
 }
 
 export class WorldManager {
-  constructor({ scene, camera, renderer, showBubble, onWalkTo, onDebug, onWorldUpdated } = {}) {
+  constructor({ scene, camera, renderer, showBubble, onWalkTo, onStartActivity, onDebug, onWorldUpdated } = {}) {
     this.scene = scene ?? null
     this.camera = camera ?? null
     this.renderer = renderer ?? null
     this.showBubble = showBubble ?? null
     this.onWalkTo = onWalkTo ?? null
+    // J단계 스마트 오브젝트 — activity 사물 클릭 시 활동 시퀀서를 시작하는 훅.
+    this.onStartActivity = onStartActivity ?? null
     this.onDebug = onDebug ?? (() => {})
     this.onWorldUpdated = onWorldUpdated ?? (() => {})
     this.world = createDefaultWorld()
@@ -190,6 +273,10 @@ export class WorldManager {
   normalizeWorld(world) {
     if (!world || typeof world !== 'object') return createDefaultWorld()
 
+    // 옛 레이아웃(version < 2)은 통째로 새 자취방 기본값으로 마이그레이션 —
+    // 제거된 'desk' 같은 stale 오브젝트가 살아남지 않게(Codex MUST-FIX).
+    if (world.version !== WORLD_VERSION) return createDefaultWorld()
+
     const objects = Array.isArray(world.objects)
       ? world.objects.map((object, index) => normalizeWorldObject(object, index))
       : []
@@ -199,7 +286,7 @@ export class WorldManager {
     }
 
     return {
-      version: 1,
+      version: WORLD_VERSION,
       ...world,
       objects
     }
@@ -338,6 +425,14 @@ export class WorldManager {
     })
   }
 
+  // J단계 스마트 오브젝트 — activity 어포던스를 선언한 사물들. 자율 활동(욕구 AI)이
+  // 여기서 골라 사슬을 시작한다. activity는 명시적 어포던스라 autoBehavior:false나
+  // hidden(라벨만 숨김, 메시는 렌더됨)이어도 대상에 포함한다(Codex MUST-FIX:
+  // hidden 필터가 싱크대/책장 같은 deco 활동을 가로막던 것).
+  getActivityObjects() {
+    return this.world.objects.filter((object) => object.activity && object.activity.autonomous !== false)
+  }
+
   addObject(object = {}) {
     const nextObject = normalizeWorldObject(
       {
@@ -378,6 +473,19 @@ export class WorldManager {
   interactWith(objectId, { source = 'click' } = {}) {
     const object = this.getObjectById(objectId)
     if (!object || !object.clickable) return false
+
+    // J단계 스마트 오브젝트 — activity를 선언한 사물이면 단순 walk-to 대신 활동
+    // 사슬을 실행한다(걷기→포즈→앉기→정리). 핸들러가 있으면 그 결과를 그대로
+    // 반환한다 — 이미 다른 활동 중이라 못 시작했어도(start=false) 일반 walk로
+    // 폴백하지 않는다(진행 중 활동과 충돌 방지). 핸들러 자체가 없을 때만 폴백.
+    if (object.activity && typeof this.onStartActivity === 'function') {
+      const started = safeCall(this.onStartActivity, object.activity, { source }) === true
+      if (started) {
+        this.log(`[WORLD_ACTIVITY_${source.toUpperCase()}] id=${object.id} activity=${object.activity.id}`)
+      }
+      return started
+    }
+
     if (typeof this.onWalkTo !== 'function') return false
 
     const label = object.label || object.name || object.type
@@ -400,6 +508,7 @@ export class WorldManager {
     if (object.type === 'chair' && object.sitOffset) {
       payload.sitOffset = object.sitOffset
       payload.sitRotY = object.sitRotY
+      payload.seatHeight = object.seatHeight
     }
 
     safeCall(this.onWalkTo, payload)

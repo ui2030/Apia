@@ -17,14 +17,17 @@ import {
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
-import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector } from './characterController.js'
+import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector, setSeatedHipHeight, releaseSit, getWalkSpeed } from './characterController.js'
 import { applyInertialization, recordDisplayedPose, setInertializationEnabled } from './inertialization.js'
 import { setExpressionEmotion, updateExpression, resetExpression } from './expressionRuntime.js'
 import { playTimeline, stopTimeline, updateMouthMMD, updateMouthVRM } from './lipsyncRuntime.js'
 import { initWorld, updateWorldLabels } from './world.js'
-import { initChat, setCharacterRaycaster } from './chat.js'
+import { initChat, setCharacterRaycaster, setChatOpen } from './chat.js'
 import { MotionManager } from './motionManager.js'
 import { createDirectorRunner, applyDirective, buildDirectorContext } from './behaviorDirector.js'
+import { createActivityRunner } from './activityRunner.js'
+import { createPropManager } from './propManager.js'
+import { createNeedsManager } from './needsManager.js'
 import { resolveMotionAsset, resolveMmdMotionAsset } from './motionAssets.js'
 import {
   buildBoneRegistry,
@@ -34,6 +37,8 @@ import {
   applyPose,
   computePoseTargets,
   applyClipArmHangCorrection,
+  applyArmIK,
+  applyLegIK,
   createImpulseState,
   triggerImpulse,
   LOCOMOTION_ROLES
@@ -178,6 +183,8 @@ const _sceneRuntime = createSceneRuntime({
 const scene = _sceneRuntime.scene
 const camera = _sceneRuntime.camera
 const renderer = _sceneRuntime.renderer
+// 애니 외곽선 렌더(OutlineEffect 래핑). renderer.render 대신 사용.
+const outlineRender = _sceneRuntime.outlineRender || ((sc, cam) => renderer.render(sc, cam))
 const clock = _sceneRuntime.clock
 const CAM_DEFAULT = _sceneRuntime.CAM_DEFAULT
 // E2E diagnostic hatch — surface the scene for tests/gui/* scripts that
@@ -189,6 +196,9 @@ if (typeof window !== 'undefined') {
   // Camera too — vmd-check.mjs orbits it (front/side/back) per motion so
   // clipping that only shows from behind isn't missed. Same hatch rationale.
   window.__apiaCamera = camera
+  // Phase F — room-check.mjs awaits this so a screenshot isn't taken while
+  // furniture GLBs are still popping in.
+  window.__apiaFurnitureReady = _sceneRuntime.furnitureReady ?? Promise.resolve()
 }
 const applyCameraDefault = _sceneRuntime.applyCameraDefault
 
@@ -208,6 +218,8 @@ if (typeof window !== 'undefined') {
   // transition-check.mjs가 걷기 핸드오프(클립 → 절차적 gait)를 강제로
   // 트리거하고, 클립 소유권 플래그가 풀리는지 단언할 수 있게 한다.
   window.__walkTo = (minDistance = 1.4) => walkToRandomSpot({ minDistance })
+  // 결정론적 직선 보행 — 보행/접지 진단(walk-check 등)이 정해진 경로로 검증.
+  window.__walkToXZ = (x, z) => walkTo({ x, z })
   window.__clipFlags = () => ({
     vmd: currentModel?._vmdClipActive ?? null,
     vrma: currentModel?._vrmaClipActive ?? null,
@@ -227,6 +239,33 @@ if (typeof window !== 'undefined') {
     return playTimeline(tl, off)
   }
   window.__lipsyncStop = () => stopSpeaking()
+  // J단계 거주형 비서 E2E — 스마트 오브젝트/소품/욕구를 결정론적으로 구동해
+  // GUI 스크린샷으로 자가 검증한다(자율 발동을 끄고 강제 트리거).
+  window.__startActivity = (id) => {
+    const obj = (worldManager?.getActivityObjects?.() || []).find((o) => o.activity?.id === id)
+    if (!obj) return false
+    return activityRunner.start(obj.activity) === true
+  }
+  window.__abortActivity = () => interruptActivity(true)
+  window.__activityActive = () => activityRunner.isActive()
+  window.__activityInfo = () => ({ active: activityRunner.isActive(), priority: activityRunner.isPriority(), id: activityRunner.currentId(), state: getState?.() })
+  window.__respondToCall = () => respondToCall()
+  window.__attachProp = (kind, hand = 'right') => propManager.attach({ kind, hand })
+  window.__detachProp = () => propManager.detach()
+  window.__heldPropState = () => propManager.state()
+  window.__setReach = (on) => propManager.setReach(on)
+  window.__needs = () => needsManager.snapshot()
+  window.__setNeed = (k, v) => needsManager.setNeed(k, v)
+  window.__listActivities = () => (worldManager?.getActivityObjects?.() || []).map((o) => o.activity?.id)
+  window.__playMotion = (category, name, intensity = 1) => playMotion({ category, name, intensity })
+  window.__boneWorldPos = (role = 'lWrist') => {
+    const b = currentModel?.poseRig?.registry?.roles?.get?.(role)?.bone
+    if (!b) return null
+    b.updateWorldMatrix(true, false)
+    const v = new (b.position.constructor)()
+    b.getWorldPosition(v)
+    return { x: +v.x.toFixed(3), y: +v.y.toFixed(3), z: +v.z.toFixed(3) }
+  }
 }
 let worldManager = null
 const lipsync = { active: false, phase: 0 }
@@ -255,6 +294,13 @@ let lastInteractionAt = 0 // ms; 0 = 아직 대화 없음
 
 function markInteraction() {
   lastInteractionAt = Date.now()
+  // J단계 — 사용자와의 상호작용(발화·감정 반응)은 진행 중인 자율 활동보다
+  // 우선한다. 자율 활동은 중단하되, 호출 응답(priority)은 보존한다(force=false).
+  interruptActivity()
+  // 대화가 이어지는 동안 호출 응답 hold를 연장(조용해질 때까지 컴퓨터 앞 유지).
+  if (activityRunner.isActive() && activityRunner.isPriority()) {
+    callIdleDeadline = Date.now() + CALL_HOLD_MS
+  }
 }
 
 // 대화 최근성 → 주의도 [-1,1]. +1 방금 대화(집중), 0 중립, -1 오래 무관심(독립/지루).
@@ -323,6 +369,139 @@ function runBehaviorDirector() {
   Promise.resolve(behaviorDirector.maybeRun(ctx)).catch(() => {})
 }
 
+// J단계 거주형 비서 — 손 소품(컵·유리잔·책) 매니저. 렌더 루프가 updateCharacter
+// 뒤에 sync()를 불러 손에 고정한다.
+const propManager = createPropManager({ scene, getCurrentModel: () => currentModel })
+
+// J단계 거주형 비서 — 욕구+성격 유틸리티 AI. 시간에 따라 욕구가 차오르고, 활동이
+// 채워준다(정상 완료 시에만). 성격으로 상승 속도 가중.
+const needsManager = createNeedsManager({ getPersonality: () => motionManager.getPersonality?.() })
+
+// J단계 스마트 오브젝트 — 활동 시퀀서(커피 한 잔 등 사물 행동 사슬). 기존 원시
+// 동작 + 소품에만 의존. 정상 완료(complete) 시에만 욕구를 충족하고, abort면 안 함.
+const activityRunner = createActivityRunner({
+  walkTo,
+  releaseSit,
+  playMotion,
+  pickPose: (opts) => motionManager.pickIdleMotion?.(opts),
+  showBubble,
+  getObjectById: (id) => worldManager?.getObjectById?.(id) || null,
+  getPersonality: () => motionManager.getPersonality?.(),
+  attachProp: (spec) => propManager.attach(spec),
+  detachProp: () => propManager.detach(),
+  setReach: (on) => propManager.setReach(on),
+  onFinish: (reason, activity) => {
+    if (reason === 'complete' && activity) needsManager.satisfy(activity)
+    scheduleAutoBehavior()
+  }
+})
+
+// 인터럽트 — 진행 중인 활동을 중단한다. 기본은 "최우선(호출 응답) 활동은 건드리지
+// 않음": markInteraction(그녀가 말함)·onCharacterAction은 호출 응답 중이면 그녀를
+// 컴퓨터 앞에서 끌어내면 안 되므로 force=false로 priority를 보존한다. 사용자가
+// 명시적으로 다른 곳을 지시(가구 클릭·다른 활동·모델 교체)할 때만 force=true.
+function interruptActivity(force = false) {
+  if (activityRunner.isActive() && (force || !activityRunner.isPriority())) {
+    activityRunner.abort()
+  }
+}
+
+// ── 호출 응답 = 최우선 인터럽트 (비전의 "궁극") ──────────────────────────
+// 사용자가 부르면(채팅 전송) 하던 자율 행동을 멈추고 자기 컴퓨터(deskChair)로 와
+// 앉아 "불렀어?". 성격이 타이밍을 표현(활발=즉시, 수줍/차분="잠깐만!" 후). 응답은
+// priority 활동이라 대화 중(markInteraction/감정) 끌려나가지 않고, 대화가 끝나고
+// 일정 시간 유휴면 자율 생활로 복귀한다(Codex MUST-FIX: 지연·hold·복구 처리).
+const CALL_HOLD_MS = 15000
+const CALL_MAX_MS = 120000 // 하드 캡 — lipsync.active가 고착돼도 결국 풀리게(워치독)
+let callIdleDeadline = 0
+let callStartedAt = 0
+
+function respondToCall() {
+  callIdleDeadline = Date.now() + CALL_HOLD_MS
+  // 이미 응답 중 + 실제로 자리에 앉음 → 재경로 없이 유지(메시지 연타 방어).
+  // 아직 못 앉았으면(걸어가다 stuck 등) 아래에서 force-restart로 복구.
+  if (activityRunner.isActive() && activityRunner.isPriority() && getState?.() === 'sit') {
+    requestFaceCamera({ durationMs: 14000, approach: false })
+    return
+  }
+  interruptActivity(true) // 자율(또는 미착석 stuck 호출) 강제 중단
+  callStartedAt = Date.now()
+  const personality = motionManager.getPersonality?.() || 'calm'
+  const eager = personality === 'active'
+  const steps = []
+  if (!eager) steps.push({ kind: 'pose', durationMs: 1100, bubble: '잠깐만!' })
+  // 긴 dwell(실질 무한) — 실제 종료는 유휴 데드라인(endCallResponseIfIdle)이 관할.
+  steps.push({ kind: 'sit', targetId: 'deskChair', durationMs: 600000, bubble: '불렀어?' })
+  activityRunner.start({ id: 'respondCall', priority: true, needFill: {}, steps })
+  requestFaceCamera({ durationMs: 14000, approach: false })
+}
+
+// 호출 응답을 유휴 시 종료 — 대화(lipsync) 중이면 데드라인 연장, 조용해지고
+// 데드라인 지나면 자율 생활 재개. 행동 틱마다 호출.
+// 마시기/읽기 단계 — 소품 든 팔을 2본 IK로 입까지 가져온다(FK 한계 보완, 모델 불문).
+// 목표 = 머리 본 월드 + 오프셋(입 높이·살짝 앞). 렌더 루프 updateBody 뒤 호출.
+const _mouthTarget = new Vector3()
+const _reachFwd = new Vector3()
+const _reachPole = new Vector3()
+function maybeReachPropToMouth() {
+  if (!propManager.isReaching()) return
+  const reachArm = propManager.heldArmRole?.()
+  const reg = currentModel?.poseRig?.registry
+  if (!reachArm || !reg) return
+  const head = reg.roles?.get?.('head')?.bone
+  if (!head) return
+  head.getWorldPosition(_mouthTarget)
+  // 컵/잔=입, 책=읽기 위치(가슴~얼굴 아래·더 앞). 책을 입으로 보내지 않게(Codex).
+  const kind = propManager.state()?.kind
+  const down = kind === 'book' ? 0.22 : 0.10
+  const fwd = kind === 'book' ? 0.16 : 0.06
+  _mouthTarget.y -= down
+  // 앞 방향 = 사용자(카메라) 쪽. 캐릭터가 어디를 향하든 견고(마시기/읽기=마주봄).
+  _reachFwd.set(0, 0, 1)
+  if (camera) {
+    _reachFwd.copy(camera.position).sub(_mouthTarget)
+    _reachFwd.y = 0
+    if (_reachFwd.lengthSq() > 1e-6) _reachFwd.normalize()
+    else _reachFwd.set(0, 0, 1)
+  }
+  _mouthTarget.addScaledVector(_reachFwd, fwd)
+  // 폴 — 팔꿈치가 향할 방향: 아래 + 사용자쪽 살짝 + 드는 손 바깥쪽(자연스러운 굽힘,
+  // 절대 뒤로 안 꺾이게). 왼손=캐릭터 왼쪽(카메라 마주봄 기준 화면 오른쪽).
+  const outX = reachArm === 'lArm' ? 1 : -1
+  _reachPole.set(outX * 0.35, -1, 0).addScaledVector(_reachFwd, 0.35).normalize()
+  applyArmIK(reg, reachArm === 'lArm' ? 'l' : 'r', _mouthTarget, _reachPole)
+}
+
+function endCallResponseIfIdle() {
+  if (!activityRunner.isActive() || activityRunner.currentId() !== 'respondCall') return
+  const now = Date.now()
+  // 워치독 — lipsync.active가 고착돼도 하드 캡을 넘으면 종료(Codex NICE-TO-HAVE).
+  if (callStartedAt && now - callStartedAt > CALL_MAX_MS) { interruptActivity(true); return }
+  if (lipsync.active) {
+    callIdleDeadline = now + CALL_HOLD_MS
+    return
+  }
+  if (now >= callIdleDeadline) interruptActivity(true)
+}
+
+// J단계 거주형 비서 — 자율 활동 발동 판정(욕구 유틸리티 AI). 욕구를 시간만큼
+// 올리고(tick), 방의 활동 사물 중 "욕구×채움" 점수가 가장 높은 걸 고른다(임계
+// 미만이면 null → 기존 idle/walk 폴백). 디렉터 focus가 활동 focus와 맞으면 약간
+// 가산. 거의 공짜 계산이라 매 틱 호출.
+function maybeStartActivity() {
+  if (activityRunner.isActive()) return false
+  needsManager.tick()
+  const activities = (worldManager?.getActivityObjects?.() || [])
+    .map((o) => o.activity)
+    .filter(Boolean)
+  if (!activities.length) return false
+
+  const directive = behaviorDirector.current?.()
+  const pick = needsManager.chooseActivity(activities, { directiveFocus: directive?.focus || null })
+  if (!pick) return false
+  return activityRunner.start(pick) === true
+}
+
 // Codex MUST-FIX (step 1 round 2): tracking the active character id so the
 // IPC broadcast for persona slider edits can ignore stale messages aimed at
 // a previously-active character.
@@ -364,10 +543,24 @@ function scheduleAutoBehavior() {
   autoBehaviorTimer = setTimeout(() => {
     autoBehaviorTimer = null
 
-    if (autoBehaviorEnabled && !lipsync.active && getState?.() === 'idle') {
+    // 호출 응답이 유휴(대화 끝나고 일정 시간)면 종료하고 자율 생활 재개.
+    endCallResponseIfIdle()
+
+    // 활동(커피 등)이 진행 중이면 새 자율 행동을 시작하지 않는다 — pose 단계에선
+    // state가 idle이라 가드 없이는 활동 위에 다른 행동이 겹친다(Codex MUST-FIX).
+    if (autoBehaviorEnabled && !lipsync.active && !activityRunner.isActive() && getState?.() === 'idle') {
       // J단계 — 느린 LLM 디렉터 리프레시(maybeRun이 ~4분 간격·single-flight로
       // 자체 스로틀). fire-and-forget이라 이번 틱은 직전 directive로 동작.
       runBehaviorDirector()
+
+      // J단계 스마트 오브젝트 — 별도 저확률 "활동" 슬롯. 일반 가구 폴백에 숨기지
+      // 않고 독립 확률로 둬 사물 행동 빈도를 따로 튜닝(Codex NICE-TO-HAVE).
+      // 디렉터 focus:'self'(혼자 시간) + 차분/밤이면 약간 더 자주. 활동이 시작되면
+      // 이번 틱은 여기서 끝(아래 idle/walk/furniture 롤 건너뜀).
+      if (maybeStartActivity()) {
+        scheduleAutoBehavior()
+        return
+      }
 
       // Phase A/J: personality-weighted mix of in-place idle gestures, free
       // roam, and furniture interactions. Order matters — the in-place idle
@@ -449,6 +642,19 @@ function alignCharacterToGround() {
   currentModel.root.position.y -= bottomY
 }
 
+// 앉기 공중부양 수정 — 서 있을 때의 골반(腰/下半身) world Y를 1회 측정해
+// 컨트롤러에 주입한다. 캐릭터마다 골반 높이가 달라도 앉을 때 좌면에 맞춰
+// 루트를 내릴 수 있다. 모델이 씬에 배치된 직후 호출.
+function measureSeatedHipHeight(registry) {
+  const entry = registry?.roles?.get('hip') || registry?.roles?.get('lowerBody')
+  const bone = entry?.bone
+  if (!bone) { setSeatedHipHeight(null); return } // 더미/측정불가 → 이전 값 잔존 금지
+  bone.updateWorldMatrix(true, false)
+  const v = new Vector3()
+  bone.getWorldPosition(v)
+  setSeatedHipHeight(v.y > 0.05 ? v.y : null)
+}
+
 function frameCharacterCamera() {
   // Phase B (Codex MUST-FIX): the room sets the framing now — the camera
   // sits at the "aquarium glass" looking into the box at a fixed angle. If
@@ -524,6 +730,7 @@ async function loadVRMRuntimeModel(url, loadToken) {
         }
         applyCharacterScale()
         alignCharacterToGround()
+        measureSeatedHipHeight(currentModel.poseRig?.registry) // 앉기 높이용 골반 측정
         frameCharacterCamera()
         showBubble('새 캐릭터로 바꿨어요! 안녕하세요 👋', 3000)
         resolve(true)
@@ -725,6 +932,7 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
         }
         applyCharacterScale()
         alignCharacterToGround()
+        measureSeatedHipHeight(currentModel.poseRig?.registry) // 앉기 높이용 골반 측정
         // Settle skirt/tail/hair in the simulator's own (unscaled) space,
         // AFTER the final user-scale + ground alignment so reset() snaps
         // bodies to the transform the render loop will actually use.
@@ -838,11 +1046,17 @@ export function loadDummy() {
 
   applyCharacterScale()
   alignCharacterToGround()
+  measureSeatedHipHeight(currentModel?.poseRig?.registry) // 더미엔 hip 없음 → 초기화
   frameCharacterCamera()
 }
 
 function clearModel() {
   if (!currentModel) return
+
+  // J단계 — 모델 교체/해제 시 진행 중 활동 강제 중단 + 손 소품 분리(Codex MUST-FIX:
+  // 모든 라이프사이클 종료 경로에서 소품 정리, 구 본을 따라가지 않게).
+  interruptActivity(true)
+  propManager.detach()
 
   clearDummyBlinkTarget()
   // 이전 모델의 감정 target/스무딩 상태가 다음 모델로 새지 않게
@@ -985,6 +1199,151 @@ function setupVRMRestPose(vrm) {
 // computed in the same { x, y, z } per-role accumulator the spring then
 // filters, so the visible motion still goes through critically-damped
 // smoothing.
+
+// 보행 사이클 카운트(부동소수) — 한 사이클 = 좌우 한 걸음씩(2 steps). 다리·팔
+// 스윙이 같은 사이클을 공유하도록 t 기반 단일 출처(누적기 없이 완벽 동기).
+// 정수부 = 완료 사이클 수, 소수부 = 현 사이클 진행도(0..1).
+function walkStepsPerSec(personality) {
+  return 2.4 + ((personality?.energy ?? 0.5) - 0.5) * 0.8
+}
+function gaitCycleCount(t, personality) {
+  return t * (walkStepsPerSec(personality) / 2)
+}
+// 걷는 동안 상체 idle 클립에서 떼내어 보행 오버레이가 이기게 할 role들.
+const WALK_FREED_ROLES = [
+  'lArm', 'rArm', 'lElbow', 'rElbow', 'lArmTwist', 'rArmTwist',
+  'lHand', 'rHand', 'spine', 'chest', 'upperChest', 'neck', 'head',
+]
+// 보행 중 다리 gait가 소유하는 role — 상체 클립이 키해도 보행이 이기게 떼낸다
+// (applyPose가 다리 FK rest를 쓰고, applyWalkLegs가 그 위에 IK로 덮어쓴다=blend 기준).
+const LEG_IK_OWNED_ROLES = [
+  'lLeg', 'rLeg', 'lKnee', 'rKnee', 'lAnkle', 'rAnkle', 'lToe', 'rToe',
+]
+
+// ── 보행 다리 IK(발 월드 고정 = no-slip) ──────────────────────────────
+// 무클립시 MMD CCD 솔버가 꺼지므로([[apia-walk-gait]]) poseRig.applyLegIK(해석적
+// 2본)로 hip/knee를 직접 풀고 ankle을 발바닥-평행으로 정렬한다. 디딘(stance) 발은
+// 월드 좌표에 동결 → 몸이 그 위를 지나가도 발이 안 끌린다. **updateCharacter(루트
+// 이동) 뒤** 호출(Codex MUST-FIX). FK rest↔IK는 weight slerp로 pop 방지.
+const GAIT_STANCE = 0.62      // 사이클 중 발이 땅에 붙어있는 비율
+const FOOT_LIFT_WORLD = 0.06  // 스윙 발 들어올림(월드)
+const _wlFwd = new Vector3(), _wlLat = new Vector3(), _wlRootPos = new Vector3()
+const _wlRootQ = new Quaternion(), _wlTarget = new Vector3(), _wlNext = new Vector3()
+const _wlFkHip = new Quaternion(), _wlFkKnee = new Quaternion(), _wlFkAnkle = new Quaternion()
+const _wlIkHip = new Quaternion(), _wlIkKnee = new Quaternion()
+const _wlParentWQ = new Quaternion(), _wlDesiredWQ = new Quaternion(), _wlAnkleLocal = new Quaternion()
+const _smoothstep = (s) => s * s * (3 - 2 * s)
+
+function _captureLegRest(model, registry, root) {
+  const la = registry.roles.get('lAnkle')?.bone
+  const ra = registry.roles.get('rAnkle')?.bone
+  if (!la || !ra) { model._walkLegs = { unsupported: true }; return }
+  const lw = la.getWorldPosition(new Vector3())
+  const rw = ra.getWorldPosition(new Vector3())
+  root.getWorldQuaternion(_wlRootQ)
+  const rootInv = _wlRootQ.clone().invert()
+  // 루트 기준 발 방향(평행 유지용) = inverse(rootWQ) * ankleWQ.
+  const flat = (a) => rootInv.clone().multiply(a.getWorldQuaternion(new Quaternion()))
+  model._walkLegs = {
+    groundY: Math.min(lw.y, rw.y),
+    halfWidth: Math.hypot(lw.x - rw.x, lw.z - rw.z) / 2,
+    flatL: flat(la), flatR: flat(ra),
+    weight: 0, lastState: 'idle', // 모델별 상태(전역 아님 — 교체 시 새 모델이 자기 것)
+    l: { plant: lw.clone(), from: lw.clone(), prevU: 0 },
+    r: { plant: rw.clone(), from: rw.clone(), prevU: 0.5 },
+  }
+}
+
+function applyWalkLegs(model, t, delta) {
+  if (!model?.poseRig?.registry) return
+  const { registry } = model.poseRig
+  const root = model.root
+  const state = getState()
+  const la = registry.roles.get('lAnkle')?.bone
+  const ra = registry.roles.get('rAnkle')?.bone
+  // rest 기준(발 높이·간격·평행방향)은 1회 캡처 — 가능하면 서 있을 때(정확). 드물게
+  // 로드 직후 바로 walk면 근사 캡처(영영 멈추지 않게). plant/from은 아래서 진입 시 재초기화.
+  if (!model._walkLegs) _captureLegRest(model, registry, root)
+  const wl = model._walkLegs
+  if (!wl || wl.unsupported) return
+
+  const personality = motionManager.getPersonalityVector?.() || { energy: 0.5 }
+  const cyc = gaitCycleCount(t, personality)
+
+  // 비보행→보행 진입: plant/from을 **현재 발목 월드**로 초기화(첫 스텝이 실제 발
+  // 위치에서 시작 → 스냅 방지, Codex MUST-FIX). prevU=현재 위상으로 맞춰 진입
+  // 프레임에 잘못된 touchdown이 안 잡히게 한다.
+  if (state === 'walk' && wl.lastState !== 'walk' && la && ra) {
+    root.updateWorldMatrix(true, false)
+    la.updateWorldMatrix(true, false); ra.updateWorldMatrix(true, false)
+    la.getWorldPosition(wl.l.plant); wl.l.from.copy(wl.l.plant); wl.l.prevU = cyc - Math.floor(cyc)
+    ra.getWorldPosition(wl.r.plant); wl.r.from.copy(wl.r.plant); wl.r.prevU = (cyc + 0.5) - Math.floor(cyc + 0.5)
+  }
+  wl.lastState = state
+
+  const wTarget = state === 'walk' ? 1 : 0
+  wl.weight += (wTarget - wl.weight) * Math.min(1, delta * 6)
+  if (wl.weight < 0.002) return // 안 걸을 땐 다리 안 건드림(FK rest 유지)
+  const w = wl.weight
+
+  // 루트 자신만 갱신(자식 서브트리 전체 재계산 금지 — 치마/머리 MMD 물리가 쓴
+  // 본 결과를 로컬에서 덮어쓰면 옷 물리가 깨진다, 직접 확인). 다리 체인 본은
+  // 아래 루프에서 본별로 갱신한다.
+  root.updateWorldMatrix(true, false)
+  root.getWorldPosition(_wlRootPos)
+  root.getWorldQuaternion(_wlRootQ)
+  const yaw = root.rotation.y
+  _wlFwd.set(Math.sin(yaw), 0, Math.cos(yaw)) // 진행방향
+  _wlLat.set(Math.cos(yaw), 0, -Math.sin(yaw)) // 오른쪽
+
+  const cyclePeriod = 2 / walkStepsPerSec(personality)
+  const stepAhead = 0.31 * getWalkSpeed() * cyclePeriod
+
+  for (const [side, off, sign, st, flat] of [
+    ['l', 0, -1, wl.l, wl.flatL],
+    ['r', 0.5, 1, wl.r, wl.flatR],
+  ]) {
+    const u = (cyc + off) - Math.floor(cyc + off)
+    const stance = u < GAIT_STANCE
+    const wasStance = st.prevU < GAIT_STANCE
+    _wlNext.copy(_wlRootPos).addScaledVector(_wlFwd, stepAhead).addScaledVector(_wlLat, sign * wl.halfWidth)
+    _wlNext.y = wl.groundY
+    if (stance) {
+      if (!wasStance) st.plant.copy(_wlNext) // touchdown: 디딜 지점 동결
+      _wlTarget.copy(st.plant)               // 월드 고정 → no-slip
+    } else {
+      if (wasStance) st.from.copy(st.plant)  // lift-off: 떠난 자리 기억
+      const s = _smoothstep((u - GAIT_STANCE) / (1 - GAIT_STANCE))
+      _wlTarget.lerpVectors(st.from, _wlNext, s)
+      _wlTarget.y = wl.groundY + Math.sin(s * Math.PI) * FOOT_LIFT_WORLD
+    }
+    st.prevU = u
+
+    const hip = registry.roles.get(side + 'Leg')?.bone
+    const knee = registry.roles.get(side + 'Knee')?.bone
+    const ankle = registry.roles.get(side + 'Ankle')?.bone
+    if (!hip || !knee || !ankle) continue
+    // 다리 체인만 월드행렬 갱신(조상=척추/골반, 치마 가지 안 건드림). 루트가
+    // 막 이동했으니 IK가 읽는 hip/knee/ankle 월드를 현재 루트 기준으로 맞춘다.
+    hip.updateWorldMatrix(true, false)
+    knee.updateWorldMatrix(true, false)
+    ankle.updateWorldMatrix(true, false)
+    // FK(applyPose 결과) 저장 → IK 풀고 weight로 slerp(무릎 pop·진입 스냅 방지).
+    _wlFkHip.copy(hip.quaternion); _wlFkKnee.copy(knee.quaternion); _wlFkAnkle.copy(ankle.quaternion)
+    if (!applyLegIK(registry, side, _wlTarget, _wlFwd)) continue
+    _wlIkHip.copy(hip.quaternion); _wlIkKnee.copy(knee.quaternion)
+    hip.quaternion.copy(_wlFkHip).slerp(_wlIkHip, w)
+    knee.quaternion.copy(_wlFkKnee).slerp(_wlIkKnee, w)
+    knee.updateWorldMatrix(true, false)
+    // 발바닥 평행: ankle 월드방향 = 루트월드 * (루트기준 rest 발방향), 부모 기준 로컬로.
+    ankle.parent.getWorldQuaternion(_wlParentWQ)
+    _wlDesiredWQ.copy(_wlRootQ).multiply(flat)
+    _wlAnkleLocal.copy(_wlParentWQ).invert().multiply(_wlDesiredWQ)
+    ankle.quaternion.copy(_wlFkAnkle).slerp(_wlAnkleLocal, w)
+    ankle.updateWorldMatrix(true, false)
+  }
+}
+
 function updateBody(t, delta) {
   if (!currentModel?.poseRig) return
   const { registry, spring, saccade } = currentModel.poseRig
@@ -1019,6 +1378,20 @@ function updateBody(t, delta) {
         : { arms: true, torso: true })
     : null
 
+  // 걷는 동안엔 상체 idle 제스처 클립(머리 갸웃·손 모으기 등)이 팔/몸통을 쥐고
+  // 있어도 보행 팔 스윙·다리 gait가 이기도록 그 role을 마스크에서 떼낸다. 클립
+  // 수명은 불변(국소·가역적, Codex 권고). granular roles 마스크에만 적용 — 레거시
+  // {arms,torso} 마스크는 그대로 둔다(VRM/FBX 본 이름 불일치 폴백).
+  // 주의: 무클립 상태에선 MMD helper의 IK/Grant 솔버가 꺼져 있어(animationRuntime
+  // stashMmdMixer) 다리는 발 IK가 아니라 FK(左足D 직접 회전)로 구동된다.
+  let effClipMask = clipMask
+  if (state === 'walk' && clipMask?.roles) {
+    const roles = new Set(clipMask.roles)
+    for (const r of WALK_FREED_ROLES) roles.delete(r)
+    for (const r of LEG_IK_OWNED_ROLES) roles.delete(r) // 다리도 보행 gait가 소유
+    effClipMask = roles.size ? { roles } : null
+  }
+
   // Root-position lock used to live here as a per-frame mesh.skeleton
   // walk to copy restPos into 3 root bones. Codex round 2 pointed out
   // it was incomplete (missing 全ての親 + IK + IK親 + half-width/full-
@@ -1035,7 +1408,11 @@ function updateBody(t, delta) {
     state,
     motion,
     personality,
-    clipMask,
+    // 손모양 — 행동 디렉터가 currentModel.poseRig.handShape를 세팅하면 그걸,
+    // 없으면 'relaxed'(자연스러운 휴식 손). 후속 단계에서 디렉터가 가리키기/
+    // 주먹 등을 상황에 맞춰 바꾼다.
+    handShape: currentModel.poseRig?.handShape || 'open',
+    clipMask: effClipMask,
   })
 
   // C단계 — 걷기가 시작됐는데 클립이 아직 본을 소유 중이면 클립을
@@ -1048,20 +1425,21 @@ function updateBody(t, delta) {
     releaseActiveClips(currentModel, animationCtx)
   }
 
-  // — Walk gait overlay. Procedural sine on top of the summed map so the
-  // spring filter is the only consumer. Same stride math the old
-  // updateVRMBody used; this is the one part of the body where layered
-  // breath isn't the right model. Foot/hip phase drives everything else.
-  if (state === 'walk' && !clipMask) {
+  // — Walk gait overlay (상체). 걷는 동안 항상 실행(클립 유무 무관): 예전엔
+  // `!clipMask` 가드 때문에 상체 idle 클립이 떠 있으면 gait가 통째로 스킵돼
+  // 캐릭터가 얼어붙어 미끄러졌다. effClipMask(위)가 걷는 동안 팔/몸통을 클립에서
+  // 떼내 이 오버레이가 본에 닿게 한다. **다리는 여기서 안 건드린다** — applyWalkLegs
+  // (발 IK, updateCharacter 뒤)가 발을 월드에 고정해 구동한다. 팔·몸통은 발과 같은
+  // 보행 사이클(gaitCycleCount)을 공유해 어긋나지 않는다.
+  if (state === 'walk') {
     const intensity = Number.isFinite(motion?.intensity) ? motion.intensity : 1
-    const energyBoost = (personality.energy ?? 0.5) - 0.5
-    const stride = t * (6.5 + energyBoost * 2)
     const range = (personality.movementRange ?? 0.5) - 0.5
-    const swing = 0.35 * intensity * (1 + range * 0.4)
-    const phase = Math.sin(stride)
-    const kneePhase = Math.sin(stride + 0.4)
-    const kneeAmp = 0.30 * intensity * (1 + range * 0.4)
-    const armWalkAmp = 0.30 * intensity * (1 + energyBoost * 0.4)
+    // 발 IK와 동일한 보행 사이클 공유 → 팔·다리·발이 어긋나지 않는다.
+    const cyc = gaitCycleCount(t, personality)
+    const twoPi = Math.PI * 2
+    // 왼쪽 기준 위상: cyc=0에서 왼다리/왼발 앞(+). 팔은 같은쪽 다리와 반대.
+    const legPhase = Math.cos(twoPi * cyc) // 왼다리 cyc0에서 앞(+), 팔은 반대
+    const armWalkAmp = 0.36 * intensity * (1 + range * 0.4)
     function bump(role, dx, dy, dz) {
       if (!registry.roles.has(role)) return
       const cur = summed.get(role) || { x: 0, y: 0, z: 0 }
@@ -1070,19 +1448,19 @@ function updateBody(t, delta) {
       cur.z += dz || 0
       summed.set(role, cur)
     }
-    bump('lLeg', phase * swing, 0, 0)
-    bump('rLeg', -phase * swing, 0, 0)
-    bump('lKnee', Math.max(0, kneePhase) * kneeAmp, 0, 0)
-    bump('rKnee', Math.max(0, -kneePhase) * kneeAmp, 0, 0)
-    bump('lArm', -phase * armWalkAmp, 0, 0)
-    bump('rArm', phase * armWalkAmp, 0, 0)
-    bump('spine', Math.abs(phase) * 0.01 * intensity, 0, phase * 0.045 * intensity)
-    bump('chest', 0, -phase * 0.06 * intensity, 0)
-    bump('head', 0, Math.sin(stride * 0.5) * 0.035 * intensity, 0)
+    // 다리는 applyWalkLegs(발 IK, updateCharacter 뒤)가 소유 — 발을 월드에 고정해
+    // 미끄러짐을 없앤다. 여기서 FK 다리 bump를 하면 IK와 충돌하므로 안 한다.
+    // 팔 스윙 — 같은쪽 다리와 반대 위상(왼다리 앞 → 왼팔 뒤). 모델 불문.
+    bump('lArm', -legPhase * armWalkAmp, 0, 0)
+    bump('rArm', legPhase * armWalkAmp, 0, 0)
+    // 몸통/머리 미세 동작(머리는 사이클의 절반 주기로 좌우).
+    bump('spine', Math.abs(legPhase) * 0.01 * intensity, 0, legPhase * 0.035 * intensity)
+    bump('chest', 0, -legPhase * 0.05 * intensity, 0)
+    bump('head', 0, Math.cos(Math.PI * cyc) * 0.03 * intensity, 0)
   }
 
-  stepPoseSpring(spring, summed, delta, clipMask)
-  applyPose(registry, spring, clipMask)
+  stepPoseSpring(spring, summed, delta, effClipMask)
+  applyPose(registry, spring, effClipMask)
 
   // VRM-only: blink expression. PMX blink rides on the morph map and is
   // driven by lipsyncMMD/lipsyncVRM downstream.
@@ -1130,8 +1508,10 @@ function animate() {
       // still running breath/gaze/saccade. So we no longer skip the call
       // when an FBX clip is active — the mask handles the conflict.
       updateBody(t, delta)
+      maybeReachPropToMouth() // 소품 든 팔 IK 입-도달(모델 불문 — VRM에도 sip 적용)
       lipsyncVRM(delta)
       updateCharacter(root, t, delta)
+      applyWalkLegs(currentModel, t, delta) // 보행 발 IK — 루트 이동 뒤(발 월드 고정)
     } else if (currentModel.type === 'mmd') {
       currentModel.mixer?.update(delta)
       getMmdHelper()?.update(delta)
@@ -1139,21 +1519,38 @@ function animate() {
       // 위에 합성한다. helper.update 직후·inertialization 전이라 전환 평활화와
       // 표시자세 캐시가 처짐 포함 결과를 본다(클립은 제스처 델타만 갖는다).
       if (currentModel._clipRoles?.size && currentModel.poseRig?.registry) {
-        applyClipArmHangCorrection(currentModel.poseRig.registry, { roles: currentModel._clipRoles })
+        // 소품을 든 팔은 "마시기/읽기" 클립이 일부러 어깨를 들어올리므로 팔처짐
+        // 보정에서 제외한다 — 안 그러면 droop가 lift를 상쇄해 손이 입까지 못 옴.
+        // 가정: 소품을 드는 활동은 그 팔에 의도된 raise 포즈(idle_sip)를 쓴다.
+        // 향후 소품 팔에 일반 제스처 클립을 쓰면 이 제외를 포즈별로 한정할 것.
+        let hangRoles = currentModel._clipRoles
+        const heldArm = propManager.heldArmRole?.()
+        if (heldArm && hangRoles.has(heldArm)) {
+          hangRoles = new Set(hangRoles)
+          hangRoles.delete(heldArm)
+        }
+        applyClipArmHangCorrection(currentModel.poseRig.registry, { roles: hangRoles })
       }
       // F단계 — 클립 전환 관성 보정. helper(mixer는 helper 내부 소유) 뒤,
       // 절차적 레이어 앞이 유일하게 유효한 자리다 (inertialization.js의
       // 설계 결정 주석 참조).
       applyInertialization(currentModel, delta)
       updateBody(t, delta)
+      // J단계 — 소품(컵/책)을 든 팔이 clip 소유(sip 포즈)면 2본 IK로 손목을 입까지
+      // 가져온다(FK로는 불가했던 "컵을 입 정중앙"). updateBody 뒤 = 절차 팔 위에 덮어씀.
+      maybeReachPropToMouth()
       // 화면에 나가는 최종 자세를 캐시 — 다음 전환의 연속성 기준점
       recordDisplayedPose(currentModel, delta)
       updateCharacter(root, t, delta)
+      applyWalkLegs(currentModel, t, delta) // 보행 발 IK — 루트 이동 뒤(발 월드 고정)
       lipsyncMMD(delta)
       // 표정은 맨 끝 — _updateBlink(updateCharacter 내부)가 갱신한 이번
       // 프레임 blink를 읽고, "managed morphs win after helper/lipsync"
       // (Codex MUST-FIX: updateBody 직후면 전 프레임 blink를 읽는다)
-      updateExpression(currentModel, delta, getBlinkValue())
+      updateExpression(
+        currentModel, delta, getBlinkValue(),
+        motionManager.getPersonalityVector?.() || null,
+      )
     } else {
       updateCharacter(root, t, delta)
 
@@ -1163,11 +1560,15 @@ function animate() {
           : 1
       }
     }
+
+    // J단계 거주형 비서 — 손 소품 동기화. 반드시 updateCharacter(루트 위치/회전까지
+    // 끝남) 뒤라야 손 본 월드 변환이 이번 프레임 최종값이다(Codex MUST-FIX).
+    propManager.sync()
   }
 
   updateBubblePosition()
   updateWorldLabels(camera)
-  renderer.render(scene, camera)
+  outlineRender(scene, camera)
 }
 
 function initCameraControls() {
@@ -1324,11 +1725,26 @@ if (window.api) {
     } else {
       applyCharacterScale()
       alignCharacterToGround()
+      measureSeatedHipHeight(currentModel?.poseRig?.registry) // 리스케일 후 재측정(stale 방지)
     }
   })
 }
 
-initWorld({ scene, camera, renderer, showBubble, onWalkTo: walkTo })
+initWorld({
+  scene,
+  camera,
+  renderer,
+  showBubble,
+  // 일반 가구 클릭 = 사용자가 다른 곳을 명시적으로 지시 → 호출 응답까지 포함해
+  // 강제 중단(force) 후 이동. 안 그러면 러너 goto onArrive가 교체돼 wedge.
+  onWalkTo: (payload) => { interruptActivity(true); walkTo(payload) },
+  // J단계 스마트 오브젝트 — activity 사물 클릭 시 활동 시퀀서 시작. 사용자 클릭은
+  // 지시된 의도라, 다른 활동이 진행 중이면 선점(force 중단 후 시작)한다.
+  onStartActivity: (activity, { source } = {}) => {
+    if (source === 'click') interruptActivity(true)
+    return activityRunner.start(activity) === true
+  }
+})
   .then((manager) => {
     worldManager = manager
   })
@@ -1353,7 +1769,10 @@ initChat({
   },
   getIdleMotion: () => {
     return motionManager.pickIdleMotion()
-  }
+  },
+  // 호출 응답 = 최우선 인터럽트 — 사용자가 메시지를 보내면(부르면) 하던 일을 멈추고
+  // 컴퓨터 앞으로 와 앉아 "불렀어?". 성격이 타이밍을 표현.
+  onUserCall: () => respondToCall()
 })
 
 // Step 3 — click on the character to open the chat panel.
@@ -1394,6 +1813,10 @@ window.api?.onSettingsApplied?.((s) => updateCharacterClickability(s))
 let _preLipsyncState = null
 window.api?.onCharacterAction?.((payload) => {
   if (!payload || typeof payload !== 'object') return
+  // 지시된 캐릭터 액션(감정·말풍선·카메라 응시·립싱크)은 사용자/백엔드가 시킨
+  // 것이라 진행 중인 자율 활동보다 우선한다. 특히 face-camera는 walkTo를 부르므로
+  // 활동을 먼저 끊지 않으면 러너가 wedge된다(Codex MUST-FIX).
+  interruptActivity()
   switch (payload.action) {
     case 'emotion': {
       const emotion = payload.value || 'neutral'
@@ -1407,7 +1830,9 @@ window.api?.onCharacterAction?.((payload) => {
       if (typeof payload.text === 'string') showBubble(payload.text, 4000)
       break
     case 'face-camera':
-      requestFaceCamera({ durationMs: payload.durationMs || 12000, approach: true })
+      // 호출 응답(priority)으로 이미 컴퓨터 앞에 앉아있으면 approach=false —
+      // approach:true는 walkTo를 불러 앉은 자세에서 끌려나온다(Codex MUST-FIX).
+      requestFaceCamera({ durationMs: payload.durationMs || 12000, approach: !activityRunner.isPriority() })
       break
     case 'lipsync-start': {
       // H단계 Codex MUST-FIX(사후): 타임라인 검증이 먼저 — sanitize에서
@@ -1438,13 +1863,16 @@ window.api?.onCharacterAction?.((payload) => {
       break
     case 'show-main-chat': {
       // Wallpaper-off path: chatWindow yielded, surface the panel inside the
-      // main overlay so the user can keep typing without going through tray.
-      const panel = document.getElementById('chat-panel')
-      const toggle = document.getElementById('chat-toggle')
-      if (panel) panel.classList.add('visible')
-      if (toggle) toggle.style.display = ''
+      // main overlay. setChatOpen syncs state.chatOpen(다음 토글 정상)+패널 표시+
+      // 부름(onUserCall→respondToCall). 직접 DOM 변경은 상태 불일치라 금지(Codex).
+      setChatOpen(true)
       break
     }
+    case 'call':
+      // 호출 — 단축키(Ctrl+Alt+A)·코너 버튼 등으로 채팅(창)을 열 때. 하던 일을
+      // 멈추고 컴퓨터 앞으로 와 마주본다.
+      respondToCall()
+      break
     default:
       break
   }

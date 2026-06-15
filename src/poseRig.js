@@ -25,7 +25,7 @@
 //
 // No part-by-part functions outside this file.
 
-import { Quaternion, Euler } from 'three'
+import { Quaternion, Euler, Vector3 } from 'three'
 
 // ── Bone role table — single source of truth ─────────────────────────
 // Every role is *optional* per model. The registry only stores roles
@@ -41,9 +41,21 @@ const HUMANOID_ROLES = [
   'lArmTwist', 'rArmTwist',
   'lHandTwist', 'rHandTwist',
   'lWrist', 'rWrist',
+  // 손가락 — 5손가락 × 3마디 × 양손 = 30 role. 엄지 1마디=중수골(metacarpal/親指０).
+  'lThumb1', 'lThumb2', 'lThumb3',
+  'lIndex1', 'lIndex2', 'lIndex3',
+  'lMiddle1', 'lMiddle2', 'lMiddle3',
+  'lRing1', 'lRing2', 'lRing3',
+  'lPinky1', 'lPinky2', 'lPinky3',
+  'rThumb1', 'rThumb2', 'rThumb3',
+  'rIndex1', 'rIndex2', 'rIndex3',
+  'rMiddle1', 'rMiddle2', 'rMiddle3',
+  'rRing1', 'rRing2', 'rRing3',
+  'rPinky1', 'rPinky2', 'rPinky3',
   'lLeg', 'rLeg',
   'lKnee', 'rKnee',
   'lAnkle', 'rAnkle',
+  'lToe', 'rToe', // 발끝(足先EX/つま先) — 변형 본만, IK 본(足ＩＫ) 아님.
 ]
 
 // PMX 일본어 본 이름. 순서 = 우선순위 (예: D-bone이 있으면 D-bone 우선).
@@ -69,12 +81,27 @@ const MMD_CANDIDATES = {
   rHandTwist: ['右手捩'],
   lWrist: ['左手首'],
   rWrist: ['右手首'],
+  // PMX 표준 손가락 본 (전각 숫자 ０１２). 엄지는 親指０(중수골)·親指１·親指２.
+  lThumb1: ['左親指０', '左親指0'], lThumb2: ['左親指１', '左親指1'], lThumb3: ['左親指２', '左親指2'],
+  lIndex1: ['左人指１', '左人指1'], lIndex2: ['左人指２', '左人指2'], lIndex3: ['左人指３', '左人指3'],
+  lMiddle1: ['左中指１', '左中指1'], lMiddle2: ['左中指２', '左中指2'], lMiddle3: ['左中指３', '左中指3'],
+  lRing1: ['左薬指１', '左薬指1'], lRing2: ['左薬指２', '左薬指2'], lRing3: ['左薬指３', '左薬指3'],
+  lPinky1: ['左小指１', '左小指1'], lPinky2: ['左小指２', '左小指2'], lPinky3: ['左小指３', '左小指3'],
+  rThumb1: ['右親指０', '右親指0'], rThumb2: ['右親指１', '右親指1'], rThumb3: ['右親指２', '右親指2'],
+  rIndex1: ['右人指１', '右人指1'], rIndex2: ['右人指２', '右人指2'], rIndex3: ['右人指３', '右人指3'],
+  rMiddle1: ['右中指１', '右中指1'], rMiddle2: ['右中指２', '右中指2'], rMiddle3: ['右中指３', '右中指3'],
+  rRing1: ['右薬指１', '右薬指1'], rRing2: ['右薬指２', '右薬指2'], rRing3: ['右薬指３', '右薬指3'],
+  rPinky1: ['右小指１', '右小指1'], rPinky2: ['右小指２', '右小指2'], rPinky3: ['右小指３', '右小指3'],
   lLeg: ['左足D', '左足'],
   rLeg: ['右足D', '右足'],
   lKnee: ['左ひざD', '左ひざ'],
   rKnee: ['右ひざD', '右ひざ'],
   lAnkle: ['左足首D', '左足首'],
   rAnkle: ['右足首D', '右足首'],
+  // 발끝 변형 본 — 足先EX(가시 발끝 마디) 우선, 없으면 つま先. つま先ＩＫ는
+  // 제외(IK 타깃 본을 FK로 쓰면 안 됨 — codex MUST-FIX).
+  lToe: ['左足先EX', '左つま先'],
+  rToe: ['右足先EX', '右つま先'],
 }
 
 // VRM humanoid normalized bone names (three-vrm).
@@ -96,12 +123,26 @@ const VRM_NORMALIZED = {
   rElbow: 'rightLowerArm',
   lWrist: 'leftHand',
   rWrist: 'rightHand',
+  // VRM humanoid 손가락 (three-vrm은 0.x/1.0 모두 1.0 정규화 이름으로 노출).
+  // 엄지 1마디 = Metacarpal, 새끼는 Pinky가 아니라 'Little'.
+  lThumb1: 'leftThumbMetacarpal', lThumb2: 'leftThumbProximal', lThumb3: 'leftThumbDistal',
+  lIndex1: 'leftIndexProximal', lIndex2: 'leftIndexIntermediate', lIndex3: 'leftIndexDistal',
+  lMiddle1: 'leftMiddleProximal', lMiddle2: 'leftMiddleIntermediate', lMiddle3: 'leftMiddleDistal',
+  lRing1: 'leftRingProximal', lRing2: 'leftRingIntermediate', lRing3: 'leftRingDistal',
+  lPinky1: 'leftLittleProximal', lPinky2: 'leftLittleIntermediate', lPinky3: 'leftLittleDistal',
+  rThumb1: 'rightThumbMetacarpal', rThumb2: 'rightThumbProximal', rThumb3: 'rightThumbDistal',
+  rIndex1: 'rightIndexProximal', rIndex2: 'rightIndexIntermediate', rIndex3: 'rightIndexDistal',
+  rMiddle1: 'rightMiddleProximal', rMiddle2: 'rightMiddleIntermediate', rMiddle3: 'rightMiddleDistal',
+  rRing1: 'rightRingProximal', rRing2: 'rightRingIntermediate', rRing3: 'rightRingDistal',
+  rPinky1: 'rightLittleProximal', rPinky2: 'rightLittleIntermediate', rPinky3: 'rightLittleDistal',
   lLeg: 'leftUpperLeg',
   rLeg: 'rightUpperLeg',
   lKnee: 'leftLowerLeg',
   rKnee: 'rightLowerLeg',
   lAnkle: 'leftFoot',
   rAnkle: 'rightFoot',
+  lToe: 'leftToes',
+  rToe: 'rightToes',
 }
 
 // ── Registry build ───────────────────────────────────────────────────
@@ -271,6 +312,13 @@ const ROLE_OMEGA = {
   lLeg: 5, rLeg: 5,
   lKnee: 5, rKnee: 5,
   lAnkle: 5, rAnkle: 5,
+  lToe: 8, rToe: 8,
+}
+// 손가락은 손목보다 가볍게 — 약간 더 빠른 응답(ω=12). 30개를 한 번에 채운다.
+for (const hand of ['l', 'r']) {
+  for (const finger of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) {
+    for (const seg of [1, 2, 3]) ROLE_OMEGA[`${hand}${finger}${seg}`] = 12
+  }
 }
 const DEFAULT_OMEGA = 6
 
@@ -307,12 +355,23 @@ const ARMS_ROLES = new Set([
   'lArmTwist', 'rArmTwist',
   'lHandTwist', 'rHandTwist',
   'lWrist', 'rWrist',
+  // 손가락도 팔 체인의 일부 — 클립이 팔을 소유하면 손가락 절차 모션도 양보.
+  // (granular 마스크는 rolesForBones가 이미 자동 처리하지만, legacy 통짜
+  //  마스크 경로에서도 손모양 레이어가 클립 손가락 트랙과 싸우지 않게.)
+  ...(() => {
+    const s = []
+    for (const hand of ['l', 'r'])
+      for (const finger of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky'])
+        for (const seg of [1, 2, 3]) s.push(`${hand}${finger}${seg}`)
+    return s
+  })(),
 ])
 const TORSO_ROLES = new Set(['hip', 'lowerBody', 'spine', 'chest'])
 const LEGS_ROLES = new Set([
   'lLeg', 'rLeg',
   'lKnee', 'rKnee',
   'lAnkle', 'rAnkle',
+  'lToe', 'rToe',
 ])
 
 function maskedRoleSet(clipMask) {
@@ -474,6 +533,177 @@ export function applyClipArmHangCorrection(registry, clipMask) {
   }
 }
 
+// ── 팔 IK — 해석적 2본 IK + 폴 벡터로 손목을 월드 목표점에 도달시킨다 ──────
+// FK 오일러로는 이 PMX 리그에서 "팔꿈치 내리고 전완만 입으로"가 불가(어깨 lift =
+// 팔꿈치 abduction). IK는 손목을 목표(입)에 직접 맞춘다.
+// _aimJointAtTarget = 관절의 현재 자식방향(월드)을 목표 방향으로 회전(본 roll축
+// 가정 없음 → 모델 불문). applyArmIK는 이걸 코사인법칙으로 구한 팔꿈치점·손목목표에
+// 적용 = 해석적 해(제약 없는 CCD의 과신전/역굽힘 방지). updateBody 뒤 호출해 clip/
+// 절차 팔 위에 덮어쓴다.
+const _ikBonePos = new Vector3()
+const _ikEffPos = new Vector3()
+const _ikCurDir = new Vector3()
+const _ikTgtDir = new Vector3()
+const _ikDelta = new Quaternion()
+const _ikParentQ = new Quaternion()
+const _ikBoneQ = new Quaternion()
+
+function _aimJointAtTarget(joint, effector, target) {
+  joint.getWorldPosition(_ikBonePos)
+  effector.getWorldPosition(_ikEffPos)
+  _ikCurDir.copy(_ikEffPos).sub(_ikBonePos)
+  _ikTgtDir.copy(target).sub(_ikBonePos)
+  if (_ikCurDir.lengthSq() < 1e-8 || _ikTgtDir.lengthSq() < 1e-8) return
+  _ikCurDir.normalize()
+  _ikTgtDir.normalize()
+  _ikDelta.setFromUnitVectors(_ikCurDir, _ikTgtDir) // 월드 회전: effector 방향 → 목표 방향
+  joint.getWorldQuaternion(_ikBoneQ)
+  _ikBoneQ.premultiply(_ikDelta) // 새 월드 쿼터니언
+  joint.parent.getWorldQuaternion(_ikParentQ)
+  joint.quaternion.copy(_ikParentQ.invert().multiply(_ikBoneQ)) // 로컬로 변환
+  joint.updateWorldMatrix(false, true) // 자식 월드 갱신(다음 관절이 최신 위치 보게)
+}
+
+// 해석적 2본 IK 보조 — 어깨/손목 월드, 길이, 폴(elbow 방향)로 팔꿈치 위치를 계산.
+const _DOWN = new Vector3(0, -1, 0)
+const _ikS = new Vector3()
+const _ikE0 = new Vector3()
+const _ikW = new Vector3()
+const _ikAxis = new Vector3()
+const _ikPole = new Vector3()
+const _ikBend = new Vector3()
+const _ikUpDir = new Vector3()
+const _ikElbowPt = new Vector3()
+const _ikTc = new Vector3()
+const _ikAxisQ = new Quaternion()
+const _ikTmpA = new Vector3()
+const _ikTmpB = new Vector3()
+
+/**
+ * 어깨→팔꿈치→손목 2본 IK — **해석적 + 폴 벡터**. side 'l'|'r'. target 월드 좌표.
+ * 제약 없는 CCD는 팔꿈치 과신전/역굽힘(인체 불가능) 양산 → 폴 벡터로 팔꿈치가
+ * 항상 자연 방향(아래·앞)으로만 굽게 하고, 도달거리를 [|L1-L2|,L1+L2]로 clamp해
+ * 팔이 펴진 채 꺾이는 것도 막는다(Codex/사용자 비판 리뷰 반영). poleDir = 팔꿈치가
+ * 향할 월드 방향(없으면 아래). 결과: 손목≈target, 팔꿈치는 자연스러운 굽힘.
+ */
+export function applyArmIK(registry, side, target, poleDir = null) {
+  const upper = registry?.roles?.get(side + 'Arm')?.bone
+  const elbow = registry?.roles?.get(side + 'Elbow')?.bone
+  const wrist = registry?.roles?.get(side + 'Wrist')?.bone
+  if (!upper || !elbow || !wrist || !upper.parent || !elbow.parent) return
+
+  upper.getWorldPosition(_ikS)
+  elbow.getWorldPosition(_ikE0)
+  wrist.getWorldPosition(_ikW)
+  const L1 = _ikS.distanceTo(_ikE0)
+  const L2 = _ikE0.distanceTo(_ikW)
+  if (L1 < 1e-5 || L2 < 1e-5) return
+
+  _ikAxis.copy(target).sub(_ikS)
+  let d = _ikAxis.length()
+  if (d < 1e-5) return
+  _ikAxis.divideScalar(d) // 어깨→목표 단위벡터
+
+  // 도달거리 clamp — 너무 멀면 펴고(과신전 위험), 너무 가까우면 과접힘.
+  const maxR = L1 + L2 - 1e-3
+  const minR = Math.abs(L1 - L2) + 1e-3
+  if (d > maxR) d = maxR
+  if (d < minR) d = minR
+  _ikTc.copy(_ikS).addScaledVector(_ikAxis, d) // clamp된 손목 목표
+
+  // 어깨각(코사인 법칙): 어깨에서 (어깨→목표)와 (어깨→팔꿈치) 사이 각.
+  let cosA = (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d)
+  cosA = Math.min(1, Math.max(-1, cosA))
+  const a = Math.acos(cosA)
+
+  // 폴 — 팔꿈치가 향할 방향(자연스러운 굽힘). 기본 아래.
+  _ikPole.copy(poleDir || _DOWN)
+  if (_ikPole.lengthSq() < 1e-6) _ikPole.set(0, -1, 0)
+  _ikPole.normalize()
+  // 굽힘축 = axis ⊥ pole. 평행이면 대체축으로.
+  _ikBend.crossVectors(_ikAxis, _ikPole)
+  if (_ikBend.lengthSq() < 1e-6) {
+    _ikBend.crossVectors(_ikAxis, _ikTmpA.set(0, 0, 1))
+    if (_ikBend.lengthSq() < 1e-6) _ikBend.crossVectors(_ikAxis, _ikTmpB.set(1, 0, 0))
+  }
+  _ikBend.normalize()
+
+  // 팔꿈치 위치 = 어깨 + (axis를 굽힘축 둘레로 a만큼 폴 쪽으로 회전) × L1.
+  _ikAxisQ.setFromAxisAngle(_ikBend, a)
+  _ikUpDir.copy(_ikAxis).applyQuaternion(_ikAxisQ)
+  // 폴 쪽으로 굽었는지 확인 — 반대면 -a로(역굽힘 방지).
+  if (_ikUpDir.dot(_ikPole) < _ikAxis.dot(_ikPole)) {
+    _ikAxisQ.setFromAxisAngle(_ikBend, -a)
+    _ikUpDir.copy(_ikAxis).applyQuaternion(_ikAxisQ)
+  }
+  _ikElbowPt.copy(_ikS).addScaledVector(_ikUpDir, L1)
+
+  // 본 정렬: 위팔이 계산된 팔꿈치점을, 전완이 clamp된 손목 목표를 향하게.
+  _aimJointAtTarget(upper, elbow, _ikElbowPt)
+  upper.updateWorldMatrix(false, true)
+  _aimJointAtTarget(elbow, wrist, _ikTc)
+}
+
+/**
+ * 다리(hip→knee→ankle) 2본 IK — applyArmIK와 동일한 해석적 + 폴 벡터 해법.
+ * side 'l'|'r', target=발목 월드 목표, poleDir=무릎이 향할 월드 방향(걷기 진행방향
+ * = 무릎 앞 굽힘). hip(lLeg=左足D)·knee(lKnee=左ひざD)만 회전시키고 ankle은 호출자가
+ * 따로 정렬(발바닥 평행 유지). 도달거리 clamp로 무릎 과신전·역굽힘 방지.
+ * 무클립시 MMD 솔버가 꺼져 있으므로([[apia-walk-gait]]) 이 직접 해석 IK로 다리를 구동.
+ */
+export function applyLegIK(registry, side, target, poleDir = null) {
+  const hip = registry?.roles?.get(side + 'Leg')?.bone
+  const knee = registry?.roles?.get(side + 'Knee')?.bone
+  const ankle = registry?.roles?.get(side + 'Ankle')?.bone
+  if (!hip || !knee || !ankle || !hip.parent || !knee.parent) return false
+
+  hip.getWorldPosition(_ikS)
+  knee.getWorldPosition(_ikE0)
+  ankle.getWorldPosition(_ikW)
+  const L1 = _ikS.distanceTo(_ikE0)
+  const L2 = _ikE0.distanceTo(_ikW)
+  if (L1 < 1e-5 || L2 < 1e-5) return false
+
+  _ikAxis.copy(target).sub(_ikS)
+  let d = _ikAxis.length()
+  if (d < 1e-5) return false
+  _ikAxis.divideScalar(d)
+
+  const maxR = L1 + L2 - 1e-3
+  const minR = Math.abs(L1 - L2) + 1e-3
+  if (d > maxR) d = maxR
+  if (d < minR) d = minR
+  _ikTc.copy(_ikS).addScaledVector(_ikAxis, d) // clamp된 발목 목표
+
+  let cosA = (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d)
+  cosA = Math.min(1, Math.max(-1, cosA))
+  const a = Math.acos(cosA)
+
+  // 폴 — 무릎이 향할 방향(걷기 진행방향 앞). 기본 아래(서 있을 때).
+  _ikPole.copy(poleDir || _DOWN)
+  if (_ikPole.lengthSq() < 1e-6) _ikPole.set(0, 0, 1)
+  _ikPole.normalize()
+  _ikBend.crossVectors(_ikAxis, _ikPole)
+  if (_ikBend.lengthSq() < 1e-6) {
+    _ikBend.crossVectors(_ikAxis, _ikTmpA.set(0, 0, 1))
+    if (_ikBend.lengthSq() < 1e-6) _ikBend.crossVectors(_ikAxis, _ikTmpB.set(1, 0, 0))
+  }
+  _ikBend.normalize()
+
+  _ikAxisQ.setFromAxisAngle(_ikBend, a)
+  _ikUpDir.copy(_ikAxis).applyQuaternion(_ikAxisQ)
+  if (_ikUpDir.dot(_ikPole) < _ikAxis.dot(_ikPole)) {
+    _ikAxisQ.setFromAxisAngle(_ikBend, -a)
+    _ikUpDir.copy(_ikAxis).applyQuaternion(_ikAxisQ)
+  }
+  _ikElbowPt.copy(_ikS).addScaledVector(_ikUpDir, L1) // 무릎점
+
+  _aimJointAtTarget(hip, knee, _ikElbowPt)
+  hip.updateWorldMatrix(false, true)
+  _aimJointAtTarget(knee, ankle, _ikTc)
+  return true
+}
+
 // ── Saccade — Poisson micro-shifts, Codex spec ──────────────────────
 //
 // Mean inter-arrival ≈ 600ms with a 180ms refractory floor; magnitudes
@@ -593,6 +823,66 @@ function addImpulseLayer(state, t, add) {
   }
 }
 
+// ── Hand shapes (finger curl presets) ───────────────────────────────
+//
+// 손가락 굽힘을 마디별 각도(라디안)로 표현한다. applyPose가
+// `bone.q = restQuat * eulerToQuat(delta)`로 쓰므로 이 굽힘은 모델이
+// 원래 가진 휴식 손 자세 *위에 더해진다* — 즉 모델 상대적이고 가산적
+// (codex MUST-FIX a). 펴진 T-pose 막대 손가락 모델은 자연스럽게 감기고,
+// 이미 살짝 감긴 모델은 약간만 더 감긴다(relaxed 진폭을 작게 둔 이유).
+//
+// 굽힘 축/부호는 리그 관례마다 달라 *튜닝 레버*로 노출한다. 기본값은
+// 추측이 아니라 실제 Kisaki PMX(481본)에서 실측한 값:
+// 人指１을 각 로컬축±로 0.6rad 돌려 손끝이 손목 쪽(=굽힘)으로 가는 정도를
+// 재면 z축이 0.0159로 x(0.011)·y(0.008)의 ~2배 — z가 주 굽힘축이고,
+// 왼손은 z 음수, 오른손은 z 양수가 flexion(손바닥 쪽). 측정 스크립트:
+// tests/gui/finger-axis-check.mjs. 엄지는 굽힘면이 달라 진폭을 작게 잡았다
+// (엄지 전용 축 분리는 후속 폴리시 — relaxed에선 오차가 ~7° 이내).
+const FINGER_CURL_AXIS = 'z'              // 'x'|'y'|'z' — 굽힘이 실릴 오일러 축
+const FINGER_CURL_SIGN = { l: -1, r: 1 }  // 좌우 손이 손바닥 쪽으로 감기는 부호
+
+// 발끝 plantarflexion(발끝이 바닥 쪽으로). 실측(tests/gui/toe-axis-check.mjs,
+// Kisaki 足先EX): z축이 거의 순수 하향(lateral≈0.001), 왼발 z+ / 오른발 z-.
+const TOE_CURL_AXIS = 'z'
+const TOE_CURL_SIGN = { l: 1, r: -1 }
+
+const HAND_SHAPES = {
+  // 가볍게 쥔 자연스러운 휴식 손. 새끼로 갈수록 약간 더 감긴다(실제 손 경향).
+  relaxed: {
+    thumb: [0.04, 0.10, 0.12],
+    index: [0.16, 0.20, 0.16],
+    middle: [0.18, 0.22, 0.18],
+    ring: [0.22, 0.26, 0.20],
+    pinky: [0.26, 0.30, 0.24],
+  },
+  // 완전히 편 손(인사·강조). 휴식 굽힘조차 0 — rest 자세 그대로 노출.
+  open: {
+    thumb: [0, 0, 0], index: [0, 0, 0], middle: [0, 0, 0], ring: [0, 0, 0], pinky: [0, 0, 0],
+  },
+  // 검지로 가리키기 — 검지만 펴고 나머지는 감는다.
+  point: {
+    thumb: [0.15, 0.30, 0.30], index: [0, 0, 0],
+    middle: [1.0, 1.2, 1.0], ring: [1.0, 1.2, 1.0], pinky: [1.0, 1.2, 1.0],
+  },
+  // 주먹.
+  fist: {
+    thumb: [0.25, 0.55, 0.60], index: [1.1, 1.3, 1.0],
+    middle: [1.1, 1.3, 1.0], ring: [1.1, 1.3, 1.0], pinky: [1.1, 1.3, 1.0],
+  },
+}
+
+// role 이름을 매 프레임 문자열 파싱하지 않도록 (hand, fingerKey, segIndex)를
+// 모듈 로드 시 1회 전개한다 (codex MUST-FIX d — per-frame churn 방지).
+const FINGER_ROLE_PARTS = (() => {
+  const out = []
+  const fingers = { Thumb: 'thumb', Index: 'index', Middle: 'middle', Ring: 'ring', Pinky: 'pinky' }
+  for (const hand of ['l', 'r'])
+    for (const [Fname, fkey] of Object.entries(fingers))
+      for (const seg of [1, 2, 3])
+        out.push({ role: `${hand}${Fname}${seg}`, hand, fkey, segIndex: seg - 1 })
+  return out
+})()
+
 // ── Pose target composition ─────────────────────────────────────────
 
 /**
@@ -620,6 +910,7 @@ export function computePoseTargets({
   state,
   motion,
   personality,
+  handShape, // 손모양 프리셋 키('relaxed'|'open'|'point'|'fist'). 기본 relaxed.
   clipMask, // Step 5 of /goal — { arms: bool, torso: bool } skips procedural
             // layers when a .vmd/.vrma/.fbx clip is driving the rig directly.
             // breath/gaze/saccade always run; only owned layers are masked.
@@ -644,6 +935,8 @@ export function computePoseTargets({
     idleSubtle: new Map(),
     statePose: new Map(),
     impulse: new Map(),
+    handShape: new Map(),
+    toe: new Map(),
   }
   const summed = new Map()
 
@@ -685,11 +978,27 @@ export function computePoseTargets({
   if (!isSit) {
     const wsOmega = 0.15 * 2 * Math.PI
     const ws = Math.sin(t * wsOmega + 1.5)
-    const wsAmp = 0.018 * intensity
+    // 무게중심 좌우 이동(hip sway) 진폭 축소 — 몸이 덜 흔들리게(사용자 피드백).
+    const wsAmp = 0.011 * intensity
     add('weightShift', 'hip', 0, 0, ws * wsAmp)
     add('weightShift', 'lowerBody', 0, 0, ws * wsAmp * 0.7)
     add('weightShift', 'lAnkle', 0, 0, ws * wsAmp * 0.2)
     add('weightShift', 'rAnkle', 0, 0, -ws * wsAmp * 0.2)
+  }
+
+  // — Layer 2.5: toe settle. 발끝이 판자처럼 굳지 않게 숨결에 맞춰 아주 미세하게
+  // (~1.4°) 움직인다. 걷기 중엔 main.js 게이트 오버레이가 toe-off를 담당하므로
+  // 여기선 생략(이중 구동 방지). 앉기 자세에서도 생략.
+  if (!isSit && state !== 'walk') {
+    const toeAmp = 0.025 * intensity
+    const toeOsc = Math.sin(t * breathOmega - 1.0) // 숨결과 위상차
+    for (const [role, hand] of [['lToe', 'l'], ['rToe', 'r']]) {
+      const v = toeOsc * toeAmp * (TOE_CURL_SIGN[hand] || 1)
+      add('toe', role,
+        TOE_CURL_AXIS === 'x' ? v : 0,
+        TOE_CURL_AXIS === 'y' ? v : 0,
+        TOE_CURL_AXIS === 'z' ? v : 0)
+    }
   }
 
   // — Layer 3: gaze. Eyes get the full target; the head/neck share
@@ -713,8 +1022,15 @@ export function computePoseTargets({
   } else if (fingerprint.hasCombinedEyes) {
     add('gaze', 'eyes', -ly * 0.40, lx * 0.50, 0)
   }
-  add('gaze', 'neck', -ly * 0.10, lx * 0.20, 0)
-  add('gaze', 'head', -ly * 0.05, lx * 0.10, 0)
+  // 머리가 시선 체인을 이끌고, 목→가슴→척추로 점점 약하게 받아 상체가
+  // 한 덩어리가 아니라 마디마디 따라 도는 layered look-at을 만든다. 루트(몸 전체)
+  // yaw는 characterController에서 거의 죽였으므로(데드존), 화면 가장자리 추적의
+  // 대부분을 이 본 체인이 담당한다. 가슴/척추는 작게 — breath·torso 클립과
+  // 합쳐질 때 자세가 흐려지지 않도록(Codex).
+  add('gaze', 'head', -ly * 0.10, lx * 0.17, 0)
+  add('gaze', 'neck', -ly * 0.08, lx * 0.15, 0)
+  add('gaze', 'chest', -ly * 0.02, lx * 0.04, 0)
+  add('gaze', 'spine', 0, lx * 0.02, 0)
 
   // — Layer 4: saccade. Eye-only, Poisson timing, ballistic onset.
   if (saccadeState) {
@@ -781,6 +1097,29 @@ export function computePoseTargets({
     add('statePose', 'rLeg', -1.35 + sitBreath, 0, 0)
     add('statePose', 'lKnee', 1.55, 0, 0)
     add('statePose', 'rKnee', 1.55, 0, 0)
+  }
+
+  // — Layer 10: hand shape (finger curl). Selectable preset (director 입력);
+  // 기본 relaxed라 펴진 손가락이 막대처럼 뻣뻣해 보이지 않는다. 모델 휴식 손
+  // 자세 위에 가산(applyPose가 restQuat*delta 합성). 클립이 팔/손가락을
+  // 소유하면 해당 role은 stepPoseSpring/applyPose에서 마스킹돼 클립 손가락
+  // 트랙과 싸우지 않는다. add()는 모델에 없는 손가락 role은 자동 무시.
+  // 기본은 'open'(굽힘 0) — relaxed 절차 굽힘이 엄지/일부 마디에서 기괴하게
+  // 비틀리는 문제(굽힘 축을 검지로만 실측)가 있어 기본 비활성. 모델 휴식 손
+  // 자세를 그대로 쓴다. 클립/디렉터가 명시하면 그 프리셋을 쓴다. 제대로 된
+  // 손 굽힘은 본별 굽힘축 도출 후 재활성(후속).
+  const shape = HAND_SHAPES[handShape] || HAND_SHAPES.open
+  for (const { role, hand, fkey, segIndex } of FINGER_ROLE_PARTS) {
+    if (!registry.roles.has(role)) continue
+    const mag = shape[fkey]?.[segIndex]
+    if (!mag) continue
+    const curl = mag * (FINGER_CURL_SIGN[hand] || 1)
+    add(
+      'handShape', role,
+      FINGER_CURL_AXIS === 'x' ? curl : 0,
+      FINGER_CURL_AXIS === 'y' ? curl : 0,
+      FINGER_CURL_AXIS === 'z' ? curl : 0,
+    )
   }
 
   return { summed, layers }

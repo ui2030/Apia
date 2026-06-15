@@ -1,87 +1,218 @@
 /**
- * Single source of truth for furniture placement in the Apia room.
+ * Single source of truth for furniture in the Apia 원룸(narrow galley studio).
  *
- * Phase D — Codex MUST-FIX: the visual furniture (built in sceneRuntime) and
- * the interactive world objects (world.js DEFAULT_WORLD_OBJECTS) MUST share
- * one set of coordinates. Without this, a user who tweaks an interactive
- * point or chair via the settings UI would split it from the visual mesh,
- * and the character would walk to an empty floor while the box stays put.
+ * Phase G — laid out to match the reference image the user shared: a NARROW,
+ * DEEP studio seen in one-point perspective from a foreground desk (the desk
+ * itself lives in sceneRuntime as camera framing, not here). Structure:
+ *   LEFT wall  : living — bookcase, bed (back), dresser, sofa + coffee table,
+ *                rug, plant, floor lamp
+ *   RIGHT wall : kitchen — fridge, sink, stove, counter — and the entry near
+ *                the back (door, coat rack, shoe mat)
+ *   BACK wall  : window (built in sceneRuntime) = the bright vanishing point
  *
- * Each entry has:
- *   - `id`         : matches world.json object id (string)
- *   - `type`       : 'chair' | 'point' | 'decoration' (world-side semantics)
- *   - `label`      : Korean user-facing label
- *   - `position`   : { x, y, z } floor center of the furniture footprint
- *   - `size`       : { w, h, d } box footprint (used by sceneRuntime)
- *   - `color`      : hex literal, room palette
- *   - `interaction`: { sitOffset, sitRotY }  (chair only — character lands here)
- *   - `bubbleText` : line the character shows when interacting (Korean)
- *
- * Hex palette: warm pastel "Blue Archive cafe" — cream walls, walnut wood,
- * sage/cream accents, blush pink soft furnishings. Codex NICE-TO-HAVE: keep
- * HemisphereLight off in the first pass; the wood + cream palette already
- * reads warm under the new ambient + sun colors.
+ * Room is width≈5.8 (x −2.9..2.9), depth≈8 (z 0=back .. 8=front/camera side).
+ * world.js reads only id/type/position/interaction/seatHeight/hidden; visual
+ * fields (model/size/color/fitMode/modelRotY/yOffset) are ignored there.
  */
+const deco = (o) => ({ type: 'decoration', autoBehavior: false, clickable: false, hidden: true, fitMode: 'height', modelRotY: 0, ...o })
+
 export const FURNITURE_DEFAULT = Object.freeze([
-  {
-    id: 'desk',
-    type: 'point',
-    label: '책상',
-    position: { x: -2.2, y: 0, z: 1.2 },
-    size: { w: 1.6, h: 0.78, d: 0.8 },
-    color: 0xa67c52, // walnut
-    bubbleText: '책상에서 잠깐 둘러볼게요.',
-    autoBehavior: true,
-    clickable: true,
-  },
+  // ── Interactive (walk targets) ──────────────────────────────────────
   {
     id: 'bed',
     type: 'point',
     label: '침대',
-    position: { x: 2.4, y: 0, z: 4.2 },
-    size: { w: 1.6, h: 0.45, d: 2.0 },
-    color: 0xf5f0e6, // mattress cream
-    pillowColor: 0xffd2dc, // blush pillow
-    bubbleText: '잠깐 침대에 걸쳐 있을게요.',
+    position: { x: -1.4, y: 0, z: 1.0 },
+    size: { w: 2.0, h: 0.55, d: 1.1 },
+    color: 0xf5f0e6,
+    model: 'bedSingle.glb',
+    fitMode: 'footprint',
+    modelRotY: Math.PI / 2, // 옆으로 — 브로드사이드가 카메라를 향해 잘 보이게
+    bubbleText: '잠깐 침대에 누워 있을게요.',
     autoBehavior: true,
     clickable: true,
-  },
-  {
-    id: 'chair_window',
-    type: 'chair',
-    label: '창가 의자',
-    position: { x: 1.95, y: 0, z: 3.4 },
-    size: { w: 0.55, h: 0.85, d: 0.55 },
-    color: 0x8b6f47, // chair wood
-    seatHeight: 0.45,
+    // 침대 가장자리에 앉아 쉬기(눕기 포즈는 모델 불문 어렵다 — Codex 권고대로
+    // held-sit 가장자리 휴식으로 단순화). 피로(tiredness)를 회복.
     interaction: {
-      sitOffset: { x: 0, y: 0.45, z: -0.08 },
-      sitRotY: Math.PI * 0.9,
+      sitOffset: { x: 0, y: 0.04, z: 0.2 }, // 침대 앞 가장자리 쪽
+      sitRotY: Math.PI, // 카메라를 향해
+      seatHeight: 0.42,
     },
-    bubbleText: '창가에 앉아 있을게요.',
-    autoBehavior: true,
-    clickable: true,
+    activity: {
+      id: 'rest',
+      label: '잠깐 쉬기',
+      focus: 'self',
+      needFill: { tiredness: 0.75 },
+      steps: [
+        { kind: 'sit', targetId: 'bed', durationMs: 12000, bubble: '잠깐 쉬어가자…' },
+      ],
+    },
   },
   {
     id: 'plant',
     type: 'point',
     label: '화분',
-    position: { x: -2.6, y: 0, z: 4.6 },
-    size: { w: 0.35, h: 0.6, d: 0.35 },
-    color: 0xbfa07a, // terracotta-ish
-    foliageColor: 0x7ea36a, // sage green
+    position: { x: -2.4, y: 0, z: 5.4 },
+    size: { w: 0.4, h: 0.62, d: 0.4 },
+    color: 0xbfa07a,
+    model: 'pottedPlant.glb',
+    fitMode: 'height',
+    modelRotY: 0,
     bubbleText: '화분이 잘 자라고 있나 볼게요.',
     autoBehavior: true,
     clickable: true,
+    activity: {
+      id: 'waterPlant',
+      label: '화분 돌보기',
+      focus: 'room',
+      needFill: { care: 0.7, boredom: 0.2 },
+      steps: [
+        { kind: 'goto', targetId: 'plant', bubble: '화분에 물 줄까.' },
+        { kind: 'pose', durationMs: 5000, bubble: '쑥쑥 자라라~' },
+      ],
+    },
   },
+  // J단계 거주형 비서 — 앉아서 쉴 의자(거실 영역, 커피 마시기 등 활동의 좌석).
+  // 소파(좌벽 x:-2.2)는 walkable 범위(minX -1.7) 밖이라 활동 좌석으로 부적합 →
+  // 범위 안 빈 공간에 의자를 둔다. type:'chair'라 클릭/랜덤 앉기도 가능.
   {
-    id: 'rug',
-    type: 'decoration',
-    label: '러그',
-    position: { x: 0, y: 0.01, z: 3.0 }, // above shadowFloor (y=0.001)
-    size: { w: 4.0, h: 0.0, d: 3.0 }, // h=0 because rug is a thin plane
-    color: 0xd0a896, // dusty rose
-    autoBehavior: false,
-    clickable: false,
+    id: 'chair',
+    type: 'chair',
+    label: '의자',
+    position: { x: -0.7, y: 0, z: 4.3 },
+    size: { w: 0.5, h: 0.9, d: 0.5 },
+    color: 0xa9855f,
+    model: 'chair.glb',
+    fitMode: 'height',
+    modelRotY: Math.PI, // 등받이를 좌벽 쪽으로 — 앉으면 카메라(앞)를 향함
+    bubbleText: '잠깐 앉아 있을게요.',
+    autoBehavior: true,
+    clickable: true,
+    interaction: {
+      sitOffset: { x: 0, y: 0.04, z: -0.08 },
+      sitRotY: Math.PI, // 카메라(사용자)를 바라보며 앉기
+      seatHeight: 0.45,
+    },
   },
+  // J단계 첫 스마트 오브젝트 — 커피머신. activity 어포던스를 선언하고(심즈식),
+  // 캐릭터/스케줄러가 방에 질의해 "커피 한 잔" 행동 사슬을 실행한다. autoBehavior는
+  // false(랜덤 가구 픽으로 무의미하게 걸어가지 않게) — 전용 활동 슬롯/클릭으로만
+  // 발동. 부엌 수납장(counter, h:0.9) 위에 올려둔다.
+  {
+    id: 'coffeeMachine',
+    type: 'point',
+    label: '커피머신',
+    position: { x: 2.35, y: 0.9, z: 6.1 },
+    size: { w: 0.3, h: 0.35, d: 0.3 },
+    color: 0x4a4a4a,
+    model: 'kitchenCoffeeMachine.glb',
+    fitMode: 'height',
+    modelRotY: -Math.PI / 2,
+    bubbleText: '커피 한 잔 내려야지.',
+    autoBehavior: false,
+    clickable: true,
+    activity: {
+      id: 'brewCoffee',
+      label: '커피 한 잔',
+      focus: 'self', // 디렉터 focus 힌트(차분/혼자 시간)
+      needFill: { comfort: 0.6, boredom: 0.35 }, // 커피 한 잔 = 안락함↑·심심함 해소
+      steps: [
+        { kind: 'goto', targetId: 'coffeeMachine', bubble: '커피 한 잔 내려야지.', faceCamera: false },
+        { kind: 'pose', durationMs: 4000, bubble: '커피 내리는 중…' },
+        { kind: 'prop', op: 'attach', propKind: 'cup', hand: 'left' }, // 왼손에 컵
+        { kind: 'goto', targetId: 'chair', bubble: '여기 앉아서 마실까.' },
+        // idle_sip = 왼팔을 얼굴 높이로 들어 컵을 입가로 → "홀짝이는" 모습.
+        // (소품 든 팔은 팔처짐 보정에서 제외돼 어깨 lift가 살아난다 — main.js)
+        { kind: 'sit', targetId: 'chair', durationMs: 9000, bubble: '한 모금… 좋다.', motion: 'idle_sip', reach: true },
+        { kind: 'prop', op: 'detach' }, // 다 마심
+        { kind: 'cleanup' }, // 성격 분기(부지런=싱크대로 정리 / 느긋=그냥 일어남)
+      ],
+    },
+  },
+
+  // J단계 거주형 비서 — "컴퓨터 너머 마주보기"(비전 핵심 연출). 카메라(=사용자)를
+  // 향해 앉는 책상+의자+모니터. 앉으면 _sit가 커서 시선을 적용 → 화면 너머로
+  // 사용자를 바라본다(시선 코드 불필요). 데스크는 의자 좌면(z3.3) 링 밖으로 띄워
+  // 걷기 충돌을 피한다(Codex). autoBehavior:false=랜덤 앉기 제외, 활동/클릭만.
+  {
+    id: 'deskChair',
+    type: 'chair',
+    label: '책상 의자',
+    position: { x: 0.7, y: 0, z: 3.3 },
+    size: { w: 0.5, h: 0.9, d: 0.5 },
+    color: 0x8a7a66,
+    model: 'chair.glb',
+    fitMode: 'height',
+    modelRotY: Math.PI, // 카메라(앞)를 향해
+    bubbleText: '컴퓨터 좀 할까.',
+    autoBehavior: false,
+    clickable: true,
+    interaction: {
+      sitOffset: { x: 0, y: 0.04, z: -0.08 },
+      sitRotY: Math.PI, // 사용자(카메라)를 마주봄
+      seatHeight: 0.45,
+    },
+    activity: {
+      id: 'useComputer',
+      label: '컴퓨터 너머 마주보기',
+      focus: 'user', // 사용자 곁/마주봄
+      needFill: { boredom: 0.5, comfort: 0.4 },
+      steps: [
+        { kind: 'sit', targetId: 'deskChair', durationMs: 16000, bubble: '오늘 뭐 하고 있어?' },
+      ],
+    },
+  },
+  // 책상(의자 앞, 카메라 쪽) — 모니터를 사이에 둬 "화면 너머" 구도. 작은 footprint.
+  deco({ id: 'workDesk', label: '책상', position: { x: 0.7, y: 0, z: 4.05 }, size: { w: 0.85, h: 0.74, d: 0.45 }, color: 0x8c6f4e, model: 'table.glb' }),
+  // 모니터(책상 위, 화면이 캐릭터를 향함). 모델 없음 → 박스 폴백(어두운 화면).
+  // size 작아 OBSTACLES 제외(걷기 무관). 캐릭터와 카메라 사이에 위치.
+  deco({ id: 'monitor', label: '모니터', position: { x: 0.7, y: 0.74, z: 4.0 }, size: { w: 0.5, h: 0.32, d: 0.06 }, color: 0x23262b }),
+
+  // ── LEFT wall — living ──────────────────────────────────────────────
+  deco({ id: 'bookcase', label: '책장', position: { x: -2.45, y: 0, z: 2.1 }, size: { w: 1.4, h: 1.7, d: 0.4 }, color: 0x9c7b52, model: 'bookcaseClosedWide.glb', modelRotY: Math.PI / 2,
+    activity: {
+      id: 'readBook', label: '책 읽기', focus: 'self',
+      needFill: { boredom: 0.75, comfort: 0.2 },
+      steps: [
+        { kind: 'goto', targetId: 'bookcase', bubble: '뭐 읽을까~' },
+        { kind: 'prop', op: 'attach', propKind: 'book', hand: 'left' },
+        { kind: 'goto', targetId: 'chair', bubble: '앉아서 읽어야지.' },
+        { kind: 'sit', targetId: 'chair', durationMs: 13000, bubble: '음… 재밌다.', motion: 'idle_sip', reach: true },
+        { kind: 'prop', op: 'detach' },
+        { kind: 'cleanup' },
+      ],
+    } }),
+  deco({ id: 'dresser', label: '서랍장', position: { x: -2.5, y: 0, z: 3.2 }, size: { w: 0.9, h: 0.8, d: 0.5 }, color: 0xa07d55, model: 'sideTableDrawers.glb', modelRotY: Math.PI / 2 }),
+  deco({ id: 'plant_small', label: '작은 화분', position: { x: -2.5, y: 0.8, z: 3.2 }, size: { w: 0.22, h: 0.32, d: 0.22 }, color: 0x7ea36a, model: 'plantSmall1.glb' }),
+  deco({ id: 'sofa', label: '소파', position: { x: -2.2, y: 0, z: 4.6 }, size: { w: 1.8, h: 0.78, d: 0.85 }, color: 0x8fae84, model: 'loungeSofa.glb', modelRotY: Math.PI / 2 }),
+  deco({ id: 'coffeetable', label: '커피 테이블', position: { x: -1.2, y: 0, z: 4.7 }, size: { w: 0.8, h: 0.4, d: 0.5 }, color: 0xa9855f, model: 'tableCoffee.glb' }),
+  deco({ id: 'rug', label: '러그', position: { x: -1.1, y: 0.012, z: 4.7 }, size: { w: 2.2, h: 0.0, d: 2.0 }, color: 0xd0a896, model: 'rugRounded.glb', fitMode: 'footprint' }),
+  deco({ id: 'floorlamp', label: '플로어 램프', position: { x: -2.5, y: 0, z: 6.4 }, size: { w: 0.45, h: 1.5, d: 0.45 }, color: 0xd8c7a8, model: 'lampRoundFloor.glb' }),
+
+  // ── RIGHT wall — kitchen + entry ────────────────────────────────────
+  deco({ id: 'door', label: '현관문', position: { x: 2.75, y: 0, z: 1.2 }, size: { w: 0.3, h: 2.1, d: 1.2 }, color: 0x6f5638, model: 'doorwayFront.glb', modelRotY: -Math.PI / 2,
+    activity: {
+      id: 'bathroom', label: '화장실', focus: 'self',
+      needFill: { hygiene: 0.9 },
+      steps: [
+        { kind: 'goto', targetId: 'door', bubble: '화장실 잠깐 다녀올게.' },
+        { kind: 'pose', durationMs: 3000, bubble: '…' },
+      ],
+    } }),
+  deco({ id: 'coatrack', label: '코트걸이', position: { x: 2.5, y: 0, z: 0.9 }, size: { w: 0.5, h: 1.7, d: 0.5 }, color: 0x8a7048, model: 'coatRackStanding.glb' }),
+  deco({ id: 'doormat', label: '신발 두는 곳', position: { x: 2.1, y: 0.012, z: 1.7 }, size: { w: 0.8, h: 0.0, d: 0.6 }, color: 0x9a8a78, model: 'rugDoormat.glb', fitMode: 'footprint' }),
+  deco({ id: 'fridge', label: '냉장고', position: { x: 2.55, y: 0, z: 2.7 }, size: { w: 0.9, h: 1.8, d: 0.8 }, color: 0xe9eaec, model: 'kitchenFridge.glb', modelRotY: -Math.PI / 2 }),
+  deco({ id: 'sink', label: '싱크대', position: { x: 2.5, y: 0, z: 3.9 }, size: { w: 1.0, h: 0.9, d: 0.65 }, color: 0xd8d2c4, model: 'kitchenSink.glb', modelRotY: -Math.PI / 2,
+    activity: {
+      id: 'drinkWater', label: '물 한 잔', focus: 'self',
+      needFill: { thirst: 0.85 },
+      steps: [
+        { kind: 'goto', targetId: 'sink', bubble: '물 좀 마셔야지.' },
+        { kind: 'prop', op: 'attach', propKind: 'glass', hand: 'left' },
+        { kind: 'pose', durationMs: 3500, bubble: '꿀꺽꿀꺽…', motion: 'idle_sip', reach: true },
+        { kind: 'prop', op: 'detach' },
+      ],
+    } }),
+  deco({ id: 'stove', label: '가스레인지', position: { x: 2.5, y: 0, z: 5.0 }, size: { w: 0.9, h: 0.9, d: 0.65 }, color: 0xcfcabe, model: 'kitchenStove.glb', modelRotY: -Math.PI / 2 }),
+  deco({ id: 'counter', label: '주방 수납장', position: { x: 2.5, y: 0, z: 6.1 }, size: { w: 0.9, h: 0.9, d: 0.65 }, color: 0xb89a72, model: 'kitchenCabinet.glb', modelRotY: -Math.PI / 2 }),
 ])
