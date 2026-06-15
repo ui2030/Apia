@@ -1,0 +1,70 @@
+/**
+ * Pure tests for src/motionManager.js — 2단계(디렉터 연동)의 핵심: 디렉터 mood가
+ * 매핑된 제스처 flavor로 pickIdleMotion의 후보를 실제로 좁히는가.
+ *
+ * Math.random은 vi.spyOn으로 결정론화(첫 후보 고정) — lastMotion/cooldown 영향
+ * 없는 신선한 인스턴스 1회 호출로 flaky 제거(Codex MUST-FIX).
+ */
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { MotionManager, MOTION_LIBRARY, GESTURE_FLAVORS } from '../src/motionManager.js'
+
+afterEach(() => vi.restoreAllMocks())
+
+function pick(personality, mood, rand = 0) {
+  vi.spyOn(Math, 'random').mockReturnValue(rand)
+  return new MotionManager({ personality }).pickIdleMotion({ mood }).name
+}
+
+describe('pickIdleMotion flavor steering', () => {
+  it('known flavor with non-empty personality intersection → picks from that flavor', () => {
+    // active 풀에는 energetic 교집합이 풍부(stretch_arms/wave/lean_in 등).
+    const name = pick('active', 'energetic')
+    expect(GESTURE_FLAVORS.energetic.has(name)).toBe(true)
+    expect(MOTION_LIBRARY.idle.active).toContain(name)
+  })
+
+  it('calm + quiet → picks a quiet gesture', () => {
+    const name = pick('calm', 'quiet')
+    expect(GESTURE_FLAVORS.quiet.has(name)).toBe(true)
+  })
+
+  it('engaged still works (regression)', () => {
+    const name = pick('active', 'engaged')
+    expect(GESTURE_FLAVORS.engaged.has(name)).toBe(true)
+  })
+
+  it('known flavor with EMPTY intersection → falls back to full personality pool', () => {
+    // shy 풀엔 energetic 교집합이 없다 → 전체 폴백(non-null, shy 어휘 내).
+    const name = pick('shy', 'energetic')
+    expect(name).toBeTruthy()
+    expect(MOTION_LIBRARY.idle.shy).toContain(name)
+  })
+
+  it('unknown / null / prototype-key mood → full pool, no crash', () => {
+    expect(MOTION_LIBRARY.idle.active).toContain(pick('active', 'bogus'))
+    expect(MOTION_LIBRARY.idle.active).toContain(pick('active', undefined))
+    // 프로토타입 키가 상속 속성을 잡아 flavor.has 크래시 나면 안 됨(Codex).
+    for (const key of ['toString', '__proto__', 'hasOwnProperty', 'constructor']) {
+      expect(MOTION_LIBRARY.idle.active).toContain(pick('active', key))
+    }
+  })
+
+  it('idle_wave is intentionally both energetic and engaged (AI clip reachable in both)', () => {
+    expect(GESTURE_FLAVORS.energetic.has('idle_wave')).toBe(true)
+    expect(GESTURE_FLAVORS.engaged.has('idle_wave')).toBe(true)
+  })
+
+  it('natural personality×flavor pairings each have ≥1 reachable clip', () => {
+    // "mood가 실제로 닿는가"를 잠근다(Codex NICE-TO-HAVE). 부자연 쌍(shy×energetic,
+    // active×quiet)은 의도적으로 비어 폴백되므로 제외.
+    const natural = [
+      ['active', 'energetic'], ['active', 'fidgety'], ['active', 'engaged'],
+      ['calm', 'quiet'], ['calm', 'fidgety'], ['calm', 'engaged'],
+      ['shy', 'quiet'], ['shy', 'fidgety'], ['shy', 'engaged']
+    ]
+    for (const [p, flavor] of natural) {
+      const pool = MOTION_LIBRARY.idle[p].filter((m) => GESTURE_FLAVORS[flavor].has(m))
+      expect(pool.length, `${p}×${flavor}`).toBeGreaterThan(0)
+    }
+  })
+})

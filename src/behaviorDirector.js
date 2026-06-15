@@ -19,6 +19,17 @@
 const MOODS = new Set(['playful', 'focused', 'calm', 'restless', 'sleepy'])
 const FOCI = new Set(['user', 'room', 'self'])
 
+// 2단계(디렉터 연동) — 디렉터 mood를 idle 제스처 flavor로 연결한다. motionManager의
+// GESTURE_FLAVORS 키와 일치해야 한다(energetic/engaged/quiet/fidgety). 이 매핑으로
+// LLM이 읽은 무드가 "어떤 제스처가 나오나"를 실제로 좌우한다(AI 생성분 포함).
+const MOOD_TO_GESTURE = {
+  playful: 'energetic',
+  focused: 'engaged',
+  calm: 'quiet',
+  sleepy: 'quiet',
+  restless: 'fidgety'
+}
+
 const TTL_MIN_SEC = 120
 const TTL_MAX_SEC = 600
 const NOTE_MAX = 80
@@ -91,11 +102,12 @@ export function applyDirective(config, directive, now = Date.now()) {
   const sum = walkShare + inPlaceIdleBias
   if (sum > 0.94) { const s = 0.94 / sum; walkShare *= s; inPlaceIdleBias *= s }
 
-  // focused 무드 / 사용자 집중 → "듣는 듯한" 제스처 선호(기존 mood 유지가 우선이 아니라
-  // 디렉터가 명시적으로 집중을 지시한 경우).
-  const idleMood = (directive.mood === 'focused' || directive.focus === 'user')
+  // 디렉터 mood → idle 제스처 flavor(런타임화). focus:'user'는 사용자 주의가
+  // 우선이라 항상 engaged(main.js attentiveness 폴백과 같은 우선순위). 그 외엔
+  // mood→flavor 매핑, 매핑도 없으면 기존 config.idleMood 유지.
+  const idleMood = directive.focus === 'user'
     ? 'engaged'
-    : config.idleMood
+    : (MOOD_TO_GESTURE[directive.mood] || config.idleMood)
 
   return { ...config, walkShare, inPlaceIdleBias, idleMood, directiveMood: directive.mood }
 }

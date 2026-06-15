@@ -137,10 +137,24 @@ describe('applyDirective', () => {
     expect(out.inPlaceIdleBias).toBeLessThanOrEqual(0.5)
   })
 
-  it('focused mood / user focus sets engaged idle mood', () => {
+  it('maps each director mood to an idle gesture flavor', () => {
     expect(applyDirective(BASE_CFG, live({ mood: 'focused' }), now).idleMood).toBe('engaged')
+    expect(applyDirective(BASE_CFG, live({ mood: 'playful' }), now).idleMood).toBe('energetic')
+    expect(applyDirective(BASE_CFG, live({ mood: 'calm' }), now).idleMood).toBe('quiet')
+    expect(applyDirective(BASE_CFG, live({ mood: 'sleepy' }), now).idleMood).toBe('quiet')
+    expect(applyDirective(BASE_CFG, live({ mood: 'restless' }), now).idleMood).toBe('fidgety')
+  })
+
+  it('user focus forces engaged, overriding a quiet/restless mood', () => {
     expect(applyDirective(BASE_CFG, live({ focus: 'user' }), now).idleMood).toBe('engaged')
-    expect(applyDirective(BASE_CFG, live({ mood: 'restless' }), now).idleMood).toBeUndefined()
+    expect(applyDirective(BASE_CFG, live({ mood: 'sleepy', focus: 'user' }), now).idleMood).toBe('engaged')
+    expect(applyDirective(BASE_CFG, live({ mood: 'restless', focus: 'user' }), now).idleMood).toBe('engaged')
+  })
+
+  it('keeps config.idleMood when mood has no flavor mapping and focus is not user', () => {
+    // null mood / room focus → 매핑 없음 → 기존 idleMood 유지(여기선 미설정=undefined).
+    expect(applyDirective(BASE_CFG, live({ focus: 'room' }), now).idleMood).toBeUndefined()
+    expect(applyDirective({ ...BASE_CFG, idleMood: 'engaged' }, live({ focus: 'room' }), now).idleMood).toBe('engaged')
   })
 })
 

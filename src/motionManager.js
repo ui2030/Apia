@@ -94,6 +94,44 @@ const ENGAGED_IDLE = new Set([
   'idle_wave'
 ])
 
+// 2단계(디렉터 연동) — idle 제스처 flavor. 디렉터가 읽은 mood(behaviorDirector
+// MOOD_TO_GESTURE)가 이 flavor로 매핑되어 "어떤 제스처가 나오나"를 좌우한다.
+// AI 생성 클립(idle_stretch_arms/idle_wave)은 energetic에 태깅 → 디렉터가 활기찬
+// 순간으로 읽으면 표면화. flavor Set은 성격 후보와 교집합으로만 작동(캐릭터 어휘
+// 보존), 교집합이 비면 pickIdleMotion이 전체 풀로 폴백한다.
+const ENERGETIC_IDLE = new Set([
+  'idle_stretch_arms',
+  'idle_wave',
+  'idle_shift_weight',
+  'idle_breath_lively',
+  'idle_lean_in',
+  'idle_look_around',
+  'idle_hand_on_hip'
+])
+const QUIET_IDLE = new Set([
+  'idle_breath_soft',
+  'idle_relaxed',
+  'idle_arms_crossed',
+  'idle_sway_relax',
+  'idle_neutral',
+  'idle_look_around_soft',
+  'idle_hands_clasped'
+])
+const FIDGETY_IDLE = new Set([
+  'idle_small_fidget',
+  'idle_shift_weight',
+  'idle_head_tilt',
+  'idle_head_tilt_soft',
+  'idle_look_around',
+  'idle_hand_on_hip'
+])
+const GESTURE_FLAVORS = {
+  engaged: ENGAGED_IDLE,
+  energetic: ENERGETIC_IDLE,
+  quiet: QUIET_IDLE,
+  fidgety: FIDGETY_IDLE
+}
+
 function randomPick(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return null
   return arr[Math.floor(Math.random() * arr.length)]
@@ -486,12 +524,18 @@ export class MotionManager {
 
   pickIdleMotion({ mood } = {}) {
     const candidates = this.getMotionCandidates('idle')
-    // J단계 — 방금 대화했으면(mood:'engaged') "듣는 듯한" 제스처를 선호:
-    // 갸웃·손 모음·생각·둘러보기. 후보에 없으면(성격별로) 전체로 폴백.
+    // J/2단계 — 디렉터(또는 attentiveness)가 제스처 flavor를 지시하면 그 flavor로
+    // 후보를 좁힌다. mood가 알 수 없거나 null이면 전체 풀(무회귀), 알려진 flavor라도
+    // 성격 어휘와 교집합이 비면 전체 풀로 폴백(캐릭터 어휘 보존).
     let pool = candidates
-    if (mood === 'engaged') {
-      const engaged = candidates.filter((m) => ENGAGED_IDLE.has(m))
-      if (engaged.length > 0) pool = engaged
+    // Object.hasOwn 가드 — 'toString'/'__proto__' 등 프로토타입 키가 상속 속성을
+    // 잡아 flavor.has 크래시 나는 걸 차단(Codex). 알려진 flavor가 아니면 전체 풀.
+    const flavor = (typeof mood === 'string' && Object.hasOwn(GESTURE_FLAVORS, mood))
+      ? GESTURE_FLAVORS[mood]
+      : null
+    if (flavor) {
+      const flavored = candidates.filter((m) => flavor.has(m))
+      if (flavored.length > 0) pool = flavored
     }
     let motion = randomPick(pool)
 
@@ -595,5 +639,6 @@ export class MotionManager {
 
 export {
   PERSONALITY,
-  MOTION_LIBRARY
+  MOTION_LIBRARY,
+  GESTURE_FLAVORS
 }
