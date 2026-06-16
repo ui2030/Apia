@@ -1,14 +1,16 @@
 const fs = require('fs')
 const fsp = require('fs/promises')
-const path = require('path')
 const os = require('os')
+const path = require('path')
+
 const extractZip = require('extract-zip')
 const { dialog } = require('electron')
+
 const registryService = require('./registryService')
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.tga', '.gif', '.webp', '.spa', '.sph'])
 const DOC_EXTS = new Set(['.pdf', '.txt', '.md', '.docx', '.hwp', '.hwpx'])
-const MODEL_EXTS = new Set(['.pmx', '.vrm'])
+const MODEL_EXTS = new Set(['.pmx', '.pmd', '.vrm'])
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true })
@@ -18,7 +20,7 @@ function slugify(input) {
   return String(input || '')
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9가-힣_-]+/g, '_')
+    .replace(/[^\p{L}\p{N}]+/gu, '_')
     .replace(/_+/g, '_')
     .replace(/^_+|_+$/g, '') || 'character'
 }
@@ -59,8 +61,8 @@ async function scanFiles(rootDir) {
 
 function chooseEntryModel(files) {
   const models = files
-    .filter(file => MODEL_EXTS.has(path.extname(file).toLowerCase()))
-    .map(file => ({
+    .filter((file) => MODEL_EXTS.has(path.extname(file).toLowerCase()))
+    .map((file) => ({
       abs: file,
       ext: path.extname(file).toLowerCase().slice(1),
       depth: file.split(path.sep).length,
@@ -70,15 +72,15 @@ function chooseEntryModel(files) {
 
   if (!models.length) return null
 
-  const vrm = models.filter(m => m.ext === 'vrm')
-  const pmx = models.filter(m => m.ext === 'pmx')
-
-  const preferredPool = pmx.length ? pmx : vrm
+  const vrm = models.filter((model) => model.ext === 'vrm')
+  const mmd = models.filter((model) => model.ext === 'pmx' || model.ext === 'pmd')
+  const preferredPool = mmd.length ? mmd : vrm
 
   preferredPool.sort((a, b) => {
-    const nameScoreA = /model|main|body|character/.test(a.name) ? -1 : 0
-    const nameScoreB = /model|main|body|character/.test(b.name) ? -1 : 0
-    if (nameScoreA !== nameScoreB) return nameScoreA - nameScoreB
+    const scoreA = /model|main|body|character/.test(a.name) ? -1 : 0
+    const scoreB = /model|main|body|character/.test(b.name) ? -1 : 0
+
+    if (scoreA !== scoreB) return scoreA - scoreB
     if (a.depth !== b.depth) return a.depth - b.depth
     return b.size - a.size
   })
@@ -88,6 +90,7 @@ function chooseEntryModel(files) {
 
 function buildBasenameMap(files) {
   const map = {}
+
   for (const file of files) {
     const ext = path.extname(file).toLowerCase()
     if (!IMAGE_EXTS.has(ext)) continue
@@ -96,6 +99,7 @@ function buildBasenameMap(files) {
     if (!map[base]) map[base] = []
     map[base].push(file)
   }
+
   return map
 }
 
@@ -125,15 +129,63 @@ async function copySelectedFiles(filePaths, sourceRoot, targetRoot) {
   }
 }
 
+async function prepareImportSource(sourcePath, workingRoot) {
+  const stat = await fsp.stat(sourcePath)
+
+  if (stat.isDirectory()) {
+    return {
+      extractedRoot: sourcePath,
+      entryModelAbs: null,
+      importSource: 'directory',
+      originalSourcePath: null
+    }
+  }
+
+  const ext = path.extname(sourcePath).toLowerCase()
+
+  if (ext === '.zip') {
+    await extractZip(sourcePath, { dir: workingRoot })
+    return {
+      extractedRoot: workingRoot,
+      entryModelAbs: null,
+      importSource: 'zip',
+      originalSourcePath: sourcePath
+    }
+  }
+
+  if (ext === '.vrm') {
+    const copiedFile = path.join(workingRoot, path.basename(sourcePath))
+    await fsp.copyFile(sourcePath, copiedFile)
+    return {
+      extractedRoot: workingRoot,
+      entryModelAbs: copiedFile,
+      importSource: 'file',
+      originalSourcePath: sourcePath
+    }
+  }
+
+  if (ext === '.pmx' || ext === '.pmd') {
+    await copyDir(path.dirname(sourcePath), workingRoot)
+    return {
+      extractedRoot: workingRoot,
+      entryModelAbs: path.join(workingRoot, path.basename(sourcePath)),
+      importSource: 'file',
+      originalSourcePath: sourcePath
+    }
+  }
+
+  throw new Error(`Unsupported import source: ${sourcePath}`)
+}
+
 function uniqueCharacterId(baseId) {
   const registry = registryService.readRegistry()
-  const existingIds = new Set((registry.characters || []).map(c => c.id))
+  const existingIds = new Set((registry.characters || []).map((character) => character.id))
 
   if (!existingIds.has(baseId)) return baseId
 
-  let i = 1
-  while (existingIds.has(`${baseId}_${i}`)) i += 1
-  return `${baseId}_${i}`
+  let index = 1
+  while (existingIds.has(`${baseId}_${index}`)) index += 1
+  return `${baseId}_${index}`
 }
 
 async function writeJsonIfMissing(filePath, data) {
@@ -166,17 +218,18 @@ async function createCharacterFiles({
 
   await copyDir(extractedRoot, extractedDir)
 
-  const docs = scannedFiles.filter(file => DOC_EXTS.has(path.extname(file).toLowerCase()))
+  const docs = scannedFiles.filter((file) => DOC_EXTS.has(path.extname(file).toLowerCase()))
   await copySelectedFiles(docs, extractedRoot, docsDir)
 
   const copiedScannedFiles = await scanFiles(extractedDir)
-  const copiedEntry = copiedScannedFiles.find(file => path.basename(file) === path.basename(entryModelAbs))
+  const entryRelativePath = path.relative(extractedRoot, entryModelAbs)
+  const copiedEntry = path.join(extractedDir, entryRelativePath)
 
-  if (!copiedEntry) {
-    throw new Error('추출 후 PMX/VRM 엔트리 파일을 다시 찾을 수 없습니다.')
+  if (!(await pathExists(copiedEntry))) {
+    throw new Error('Imported model entry file could not be resolved after copy.')
   }
 
-  const imageFiles = copiedScannedFiles.filter(file => IMAGE_EXTS.has(path.extname(file).toLowerCase()))
+  const imageFiles = copiedScannedFiles.filter((file) => IMAGE_EXTS.has(path.extname(file).toLowerCase()))
   const basenameMap = buildBasenameMap(copiedScannedFiles)
 
   const manifest = {
@@ -189,31 +242,28 @@ async function createCharacterFiles({
     rootDirUrl: toFileUrl(extractedDir),
     loaderHints: {
       textureResolver: 'basename-fallback',
-      note: 'PMX 내부 상대 경로가 어긋난 경우 basename 기준으로 텍스처를 보정하도록 렌더러 로더에서 사용'
+      note: 'When relative texture references are broken, resolve by basename as a fallback.'
     },
-    files: copiedScannedFiles.map(file => path.relative(extractedDir, file).replace(/\\/g, '/')),
+    files: copiedScannedFiles.map((file) => path.relative(extractedDir, file).replace(/\\/g, '/')),
     assets: {
-      images: imageFiles.map(file => ({
+      images: imageFiles.map((file) => ({
         name: path.basename(file),
         relativePath: path.relative(extractedDir, file).replace(/\\/g, '/'),
         absolutePath: file,
         fileUrl: toFileUrl(file)
       })),
-      docs: docs.map(file => ({
+      docs: docs.map((file) => ({
         name: path.basename(file),
         relativePath: path.relative(extractedRoot, file).replace(/\\/g, '/'),
         copiedTo: path.join('docs', path.relative(extractedRoot, file)).replace(/\\/g, '/')
       }))
     },
-
-    // 🔥 프론트에서 바로 candidates[0]으로 쓸 수 있게 문자열 URL 배열로 저장
     textureBasenameMap: Object.fromEntries(
       Object.entries(basenameMap).map(([key, files]) => [
         key,
-        files.map(file => toFileUrl(file))
+        files.map((file) => toFileUrl(file))
       ])
     ),
-
     warnings: [],
     ready: true
   }
@@ -249,17 +299,17 @@ async function createCharacterFiles({
       reactionDelayMs: [250, 700]
     },
     motionPresetGroups: {
-      idle: ['idle_breathe_soft'],
-      talk: ['talk_default'],
+      idle: ['idle_breath_soft'],
+      talk: ['talk_soft'],
       react: {
-        happy: ['react_smile_small'],
-        surprised: ['react_small_startle']
+        happy: ['react_happy'],
+        surprised: ['react_small_surprised']
       },
       locomotion: {
-        walk: ['walk_default']
+        walk: []
       }
     },
-    systemPromptCore: description || summary || `${displayName} 캐릭터 기본 프로필`
+    systemPromptCore: description || summary || `${displayName} base character profile`
   }
 
   const profileUser = {
@@ -270,9 +320,9 @@ async function createCharacterFiles({
   }
 
   const interpretationPresets = {
-    default: { label: '기본' },
+    default: { label: 'Default' },
     shy: {
-      label: '소심한 해석',
+      label: 'Shy',
       offset: {
         confidence: -0.2,
         expressiveness: -0.12,
@@ -281,7 +331,7 @@ async function createCharacterFiles({
       }
     },
     lively: {
-      label: '활발한 해석',
+      label: 'Lively',
       offset: {
         energy: 0.22,
         expressiveness: 0.18,
@@ -299,11 +349,14 @@ async function createCharacterFiles({
   await writeJsonIfMissing(path.join(characterDir, 'profile.generated.json'), profileGenerated)
   await writeJsonIfMissing(path.join(characterDir, 'profile.user.json'), profileUser)
   await writeJsonIfMissing(path.join(characterDir, 'interpretation_presets.json'), interpretationPresets)
-  await writeJsonIfMissing(path.join(motionsDir, 'index.json'), { version: 1, idle: [], talk: [], react: [], locomotion: [] })
+  await writeJsonIfMissing(
+    path.join(motionsDir, 'index.json'),
+    { version: 1, idle: [], talk: [], react: [], locomotion: [] }
+  )
 
   return {
     manifest,
-    copiedDocs: docs.map(file => ({
+    copiedDocs: docs.map((file) => ({
       name: path.basename(file),
       path: path.join(docsDir, path.relative(extractedRoot, file))
     }))
@@ -312,36 +365,44 @@ async function createCharacterFiles({
 
 async function importFromZip({ zipPath, displayName, customName = '', summary = '', description = '' }) {
   if (!zipPath) {
-    throw new Error('zipPath가 비어 있습니다.')
+    throw new Error('zipPath is required.')
   }
 
   if (!(await pathExists(zipPath))) {
-    throw new Error(`ZIP 파일을 찾을 수 없습니다: ${zipPath}`)
+    throw new Error(`Import source was not found: ${zipPath}`)
   }
 
   registryService.ensureRegistry()
 
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'apia-character-import-'))
-  const extractRoot = path.join(tempRoot, 'unzipped')
-  ensureDir(extractRoot)
+  const workingRoot = path.join(tempRoot, 'import-source')
+  ensureDir(workingRoot)
 
   try {
-    await extractZip(zipPath, { dir: extractRoot })
-
-    const scannedFiles = await scanFiles(extractRoot)
-    const entryModel = chooseEntryModel(scannedFiles)
+    const prepared = await prepareImportSource(zipPath, workingRoot)
+    const scannedFiles = await scanFiles(prepared.extractedRoot)
+    const entryModel = prepared.entryModelAbs
+      ? {
+          abs: prepared.entryModelAbs,
+          ext: path.extname(prepared.entryModelAbs).toLowerCase().slice(1)
+        }
+      : chooseEntryModel(scannedFiles)
 
     if (!entryModel) {
-      throw new Error('ZIP 안에서 PMX 또는 VRM 파일을 찾지 못했습니다.')
+      throw new Error('No PMX/PMD/VRM model file was found in the selected source.')
     }
 
-    const inferredName = displayName || path.basename(entryModel.abs, path.extname(entryModel.abs))
+    const inferredName =
+      displayName ||
+      path.basename(entryModel.abs, path.extname(entryModel.abs)) ||
+      path.basename(zipPath, path.extname(zipPath))
+
     const characterId = uniqueCharacterId(slugify(customName || inferredName))
     const charactersRoot = registryService.getCharactersRoot()
     const characterDir = path.join(charactersRoot, characterId)
 
     if (await pathExists(characterDir)) {
-      throw new Error(`이미 같은 캐릭터 폴더가 존재합니다: ${characterDir}`)
+      throw new Error(`Character directory already exists: ${characterDir}`)
     }
 
     ensureDir(characterDir)
@@ -349,7 +410,19 @@ async function importFromZip({ zipPath, displayName, customName = '', summary = 
     const modelDir = path.join(characterDir, 'model')
     const originalDir = path.join(modelDir, 'original_package')
     ensureDir(originalDir)
-    await fsp.copyFile(zipPath, path.join(originalDir, path.basename(zipPath)))
+
+    if (prepared.originalSourcePath) {
+      await fsp.copyFile(
+        prepared.originalSourcePath,
+        path.join(originalDir, path.basename(prepared.originalSourcePath))
+      )
+    } else {
+      await fsp.writeFile(
+        path.join(originalDir, 'source_directory.txt'),
+        zipPath,
+        'utf-8'
+      )
+    }
 
     const { manifest, copiedDocs } = await createCharacterFiles({
       characterDir,
@@ -358,7 +431,7 @@ async function importFromZip({ zipPath, displayName, customName = '', summary = 
       description,
       modelType: entryModel.ext,
       entryModelAbs: entryModel.abs,
-      extractedRoot: extractRoot,
+      extractedRoot: prepared.extractedRoot,
       scannedFiles
     })
 
@@ -369,14 +442,14 @@ async function importFromZip({ zipPath, displayName, customName = '', summary = 
       summary,
       originalDescription: description,
       modelType: entryModel.ext,
-      importSource: 'zip',
+      importSource: prepared.importSource,
       basePath: characterDir,
       modelManifestPath: path.join(characterDir, 'model', 'model_manifest.json'),
       profileGeneratedPath: path.join(characterDir, 'profile.generated.json'),
       profileUserPath: path.join(characterDir, 'profile.user.json'),
       interpretationsPath: path.join(characterDir, 'interpretation_presets.json'),
       thumbnail: null,
-      documents: copiedDocs.map(doc => ({
+      documents: copiedDocs.map((doc) => ({
         name: doc.name,
         path: doc.path,
         type: path.extname(doc.path).slice(1).toLowerCase()
@@ -396,29 +469,48 @@ async function importFromZip({ zipPath, displayName, customName = '', summary = 
       ok: true,
       character: entry,
       manifest,
-      message: `${inferredName} 캐릭터를 등록했습니다.`
+      message: `${inferredName} imported successfully.`
     }
   } finally {
     await fsp.rm(tempRoot, { recursive: true, force: true })
   }
 }
 
-async function pickZipAndImport(browserWindow) {
+async function pickImportSource(browserWindow) {
   const result = await dialog.showOpenDialog(browserWindow, {
-    title: '캐릭터 ZIP 선택',
-    properties: ['openFile'],
-    filters: [{ name: 'ZIP Files', extensions: ['zip'] }]
+    title: 'Import character source',
+    properties: ['openFile', 'openDirectory'],
+    filters: [
+      { name: 'Character Sources', extensions: ['zip', 'vrm', 'pmx', 'pmd'] }
+    ]
   })
 
   if (result.canceled || !result.filePaths.length) {
     return { ok: false, canceled: true }
   }
 
-  const zipPath = result.filePaths[0]
-  const guessed = path.basename(zipPath, '.zip')
+  const sourcePath = result.filePaths[0]
+  const stat = await fsp.stat(sourcePath)
 
-  return await importFromZip({
-    zipPath,
+  return {
+    ok: true,
+    path: sourcePath,
+    name: path.basename(sourcePath),
+    kind: stat.isDirectory() ? 'directory' : 'file'
+  }
+}
+
+async function pickZipAndImport(browserWindow) {
+  const picked = await pickImportSource(browserWindow)
+  if (!picked?.ok || !picked.path) {
+    return picked || { ok: false, canceled: true }
+  }
+
+  const sourcePath = picked.path
+  const guessed = path.basename(sourcePath, path.extname(sourcePath))
+
+  return importFromZip({
+    zipPath: sourcePath,
     displayName: guessed,
     customName: guessed,
     summary: '',
@@ -428,6 +520,7 @@ async function pickZipAndImport(browserWindow) {
 
 module.exports = {
   importFromZip,
+  pickImportSource,
   pickZipAndImport,
   toFileUrl
 }

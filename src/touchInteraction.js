@@ -11,7 +11,7 @@
 
 export const TOUCH_THRESHOLDS = {
   TAP_MAX_MOVE: 8,      // px — 이보다 적게 움직이면 탭 후보
-  TAP_MAX_MS: 400,      // ms — 이보다 빠르면 탭
+  TAP_MAX_MS: 1500,     // ms — 정지 누름 탭 인정 상한(이보다 더 오래 누르면 탭 아님)
   PET_PATH: 40,         // px — 캐릭터 위 누적 경로가 이를 넘으면 쓰다듬기
   PET_THROTTLE_MS: 800, // ms — 연속 쓰다듬기 반응 최소 간격
   GRAB_DISP: 120        // px — 시작점에서 변위가 이를 넘으면 잡기/드래그

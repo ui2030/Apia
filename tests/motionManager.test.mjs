@@ -91,4 +91,51 @@ describe('pickIdleMotion flavor steering', () => {
       expect(pool.length, `${p}×${flavor}`).toBeGreaterThan(0)
     }
   })
+
+  it('calm × energetic/fidgety — 같은 제스처만 반복하지 않음(가드 ≥2 + dedup)', () => {
+    // 회귀: 예전엔 calm×energetic/fidgety 교집합이 1개라 같은 idle 무한 반복.
+    // idle_look_around_soft 추가로 교집합 2개 확보 + flavored<2면 전체풀 폴백.
+    for (const mood of ['energetic', 'fidgety']) {
+      const mgr = new MotionManager({ personality: 'calm' })
+      const seen = new Set()
+      for (let i = 0; i < 24; i++) seen.add(mgr.pickIdleMotion({ mood }).name)
+      expect(seen.size, `calm×${mood}`).toBeGreaterThan(1)
+    }
+  })
+
+  it('알 수 없는 프리셋 이름은 drop되고 라이브러리로 폴백(무반응 방지)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mgr = new MotionManager({ personality: 'calm' })
+    mgr.setCharacterProfile({
+      generated: {
+        motionPresetGroups: {
+          idle: ['idle_breathe_soft', 'idle_breath_soft'], // 유령, 실명
+          react: { happy: ['react_smile_small'] }          // 유령
+        }
+      }
+    })
+    const idle = mgr.getMotionCandidates('idle')
+    expect(idle).not.toContain('idle_breathe_soft') // 유령 드롭
+    expect(idle).toContain('idle_breath_soft')      // 실명 유지
+    const happy = mgr.getMotionCandidates('react', 'happy')
+    expect(happy).not.toContain('react_smile_small')
+    expect(happy.length).toBeGreaterThan(0)         // 라이브러리 폴백
+    expect(warn).toHaveBeenCalled()
+  })
+
+  it('라이브러리 정식 이름은 검증에서 드롭되지 않음(경고 없음)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const allIdle = [...MOTION_LIBRARY.idle.shy, ...MOTION_LIBRARY.idle.active, ...MOTION_LIBRARY.idle.calm]
+    const allTalk = [...MOTION_LIBRARY.talk.shy, ...MOTION_LIBRARY.talk.active, ...MOTION_LIBRARY.talk.calm]
+    const allReactHappy = [...MOTION_LIBRARY.react.active, ...MOTION_LIBRARY.react.calm]
+    const mgr = new MotionManager({ personality: 'active' })
+    mgr.setCharacterProfile({
+      generated: { motionPresetGroups: { idle: allIdle, talk: allTalk, react: { happy: allReactHappy } } }
+    })
+    const groups = mgr.getCharacterProfile().motionPresetGroups
+    for (const n of allIdle) expect(groups.idle, n).toContain(n)
+    for (const n of allTalk) expect(groups.talk, n).toContain(n)
+    for (const n of allReactHappy) expect(groups.react.happy, n).toContain(n)
+    expect(warn).not.toHaveBeenCalled() // 정식 이름엔 경고 없음
+  })
 })

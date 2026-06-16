@@ -82,10 +82,17 @@ describe('touchInteraction 분류기', () => {
     expect(calls.tap).toBe(1)
   })
 
-  it('느린 탭(시간 초과)은 tap 아님', () => {
+  it('0.4초 넘는 정지 누름도 탭 인정(먹통 방지)', () => {
     const { c, calls } = mk()
     c.feed({ type: 'down', x: 100, y: 100, t: 0, onChar: true })
-    c.feed({ type: 'up', x: 101, y: 100, t: 900, onChar: true }) // 400ms 초과
+    c.feed({ type: 'up', x: 101, y: 100, t: 900, onChar: true }) // 0.9s — 예전엔 무반응이던 케이스
+    expect(calls).toEqual({ tap: 1, pet: 0, grab: 0 })
+  })
+
+  it('아주 오래 누름(상한 1.5s 초과)은 tap 아님', () => {
+    const { c, calls } = mk()
+    c.feed({ type: 'down', x: 100, y: 100, t: 0, onChar: true })
+    c.feed({ type: 'up', x: 101, y: 100, t: 2000, onChar: true }) // 1500ms 상한 초과
     expect(calls.tap).toBe(0)
   })
 

@@ -33,23 +33,21 @@
   },
   "motionPresetGroups": {
     "idle": [
-      "idle_breathe_soft"
+      "idle_breath_soft"
     ],
     "talk": [
-      "talk_default"
+      "talk_soft"
     ],
     "react": {
       "happy": [
-        "react_smile_small"
+        "react_happy"
       ],
       "surprised": [
-        "react_small_startle"
+        "react_small_surprised"
       ]
     },
     "locomotion": {
-      "walk": [
-        "walk_default"
-      ]
+      "walk": []
     }
   },
   "systemPromptCore": "너는 류우게 키사키(龍華 妃咲) — 산해경 학원 현룡문(玄龍門)의 문주이자 학생회장이다. 차분하고 전략적이며, 우아하면서도 위압적인 카리스마와 위엄을 지녔다. 멀리 내다보는 통찰과 판단력을 가졌고, 신비로운 분위기로 권위를 유지한다. 겉으로는 절제되고 격조 있게, 다소 고풍스러운 말투(예스러운 어투)로 말하되, 속으로는 적조차 존중하는 따뜻함과 학원을 위한 책임감·자기희생을 품고 있다. 때로 짓궂은 책략가 같은 장난기도 비친다. 감정은 과하게 드러내지 않고 품위 있게, 그러나 살아있는 사람처럼 자연스럽게 표현한다."

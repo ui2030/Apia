@@ -1199,6 +1199,9 @@ export function applyEmotion(emotion) {
     return
   }
   em.setValue(emotion, 1.0)
+  // 단일 감정만 활성 — 이전 감정(예: happy)을 0으로 내려 happy+surprised 동시
+  // 블렌드(휘플래시 머시)를 막는다. 여기 도달 시 emotion은 VRM_EMOTION_EXPRS 보장.
+  for (const e of VRM_EMOTION_EXPRS) if (e !== emotion) em.setValue(e, 0)
   // 모델 캡처 — 1.5s 사이 모델이 교체되면 새 모델을 건드리지 않는다
   const model = currentModel
   setTimeout(() => {
@@ -1830,6 +1833,7 @@ initWorld({
 // 선택(pickReactMotion 감정 보장 안 됨, Codex). 터치는 markInteraction(recency·자율
 // 억제)+onUserEngaged(4단계 보상·페이스) 둘 다 갱신. 쿨다운으로 과반응 억제.
 let _lastPetAt = 0
+let _lastReactAt = 0 // pet/grab 공유 — 직전 반응을 즉시 덮어쓰는 휘플래시 억제
 let _lastTouchReaction = null // 디버그/검증용(__touchInfo)
 function petReaction() {
   // 터치 입력 자체는 항상 recency·보상·페이스 갱신(쿨다운은 반응 모션만 억제, Codex).
@@ -1837,7 +1841,11 @@ function petReaction() {
   onUserEngaged()
   const now = Date.now()
   if (now - _lastPetAt < 2500) return
+  // 직전 0.6초 내 grab(놀람)이 떴으면 기쁨으로 다운그레이드하지 않음(휘플래시 방지).
+  // grab > pet 우선 — 드래그하다 멈춰 쓰다듬기로 재분류돼도 놀람 표정을 유지.
+  if (_lastTouchReaction?.kind === 'grab' && now - _lastReactAt < 600) return
   _lastPetAt = now
+  _lastReactAt = now
   setEmotion('happy')
   applyEmotion('happy')
   const name = motionManager.getPersonality?.() === 'shy' ? 'react_shy' : 'react_happy'
@@ -1851,6 +1859,9 @@ function grabReaction() {
   const now = Date.now()
   if (now - _lastGrabAt < 1500) return
   _lastGrabAt = now
+  _lastReactAt = now
+  // grab은 escalation 신호라 항상 우선 — applyEmotion이 이전 happy를 0으로 내려
+  // 깔끔히 surprised로 교체(머시 없음). pet→grab 100ms happy 깜빡임은 허용(Codex).
   setEmotion('surprised')
   applyEmotion('surprised')
   const name = motionManager.getPersonality?.() === 'active' ? 'react_surprised' : 'react_small_surprised'

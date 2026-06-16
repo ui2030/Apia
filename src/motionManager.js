@@ -106,6 +106,7 @@ const ENERGETIC_IDLE = new Set([
   'idle_breath_lively',
   'idle_lean_in',
   'idle_look_around',
+  'idle_look_around_soft', // calm 풀에도 있어 calm×energetic 교집합을 1→2로 (반복 방지)
   'idle_hand_on_hip'
 ])
 const QUIET_IDLE = new Set([
@@ -123,6 +124,7 @@ const FIDGETY_IDLE = new Set([
   'idle_head_tilt',
   'idle_head_tilt_soft',
   'idle_look_around',
+  'idle_look_around_soft', // calm 풀에도 있어 calm×fidgety 교집합을 1→2로 (반복 방지)
   'idle_hand_on_hip'
 ])
 const GESTURE_FLAVORS = {
@@ -267,11 +269,42 @@ function normalizeReactionDelay(input) {
   return [min, max]
 }
 
+// 엔진이 아는 모션 이름 전부(절차적+클립). 캐릭터 프로필이 오타/유령 이름을
+// 들이면(예: idle_breathe_soft) 픽업돼도 클립이 안 나오고 절차 폴백으로 조용히
+// 죽으므로, 프로필 정규화 단계에서 미지명을 걸러 경고+드롭한다(라이브러리로 폴백).
+const KNOWN_MOTION_NAMES = new Set(
+  Object.values(MOTION_LIBRARY).flatMap((byPersonality) =>
+    Object.values(byPersonality).flat()
+  )
+)
+
+function filterKnownMotions(names, label) {
+  const out = []
+  for (const n of names) {
+    if (!n) continue
+    if (KNOWN_MOTION_NAMES.has(n)) {
+      out.push(n)
+    } else if (typeof console !== 'undefined' && console.warn) {
+      console.warn(`[motionManager] 알 수 없는 모션 프리셋 '${n}'(${label}) — 엔진 어휘에 없어 무시. 라이브러리로 폴백.`)
+    }
+  }
+  return out
+}
+
 function normalizeMotionPresetGroups(input = {}) {
+  const react = {}
+  if (input.react && typeof input.react === 'object') {
+    for (const [emotion, names] of Object.entries(input.react)) {
+      if (Array.isArray(names)) react[emotion] = filterKnownMotions(names, `react.${emotion}`)
+    }
+  }
   return {
-    idle: Array.isArray(input.idle) ? input.idle.filter(Boolean) : [],
-    talk: Array.isArray(input.talk) ? input.talk.filter(Boolean) : [],
-    react: input.react && typeof input.react === 'object' ? input.react : {},
+    // idle/talk/react는 엔진 어휘로 검증(미지명 드롭). 빈 그룹이 돼도
+    // getMotionCandidates가 MOTION_LIBRARY로 폴백하므로 무반응이 되지 않는다.
+    idle: Array.isArray(input.idle) ? filterKnownMotions(input.idle, 'idle') : [],
+    talk: Array.isArray(input.talk) ? filterKnownMotions(input.talk, 'talk') : [],
+    react,
+    // locomotion(walk)은 절차적 gait가 구동 — 라이브러리 카테고리가 없어 검증 제외.
     locomotion: input.locomotion && typeof input.locomotion === 'object' ? input.locomotion : {}
   }
 }
@@ -547,7 +580,7 @@ export class MotionManager {
     const candidates = this.getMotionCandidates('idle')
     // J/2단계 — 디렉터(또는 attentiveness)가 제스처 flavor를 지시하면 그 flavor로
     // 후보를 좁힌다. mood가 알 수 없거나 null이면 전체 풀(무회귀), 알려진 flavor라도
-    // 성격 어휘와 교집합이 비면 전체 풀로 폴백(캐릭터 어휘 보존).
+    // 성격 어휘와 교집합이 2개 미만이면 전체 풀로 폴백(반복 방지·어휘 보존).
     let pool = candidates
     // Object.hasOwn 가드 — 'toString'/'__proto__' 등 프로토타입 키가 상속 속성을
     // 잡아 flavor.has 크래시 나는 걸 차단(Codex). 알려진 flavor가 아니면 전체 풀.
@@ -556,7 +589,9 @@ export class MotionManager {
       : null
     if (flavor) {
       const flavored = candidates.filter((m) => flavor.has(m))
-      if (flavored.length > 0) pool = flavored
+      // 교집합이 1개뿐이면 같은 제스처만 반복(lastMotion dedup은 pool>1에서만 작동).
+      // 2개 이상일 때만 flavor로 좁혀 다양성을 보장하고, 1개면 전체 풀로 폴백.
+      if (flavored.length >= 2) pool = flavored
     }
     // 4단계 — 순서: 성격 후보 → flavor 필터 → (학습 선호) 가중 선택 → lastMotion
     // dedup(재선택도 같은 가중). bias 미주입이면 기존 균등 무작위(무회귀).
