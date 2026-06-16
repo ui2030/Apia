@@ -93,6 +93,11 @@ class VoiceManager:
         if _active_job_id and _training_jobs.get(_active_job_id, {}).get("status") not in ("done", "error"):
             raise RuntimeError("이미 진행 중인 음성 준비가 있어요. 끝난 뒤 다시 시도해 주세요.")
 
+        # 안정성 — 끝난(done/error) 옛 job은 정리해 _training_jobs 무한 누적 방지.
+        # 활성 job은 위 가드로 최대 1개뿐이라 안전하게 비운다.
+        for _jid in [j for j, info in _training_jobs.items() if info.get("status") in ("done", "error")]:
+            _training_jobs.pop(_jid, None)
+
         from services import voice_clone_service as clone
 
         if not clone.is_available():

@@ -217,6 +217,7 @@ async function speakWithLipsync(text) {
   }
 }
 
+const MAX_MSG_ROWS = 200 // L단계 — 채팅 DOM 무한 누적 방지(오래된 행 프루닝)
 function appendMessage(role, text, isLoading = false, citations = null) {
   const messages = document.getElementById('messages')
   if (!messages) return null
@@ -235,6 +236,7 @@ function appendMessage(role, text, isLoading = false, citations = null) {
     row.appendChild(renderCitationChips(citations))
   }
   messages.appendChild(row)
+  while (messages.children.length > MAX_MSG_ROWS) messages.firstElementChild?.remove()
   messages.scrollTop = messages.scrollHeight
   return row
 }

@@ -1123,6 +1123,33 @@ export function loadDummy() {
   frameCharacterCamera()
 }
 
+// L단계(안정성) — three.js GPU 리소스 명시 해제. JS GC는 WebGL geometry/texture를
+// 회수하지 못하므로 모델 교체 시 직접 dispose해야 VRAM이 누수되지 않는다. 같은
+// 리소스가 여러 material/슬롯에서 참조될 수 있어 Set으로 중복 dispose를 막는다(Codex).
+function disposeObject3D(root) {
+  if (!root) return
+  const seenGeo = new Set()
+  const seenMat = new Set()
+  const seenTex = new Set()
+  const seenSkel = new Set()
+  const disposeTexture = (v) => {
+    if (v && v.isTexture && !seenTex.has(v)) { seenTex.add(v); v.dispose() }
+  }
+  root.traverse((o) => {
+    if (o.geometry && !seenGeo.has(o.geometry)) { seenGeo.add(o.geometry); o.geometry.dispose?.() }
+    // SkinnedMesh의 skeleton은 본 텍스처(boneTexture)를 들고 있어 별도 해제 필요(Codex).
+    if (o.skeleton && !seenSkel.has(o.skeleton)) { seenSkel.add(o.skeleton); o.skeleton.dispose?.() }
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
+    for (const m of mats) {
+      if (!m || seenMat.has(m)) continue
+      seenMat.add(m)
+      for (const k of Object.keys(m)) disposeTexture(m[k])
+      if (m.uniforms) for (const u of Object.keys(m.uniforms)) disposeTexture(m.uniforms[u]?.value)
+      m.dispose?.()
+    }
+  })
+}
+
 function clearModel() {
   if (!currentModel) return
 
@@ -1151,7 +1178,13 @@ function clearModel() {
     // Step 6: any in-flight FBX clip is gone with the model.
     currentModel._fbxClipActive = false
     getVRMUtils()?.deepDispose(currentModel.root)
+  } else {
+    // L단계(안정성) — VRM 외(MMD/PMX·더미)는 deepDispose가 없어 교체할 때마다
+    // geometry/material/texture가 GPU에 누수됐다. 명시적으로 해제한다.
+    disposeObject3D(currentModel.root)
   }
+  // 모델 교체 시 렌더러의 렌더리스트 캐시도 비워 구 모델 참조가 남지 않게(Codex).
+  renderer.renderLists?.dispose?.()
 
   // Step 2 of /goal: bone cache is gone — poseRig (per-model registry)
   // owns role resolution now.

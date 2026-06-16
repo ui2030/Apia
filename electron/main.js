@@ -147,11 +147,23 @@ function serializeLogPart(part) {
   }
 }
 
+let runtimeLogWriteCount = 0
+const MAX_LOG_BYTES = 5 * 1024 * 1024 // L단계 — main.log 1세대 롤오버 임계(5MB)
 function appendRuntimeLog(level, ...parts) {
   const line = `[${new Date().toISOString()}] [${level}] ${parts.map(serializeLogPart).join(' ')}`
 
   try {
     fs.mkdirSync(RUNTIME_LOG_DIR, { recursive: true })
+    // L단계(안정성) — 로그 무한 증가 방지: 500줄마다 크기 점검, 5MB 초과 시
+    // 1세대 롤오버(main.log→main.log.1). rotate 실패해도 append는 계속(Codex).
+    if ((runtimeLogWriteCount++ % 500) === 0) {
+      try {
+        if (fs.statSync(MAIN_LOG_PATH).size > MAX_LOG_BYTES) {
+          try { fs.unlinkSync(`${MAIN_LOG_PATH}.1`) } catch {}
+          fs.renameSync(MAIN_LOG_PATH, `${MAIN_LOG_PATH}.1`)
+        }
+      } catch {}
+    }
     fs.appendFileSync(MAIN_LOG_PATH, `${line}\n`, 'utf-8')
   } catch {}
 
@@ -892,6 +904,156 @@ function stopCursorFeed() {
   }
 }
 
+// ── 좌하단 핫코너 (벽지모드 전용) ────────────────────────────────────────────
+//
+// 벽지모드에선 메인 창이 바탕화면 뒤(HWND_BOTTOM)라 클릭을 못 받으므로 설정·채팅
+// 버튼을 이 별도 always-on-top 창에 둔다. 평소엔 완전히 숨김(투명+클릭통과). 메인
+// 프로세스가 50ms로 전역 커서를 폴링해 이 창의 화면 사각형에 마우스가 들어오면
+// reveal + 클릭 가능(setIgnoreMouseEvents(false))으로 바꾸고, 벗어나면 200ms
+// 디바운스 후 다시 숨김 + 클릭 통과. 클릭은 forward에 기대지 않고 반드시 ignore
+// 해제 뒤에만 받는다(Codex 사전검토). 멀티모니터/DPI는 캐릭터가 있는 디스플레이의
+// workArea 기준이라 작업표시줄을 피해 좌하단에 온다.
+const CORNER_W = 200
+const CORNER_H = 140
+const CORNER_HIDE_DEBOUNCE_MS = 200
+let cornerWindow = null
+let cornerWatchTimer = null
+let cornerHideTimer = null
+let cornerRevealed = false
+let cornerDisplayListenersBound = false
+
+function cornerTargetBounds() {
+  const main = windows.getMain()
+  let display
+  try {
+    display = main && !main.isDestroyed()
+      ? screen.getDisplayMatching(main.getBounds())
+      : screen.getPrimaryDisplay()
+  } catch {
+    display = screen.getPrimaryDisplay()
+  }
+  const wa = display.workArea
+  return { x: wa.x, y: wa.y + wa.height - CORNER_H, width: CORNER_W, height: CORNER_H }
+}
+
+function setCornerRevealed(on) {
+  if (on === cornerRevealed) return
+  cornerRevealed = on
+  if (!cornerWindow || cornerWindow.isDestroyed()) return
+  try { cornerWindow.setIgnoreMouseEvents(!on, { forward: false }) } catch {}
+  try { cornerWindow.webContents.send('corner:reveal', on) } catch {}
+}
+
+function startCornerWatch() {
+  if (cornerWatchTimer) return
+  cornerWatchTimer = setInterval(() => {
+    if (!cornerWindow || cornerWindow.isDestroyed()) return
+    let pt
+    try { pt = screen.getCursorScreenPoint() } catch { return }
+    const b = cornerWindow.getBounds()
+    const inside = pt.x >= b.x && pt.x < b.x + b.width &&
+                   pt.y >= b.y && pt.y < b.y + b.height
+    if (inside) {
+      if (cornerHideTimer) { clearTimeout(cornerHideTimer); cornerHideTimer = null }
+      setCornerRevealed(true)
+    } else if (cornerRevealed && !cornerHideTimer) {
+      cornerHideTimer = setTimeout(() => {
+        cornerHideTimer = null
+        // 디바운스 만료 시 커서가 여전히 코너 밖일 때만 숨김(경계 깜박임 완화).
+        try {
+          const p = screen.getCursorScreenPoint()
+          const r = cornerWindow && !cornerWindow.isDestroyed() ? cornerWindow.getBounds() : null
+          if (r && p.x >= r.x && p.x < r.x + r.width && p.y >= r.y && p.y < r.y + r.height) return
+        } catch {}
+        setCornerRevealed(false)
+      }, CORNER_HIDE_DEBOUNCE_MS)
+    }
+  }, CURSOR_POLL_MS)
+}
+
+function stopCornerWatch() {
+  if (cornerWatchTimer) { clearInterval(cornerWatchTimer); cornerWatchTimer = null }
+  if (cornerHideTimer) { clearTimeout(cornerHideTimer); cornerHideTimer = null }
+}
+
+function repositionCornerWindow() {
+  if (!cornerWindow || cornerWindow.isDestroyed()) return
+  try { cornerWindow.setBounds(cornerTargetBounds()) } catch {}
+}
+
+function ensureCornerWindow() {
+  if (cornerWindow && !cornerWindow.isDestroyed()) return cornerWindow
+  const b = cornerTargetBounds()
+  cornerWindow = new BrowserWindow({
+    width: b.width,
+    height: b.height,
+    x: b.x,
+    y: b.y,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'cornerPreload.js'),
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  })
+  // 평소엔 클릭 통과(좌하단 바탕화면 아이콘을 가리지 않음). reveal 때 main이 해제.
+  cornerRevealed = false
+  try { cornerWindow.setIgnoreMouseEvents(true, { forward: false }) } catch {}
+  // destroyCornerWindow() 외 경로(외부 close 등)로 닫혀도 50ms 폴링이 안 남도록
+  // idempotent 정리. stopCornerWatch/clearTimeout 모두 여러 번 호출 안전.
+  cornerWindow.on('closed', () => {
+    cornerWindow = null
+    cornerRevealed = false
+    stopCornerWatch()
+  })
+
+  const load = async () => {
+    try {
+      if (isDev) {
+        await cornerWindow.loadURL('http://localhost:5173/corner.html')
+      } else {
+        await cornerWindow.loadFile(path.join(app.getAppPath(), 'dist', 'corner.html'))
+      }
+    } catch (error) {
+      logWarn('[CORNER_WINDOW_LOAD_FAIL]', error?.message || error)
+    }
+  }
+  load()
+
+  if (!cornerDisplayListenersBound) {
+    cornerDisplayListenersBound = true
+    screen.on('display-metrics-changed', repositionCornerWindow)
+    screen.on('display-added', repositionCornerWindow)
+    screen.on('display-removed', repositionCornerWindow)
+  }
+  startCornerWatch()
+  return cornerWindow
+}
+
+function destroyCornerWindow() {
+  stopCornerWatch()
+  cornerRevealed = false
+  if (cornerDisplayListenersBound) {
+    try {
+      screen.removeListener('display-metrics-changed', repositionCornerWindow)
+      screen.removeListener('display-added', repositionCornerWindow)
+      screen.removeListener('display-removed', repositionCornerWindow)
+    } catch {}
+    cornerDisplayListenersBound = false
+  }
+  if (cornerWindow && !cornerWindow.isDestroyed()) {
+    try { cornerWindow.destroy() } catch {}
+  }
+  cornerWindow = null
+}
+
 // ── Phase F1 wallpaper mode integration ─────────────────────────────────────
 
 function syncWallpaperMode() {
@@ -956,6 +1118,9 @@ function syncWallpaperMode() {
         // screen-filling scene (a transparent overlay is invisible against the
         // desktop).
         try { live.webContents?.send('wallpaper:opaque', true) } catch {}
+        // 메인 창이 바탕화면 뒤라 자체 버튼이 숨겨지므로(index.html wallpaper-mode),
+        // 클릭 가능한 좌하단 핫코너 창을 띄운다.
+        ensureCornerWindow()
       }
       if (!mode) {
         // Both native and Progman-child attach failed. Don't leave the window
@@ -973,6 +1138,8 @@ function syncWallpaperMode() {
         try { live.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
         try { live.setIgnoreMouseEvents(false) } catch {}
         try { live.webContents?.send('wallpaper:opaque', false) } catch {}
+        // 오버레이 폴백이면 메인 창이 자체 버튼을 다시 보여주므로 코너는 불필요.
+        destroyCornerWindow()
         logWarn('[WALLPAPER_FALLBACK_OVERLAY]', 'attach failed; using always-on-top overlay')
       }
     })
@@ -990,6 +1157,8 @@ function syncWallpaperMode() {
     try { main.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
     try { main.setIgnoreMouseEvents(false) } catch {}
     try { main.webContents?.send('wallpaper:opaque', false) } catch {}
+    // 오버레이 모드는 메인 창 자체 버튼을 쓰므로 코너 창 제거.
+    destroyCornerWindow()
   }
 }
 
@@ -1149,6 +1318,11 @@ function toggleChatWindow() {
   } else {
     win.show()
     win.focus()
+    // 채팅 창을 여는 것 = "부름". 메인(캐릭터) 렌더러에 호출 신호 → 컴퓨터 앞으로.
+    const main = windows.getMain()
+    if (main && !main.isDestroyed()) {
+      try { main.webContents.send('character:action', { action: 'call' }) } catch {}
+    }
   }
 }
 
@@ -1158,7 +1332,7 @@ function toggleChatWindow() {
 // against the main window.
 const CHARACTER_ACTION_ALLOWLIST = new Set([
   'emotion', 'bubble', 'face-camera', 'lipsync-start', 'lipsync-stop',
-  'show-main-chat'
+  'show-main-chat', 'call'
 ])
 
 ipcMain.handle('character:notify', (event, payload) => {
@@ -1216,6 +1390,7 @@ function quitApia() {
     if (chatWindow && !chatWindow.isDestroyed()) chatWindow.destroy()
     chatWindow = null
   } catch {}
+  try { destroyCornerWindow() } catch {}
   if (backend.isStartedByApp()) backend.stop()
   app.quit()
 }
@@ -1244,6 +1419,7 @@ app.on('before-quit', () => {
   // 막는다. before-quit에서 플래그를 세워 "진짜 종료"임을 알린다.
   quittingApia = true
   stopCursorFeed()
+  destroyCornerWindow()
   stopWallpaperHealthCheck()
   try {
     wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
