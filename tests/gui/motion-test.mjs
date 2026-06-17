@@ -1,4 +1,4 @@
-// 생성한 VMD talk/react 클립을 kisaki(PMX)에서 재생해 회전 방향/크기를 검증.
+// 생성한 VMD talk/react 클립을 테스트 모델(PMX)에서 재생해 회전 방향/크기를 검증.
 // 각 클립을 재생하며 핵심 본(頭/上半身/左腕/右腕) 로컬 회전을 ~1.5s 샘플링,
 // 절대값 피크를 기록하고 피크 시점 스크린샷을 저장한다.
 //
@@ -69,7 +69,7 @@ const readBones = () => mainWindow.evaluate((names) => {
 }, BONES).catch(() => null)
 
 try {
-  // kisaki(SkinnedMesh) 로드 대기
+  // 테스트 모델(SkinnedMesh) 로드 대기
   for (let i = 0; i < 60; i++) {
     const ok = await mainWindow.evaluate(() => {
       const s = window.__apiaScene; if (!s) return false

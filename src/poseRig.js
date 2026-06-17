@@ -8,7 +8,7 @@
 //                        derives a fingerprint (A-pose vs T-pose, head
 //                        rest tilt, etc.). Future writes are *additive*
 //                        over the snapshot, so model-specific posture
-//                        (e.g. Kisaki's slight head tilt at restEuler
+//                        (e.g. the reference model's slight head tilt at restEuler
 //                        [0.028, -0.071, 0.002]) survives.
 //   computePoseTargets — every frame, all roles in one pass. Returns
 //                        `{summed, layers}`. `summed` is the additive
@@ -230,10 +230,10 @@ function computeFingerprint(roles, type) {
   const rZ = rArm ? Math.abs(rArm.restEuler.z) : 0
   const armAbductionBaked = (lZ + rZ) * 0.5
 
-  // Blender(mmd_tools)제 PMX — 예: Kisaki — 는 A자세를 rest *회전*이 아니라
+  // Blender(mmd_tools)제 PMX — 예: the reference model — 는 A자세를 rest *회전*이 아니라
   // 본 *배치*(기하)에만 굽는다. restEuler.z가 0이라 위 지표로는 T자세로
   // 보이지만, 팔꿈치 본의 로컬 오프셋 방향을 재면 진짜 처짐 각이 나온다:
-  // Kisaki lElbow pos (0.77, -0.70) → 42° 처짐. 이 각을 빼지 않고 고정
+  // the reference model lElbow pos (0.77, -0.70) → 42° 처짐. 이 각을 빼지 않고 고정
   // -1.0rad(57°)을 더 내리면 42+57=99° — 수직을 지나 손이 등 뒤로 들어간다
   // (사용자가 보고한 "손이 등 뒤" 버그의 실제 원인).
   // VRM은 normalized rig 가정이 달라 기존 동작(고정 1.0)을 유지한다.
@@ -832,7 +832,7 @@ function addImpulseLayer(state, t, add) {
 // 이미 살짝 감긴 모델은 약간만 더 감긴다(relaxed 진폭을 작게 둔 이유).
 //
 // 굽힘 축/부호는 리그 관례마다 달라 *튜닝 레버*로 노출한다. 기본값은
-// 추측이 아니라 실제 Kisaki PMX(481본)에서 실측한 값:
+// 추측이 아니라 실제 the reference model PMX(481본)에서 실측한 값:
 // 人指１을 각 로컬축±로 0.6rad 돌려 손끝이 손목 쪽(=굽힘)으로 가는 정도를
 // 재면 z축이 0.0159로 x(0.011)·y(0.008)의 ~2배 — z가 주 굽힘축이고,
 // 왼손은 z 음수, 오른손은 z 양수가 flexion(손바닥 쪽). 측정 스크립트:
@@ -842,7 +842,7 @@ const FINGER_CURL_AXIS = 'z'              // 'x'|'y'|'z' — 굽힘이 실릴 �
 const FINGER_CURL_SIGN = { l: -1, r: 1 }  // 좌우 손이 손바닥 쪽으로 감기는 부호
 
 // 발끝 plantarflexion(발끝이 바닥 쪽으로). 실측(tests/gui/toe-axis-check.mjs,
-// Kisaki 足先EX): z축이 거의 순수 하향(lateral≈0.001), 왼발 z+ / 오른발 z-.
+// the reference model 足先EX): z축이 거의 순수 하향(lateral≈0.001), 왼발 z+ / 오른발 z-.
 const TOE_CURL_AXIS = 'z'
 const TOE_CURL_SIGN = { l: 1, r: -1 }
 
@@ -1080,7 +1080,7 @@ export function computePoseTargets({
   // doesn't already hang the arms. The amount is per-model: fingerprint
   // measures the hang already baked into the bone GEOMETRY (elbow offset
   // direction) and adds only the shortfall to ~85°. A fixed -1.0 here
-  // used to over-rotate geometry-A-pose models (Kisaki: 42° baked + 57°
+  // used to over-rotate geometry-A-pose models (the reference model: 42° baked + 57°
   // fixed = 99° → hands drifted behind the back at rest).
   // Skipped if a clip owns the arms — the clip's pose is authoritative.
   if (fingerprint.needsAbductionCorrection && !clipMask?.arms) {

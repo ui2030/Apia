@@ -286,7 +286,7 @@ function adaptiveFov(baseDeg, aspect) {
 //     BOUNDS.maxZ keeps them at z≤5.5 (off the front glass).
 // The ceiling covers the back half only so the camera's forward view isn't
 // clipped from above. Codex NICE-TO-HAVE round 1.
-// Phase D — Blue Archive style warm cafe palette. Earlier neutral cream
+// Phase D — warm cafe palette. Earlier neutral cream
 // (0xeae3d8/0xd8cdb8/0xf2ecdf) read as "concrete box" under the bare
 // AmbientLight; bumping wall warmth + adding amber wood floor + a slightly
 // warmer ceiling gets the right "afternoon sunlight in a school cafe" vibe

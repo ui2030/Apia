@@ -35,7 +35,7 @@ Apia/
 │
 │   └── assets/
 │       ├── characters/
-│       │   ├── aru/
+│       │   ├── <character>/
 │       │   │   ├── model.vrm
 │       │   │   ├── profile.json
 │       │   │   ├── interpretation_presets.json
@@ -52,7 +52,7 @@ Apia/
 │
 ├── index.html
 ├── settings.html
-├── vite.config.js
+├── vite.config.mjs
 ├── package.json
 ```
 

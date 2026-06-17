@@ -1299,7 +1299,7 @@ function setupVRMRestPose(vrm) {
 // updateMMDBody (186 lines) are gone — every humanoid bone is now
 // resolved through a registry, every per-frame target is computed in
 // computePoseTargets, and every write goes through `quaternion = restQuat
-// * eulerDelta` so model-specific rest posture (e.g. Kisaki's head tilt
+// * eulerDelta` so model-specific rest posture (e.g. a model's head tilt
 // at restEuler [0.028, -0.071, 0.002]) survives.
 //
 // `state === 'walk'` still wants a stride-driven leg gait. We layer that

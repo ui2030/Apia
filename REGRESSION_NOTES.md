@@ -279,7 +279,7 @@
 
 ### 자세 보정량은 rest *회전*만 보지 말고 본 *기하*도 측정해서 정한다
 - Symptom: mermay 모션을 삭제해도 휴식 자세에서 손이 등 뒤로 들어감.
-- Cause: Blender(mmd_tools)제 PMX(Kisaki)는 A자세를 rest 회전이 아닌 본 배치에만 굽는다(전 본 restQuat=identity). poseRig 지문이 rest 회전 0 → "T자세"로 오판하고 Layer 6이 고정 -1.0rad(57°)을 더 내림 → 기하 42° + 57° = 99°, 수직을 지나 손이 몸 뒤로.
+- Cause: Blender(mmd_tools)제 PMX(테스트 모델)는 A자세를 rest 회전이 아닌 본 배치에만 굽는다(전 본 restQuat=identity). poseRig 지문이 rest 회전 0 → "T자세"로 오판하고 Layer 6이 고정 -1.0rad(57°)을 더 내림 → 기하 42° + 57° = 99°, 수직을 지나 손이 몸 뒤로.
 - Prevention:
   1. 팔 처짐 보정은 팔꿈치 본 오프셋으로 실측한 기하 각(`fingerprint.armGeometryAngle`)의 부족분만 더한다 (`armHangCorrection`).
   2. 모델별 자세 이상은 추측하지 말고 `tests/gui/dump-arm-rest.mjs`(rest 지문)·`dump-model-info.mjs`(본/모프/강체 목록)로 실측부터.

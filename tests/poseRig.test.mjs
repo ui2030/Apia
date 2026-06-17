@@ -279,7 +279,7 @@ describe('poseRig — toes (autonomous toe articulation)', () => {
 describe('poseRig — restQuat preservation (the head-tilt bug)', () => {
   it('applyPose with zero spring state preserves the bone rest quaternion exactly', () => {
     const mesh = fakeMmdMesh([
-      ['頭', [0.028, -0.071, 0.002]], // Kisaki's actual head rest
+      ['頭', [0.028, -0.071, 0.002]], // the test model's actual head rest
     ])
     const registry = buildBoneRegistry(mesh, 'mmd')
     const spring = createPoseSpring(registry)

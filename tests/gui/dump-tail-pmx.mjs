@@ -4,7 +4,8 @@
 import { readFileSync } from 'node:fs'
 import { MMDParser } from '../../node_modules/three/examples/jsm/libs/mmdparser.module.js'
 
-const PMX = 'src/assets/characters/14e73803_kisaki_1_0/model/extracted/Kisaki_1.0/Kisaki_1.0.pmx'
+// Local-only debug tool — point APIA_PMX at your model file.
+const PMX = process.env.APIA_PMX || 'src/assets/model/model.pmx'
 const buf = readFileSync(PMX)
 const parser = new MMDParser.Parser()
 const pmx = parser.parsePmx(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), true)

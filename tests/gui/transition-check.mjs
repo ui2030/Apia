@@ -45,7 +45,7 @@ const skirtDrop = () => mainWindow.evaluate(() => {
   for (const b of mesh.skeleton.bones) {
     const y = b.getWorldPosition(new V()).y
     if (b.name === '下半身') hipY = y
-    // kisaki 모델은 치마 자락 본이 前すそ_*/後すそ_* (すそ=옷자락)
+    // 테스트 모델은 치마 자락 본이 前すそ_*/後すそ_* (すそ=옷자락)
     if (/すそ|スカート|skirt/i.test(b.name)) minY = Math.min(minY, y)
   }
   if (hipY === null || !Number.isFinite(minY)) return null

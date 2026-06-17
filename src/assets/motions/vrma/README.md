@@ -55,4 +55,4 @@ Clips that are missing from this folder are silently ignored — the procedural
 motion layer (main.js `updateVRMBody`) keeps the character moving either way,
 and Phase G adds spine weight-shift / shoulder counter-yaw / head lag during
 walk + a breathing bend during sit so even the no-clip path looks closer to
-the BlueArchive cafe vibe than the raw T-pose era.
+the warm cafe vibe than the raw T-pose era.
