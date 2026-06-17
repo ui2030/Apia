@@ -309,9 +309,14 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
     const resolvedUseWeb = typeof useWeb === 'boolean'
       ? useWeb
       : settings.useWebDefault === true
+    // Local LLM (Qwen on the user's PC) can spend ~47s just loading the model on
+    // the first call, before any generation — a flat 30s timed out the very first
+    // chat ("Request timed out after 30000ms"). Give local a generous budget;
+    // cloud/auto stays tight since a hung request there should fail fast.
+    const chatTimeout = settings.aiMode === 'local' ? 180000 : 30000
     return await requestBackendJson('/chat', {
       method: 'POST',
-      timeout: 30000,
+      timeout: chatTimeout,
       body: {
       message,
       history,
