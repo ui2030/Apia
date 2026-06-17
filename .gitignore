@@ -36,3 +36,12 @@ src/assets/motions/vmd/**/*.VMD
 !src/assets/motions/vmd/idle/relaxed.vmd
 !src/assets/motions/vmd/idle/ponder.vmd
 !src/assets/motions/vmd/idle/hands_back.vmd
+
+# Local-only / generated artifacts that must never reach the public repo.
+backend/.venv/
+backend/apia.db
+checkpoints/
+backend/checkpoints/
+mixamo-fbx/
+# Debug render screenshots named after a character IP — keep out of a public repo.
+kisaki/

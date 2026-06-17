@@ -14,6 +14,7 @@ import {
   computePoseTargets,
   stepPoseSpring,
   applyPose,
+  rolesForBones,
 } from '../src/poseRig.js'
 
 function makeBone(name, eulerXYZ = [0, 0, 0], position = null) {
@@ -36,7 +37,7 @@ function fakeMmdMesh(boneSpecs) {
 }
 
 describe('poseRig fingerprint — T-pose vs A-pose', () => {
-  it('A-pose model (Kisaki-style, arm rest z = ±1.15) → no abduction correction', () => {
+  it('A-pose model (arm rest z = ±1.15) → no abduction correction', () => {
     const mesh = fakeMmdMesh([
       ['上半身', [0, 0, 0]],
       ['上半身2', [0, 0, 0]],
@@ -96,7 +97,7 @@ describe('poseRig fingerprint — T-pose vs A-pose', () => {
   })
 
   it('geometry-A-pose model (rest rotation 0, elbow offset 42°) → correction is the shortfall to ~85°, not a fixed 1.0', () => {
-    // Kisaki_1.0 (Blender/mmd_tools build): every rest quaternion is
+    // Test PMX (Blender/mmd_tools build): every rest quaternion is
     // identity but the elbow bone offset (0.769, -0.698) bakes a 42° hang
     // into the geometry. The old fixed -1.0 layer pushed the arms to
     // 42°+57° = 99° — past vertical, hands behind the back at rest.
@@ -143,6 +144,135 @@ describe('poseRig fingerprint — T-pose vs A-pose', () => {
     // needed. Fixtures WITHOUT position data keep the legacy 1.0 — that
     // split (null vs 0) is deliberate and locked in here.
     expect(registry.fingerprint.armHangCorrection).toBeCloseTo(1.48, 2)
+  })
+})
+
+describe('poseRig — fingers (autonomous hand shape)', () => {
+  // 표준 PMX 손가락 본 (양손, 5손가락 × 3마디). 엄지는 親指０/１/２.
+  const FINGER_BONES = []
+  for (const side of ['左', '右'])
+    for (const [jp, segs] of [['親指', ['０', '１', '２']], ['人指', ['１', '２', '３']],
+      ['中指', ['１', '２', '３']], ['薬指', ['１', '２', '３']], ['小指', ['１', '２', '３']]])
+      for (const s of segs) FINGER_BONES.push([`${side}${jp}${s}`, [0, 0, 0]])
+
+  function fingerMesh() {
+    return fakeMmdMesh([
+      ['上半身', [0, 0, 0]], ['左腕', [0, 0, 0]], ['右腕', [0, 0, 0]],
+      ...FINGER_BONES,
+    ])
+  }
+
+  it('resolves all 30 PMX finger bones into finger roles', () => {
+    const registry = buildBoneRegistry(fingerMesh(), 'mmd')
+    const fingerRoles = []
+    for (const hand of ['l', 'r'])
+      for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky'])
+        for (const seg of [1, 2, 3]) fingerRoles.push(`${hand}${f}${seg}`)
+    for (const role of fingerRoles) expect(registry.roles.has(role)).toBe(true)
+    // 엄지 1마디는 親指０(중수골)에 매핑돼야 한다.
+    expect(registry.roles.get('lThumb1').bone.name).toBe('左親指０')
+    expect(registry.roles.get('rPinky3').bone.name).toBe('右小指３')
+  })
+
+  it('omitted handShape defaults to open (no curl) — relaxed 비틀림 버그 회피', () => {
+    const registry = buildBoneRegistry(fingerMesh(), 'mmd')
+    const { layers } = computePoseTargets({
+      registry, saccadeState: createSaccadeState(), t: 0,
+      look: { x: 0, y: 0 }, state: 'idle', motion: { intensity: 1 },
+      personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.5 },
+      // handShape omitted → 기본 open → 손가락 굽힘 레이어 비어 있어야
+    })
+    expect(layers.handShape.get('lIndex2')).toBeFalsy()
+    expect(layers.handShape.get('lPinky2')).toBeFalsy()
+  })
+
+  it("explicit handShape 'relaxed' still curls; pinky curls more than index", () => {
+    const registry = buildBoneRegistry(fingerMesh(), 'mmd')
+    const { layers } = computePoseTargets({
+      registry, saccadeState: createSaccadeState(), t: 0,
+      look: { x: 0, y: 0 }, state: 'idle', motion: { intensity: 1 },
+      personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.5 },
+      handShape: 'relaxed',
+    })
+    const idx = layers.handShape.get('lIndex2')
+    const pinky = layers.handShape.get('lPinky2')
+    expect(idx).toBeTruthy()
+    expect(Math.abs(idx.z)).toBeGreaterThan(0.05)
+    expect(idx.z).toBeLessThan(0) // FINGER_CURL_SIGN.l = -1
+    expect(Math.abs(pinky.z)).toBeGreaterThan(Math.abs(idx.z))
+  })
+
+  it("handShape 'open' produces no curl; 'fist' curls strongly", () => {
+    const registry = buildBoneRegistry(fingerMesh(), 'mmd')
+    const base = {
+      registry, saccadeState: createSaccadeState(), t: 0,
+      look: { x: 0, y: 0 }, state: 'idle', motion: { intensity: 1 },
+      personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.5 },
+    }
+    const open = computePoseTargets({ ...base, handShape: 'open' })
+    expect(open.layers.handShape.get('lIndex2')).toBeFalsy() // 0 → not added
+    const fist = computePoseTargets({ ...base, handShape: 'fist' })
+    expect(Math.abs(fist.layers.handShape.get('lIndex2').z)).toBeGreaterThan(1.0)
+  })
+
+  it('clip owning a finger track masks that finger role (no fight with clip)', () => {
+    const registry = buildBoneRegistry(fingerMesh(), 'mmd')
+    // 클립이 左人指２를 키프레임한다고 가정 → rolesForBones가 lIndex2로 해석.
+    const roles = rolesForBones(registry, ['左人指２', '頭'])
+    expect(roles.has('lIndex2')).toBe(true)
+    const spring = createPoseSpring(registry)
+    const { summed } = computePoseTargets({
+      registry, saccadeState: createSaccadeState(), t: 0,
+      look: { x: 0, y: 0 }, state: 'idle', motion: { intensity: 1 },
+      personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.5 },
+      clipMask: { roles },
+    })
+    stepPoseSpring(spring, summed, 0.016, { roles })
+    // 마스킹된 손가락 본은 절차적으로 *덮어쓰지 않는다*. 클립 자세를 보존하려
+    // 일부러 다른 값을 넣어두고, applyPose가 건드리지 않는지 확인.
+    const bone = registry.roles.get('lIndex2').bone
+    bone.quaternion.set(0.1, 0.2, 0.3, 0.9)
+    applyPose(registry, spring, { roles })
+    expect(bone.quaternion.x).toBeCloseTo(0.1, 5)
+    expect(bone.quaternion.y).toBeCloseTo(0.2, 5)
+  })
+})
+
+describe('poseRig — toes (autonomous toe articulation)', () => {
+  function toeMesh() {
+    return fakeMmdMesh([
+      ['左足', [0, 0, 0]], ['左足首', [0, 0, 0]], ['左足先EX', [0, 0, 0]],
+      ['右足', [0, 0, 0]], ['右足首', [0, 0, 0]], ['右足先EX', [0, 0, 0]],
+    ])
+  }
+  const base = (extra) => ({
+    saccadeState: createSaccadeState(), t: 1.0,
+    look: { x: 0, y: 0 }, motion: { intensity: 1 },
+    personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.5 },
+    ...extra,
+  })
+
+  it('resolves 足先EX into lToe/rToe (not the IK bone)', () => {
+    const registry = buildBoneRegistry(toeMesh(), 'mmd')
+    expect(registry.roles.get('lToe').bone.name).toBe('左足先EX')
+    expect(registry.roles.get('rToe').bone.name).toBe('右足先EX')
+  })
+
+  it('idle adds a subtle toe layer; left/right are mirror-signed', () => {
+    const registry = buildBoneRegistry(toeMesh(), 'mmd')
+    const { layers } = computePoseTargets(base({ registry, state: 'idle' }))
+    const l = layers.toe.get('lToe')
+    const r = layers.toe.get('rToe')
+    expect(l).toBeTruthy()
+    expect(Math.abs(l.z)).toBeGreaterThan(0)
+    expect(Math.abs(l.z)).toBeLessThan(0.05) // 미세함(~1.4°)
+    expect(Math.sign(l.z)).toBe(-Math.sign(r.z)) // TOE_CURL_SIGN l:+1 r:-1
+  })
+
+  it('walk state skips the procedural toe layer (gait overlay owns toe-off)', () => {
+    const registry = buildBoneRegistry(toeMesh(), 'mmd')
+    const { layers } = computePoseTargets(base({ registry, state: 'walk' }))
+    expect(layers.toe.get('lToe')).toBeFalsy()
   })
 })
 
