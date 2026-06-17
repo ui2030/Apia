@@ -11,12 +11,22 @@ const requiredEntries = [
   'dist',
   'electron',
   'backend-dist',
+  // App icon — electron-builder.yml references build/icon.ico for win.icon and
+  // the NSIS installer/uninstaller icons. The builder resolves those paths
+  // against THIS staging dir, so build/ must be staged too (like backend-dist),
+  // or NSIS hard-fails with "cannot find specified resource build/icon.ico".
+  'build',
   // win-wallpaper.exe is shipped via electron-builder.yml extraResources, but
   // that `from:` path resolves against THIS staging dir — so the file has to be
   // staged here too, like backend-dist. Without it the wallpaper helper is
   // absent from the packaged app and the Win11 behind-icons mode silently
   // falls back to overlay.
   'scripts/win-wallpaper.exe',
+  // afterPack hook + the standalone rcedit it shells to, used to stamp the app
+  // icon onto Apia.exe (electron-builder.yml afterPack). Both resolve relative
+  // to this staging dir, so both must be staged.
+  'scripts/afterPack.cjs',
+  'scripts/rcedit.exe',
   'node_modules',
   'package.json',
   'package-lock.json',

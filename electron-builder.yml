@@ -1,6 +1,11 @@
 appId: com.apia.desktop
 productName: Apia
+copyright: Copyright © 2026 ui2030
 asar: true
+
+# Stamp the app icon + version metadata onto Apia.exe (see the hook for why this
+# can't use electron-builder's built-in signAndEditExecutable on this machine).
+afterPack: scripts/afterPack.cjs
 
 # Step 4 — electron-as-wallpaper ships a Win32 native .node binding
 # (Progman → WorkerW + SetParent). Native modules can't be required from
@@ -32,9 +37,23 @@ win:
   target:
     - nsis
   executableName: Apia
+  icon: build/icon.ico
+  # Kept false on purpose: true makes electron-builder fetch the winCodeSign
+  # package, whose macOS .dylib symlinks fail to extract on this box (no symlink
+  # privilege) and break the build. Consequence: win.icon above is NOT stamped
+  # onto Apia.exe — that is done by scripts/afterPack.cjs via a repo-vendored
+  # standalone rcedit. win.icon still serves as the app's default icon resource
+  # (e.g. the Add/Remove Programs DisplayIcon); the installer-UI icons are set
+  # explicitly under nsis: below.
   signAndEditExecutable: false
 
 nsis:
   artifactName: '${productName}-Setup-${version}.${ext}'
   oneClick: false
   allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Apia

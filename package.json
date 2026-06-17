@@ -16,7 +16,8 @@
     "verify:release": "node scripts/verify-release.mjs",
     "smoke:release": "node scripts/smoke-release.mjs",
     "dist:dir": "npm run build && npm run build:backend && npm run verify:release && node scripts/run-release-builder.mjs --dir",
-    "dist:win": "npm run build && npm run build:backend && npm run verify:release && node scripts/run-release-builder.mjs --win nsis"
+    "dist:win": "npm run build && npm run build:backend && npm run verify:release && node scripts/run-release-builder.mjs --win nsis && node scripts/verify-built-exe.mjs",
+    "dist:win:nobackend": "npm run build && npm run verify:release && node scripts/run-release-builder.mjs --win nsis && node scripts/verify-built-exe.mjs"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.1",
