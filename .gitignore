@@ -45,3 +45,17 @@ backend/checkpoints/
 mixamo-fbx/
 # Debug render screenshots named after a character IP — keep out of a public repo.
 kisaki/
+
+# Third-party character model assets (copyright — redistribution not permitted).
+# Kept on local disk so the app runs, but never tracked in the public repo. The
+# engine is model-agnostic; per-user models live locally only.
+src/assets/Aru/
+src/assets/Hina_Swimsuit/
+src/assets/Kisaki/
+src/assets/Kisaki_Uniform/
+src/assets/Mari_Idol/
+src/assets/Mika/
+src/assets/Vanya/
+src/assets/nozomi-hikari/
+src/assets/characters/
+src/assets/character_registry.json
