@@ -33,8 +33,27 @@ let _timeline = null   // { duration, step, frames: [{open, vowel}] }
 let _t0Ms = 0
 const _weights = new Map() // morph/expr key → smoothed weight
 
-/** WAV ArrayBuffer → 비짐 타임라인. 실패 시 null (호출부가 폴백 결정). */
+/**
+ * 'RIFF'....'WAVE' 헤더인지 — decodeAudioData에 넘겨도 안전한(디코드 경로가
+ * 검증된) 포맷만 통과시키는 화이트리스트. edge-tts MP3를 renderer의
+ * decodeAudioData로 풀면 일부 Windows 환경에서 렌더러가 네이티브 크래시
+ * (0xC0000005 액세스 위반)로 죽는데, 네이티브 크래시는 try/catch로 못 잡는다.
+ * 그래서 "크래시 유발 호출을 아예 안 한다" — WAV가 아니면 디코드 자체를 건너뛴다.
+ */
+export function isWavBuffer(arrayBuffer) {
+  if (!(arrayBuffer instanceof ArrayBuffer) || arrayBuffer.byteLength < 12) return false
+  const h = new Uint8Array(arrayBuffer, 0, 12)
+  return (
+    h[0] === 0x52 && h[1] === 0x49 && h[2] === 0x46 && h[3] === 0x46 && // 'RIFF'
+    h[8] === 0x57 && h[9] === 0x41 && h[10] === 0x56 && h[11] === 0x45 // 'WAVE'
+  )
+}
+
+/** WAV ArrayBuffer → 비짐 타임라인. WAV가 아니거나 실패 시 null (호출부가
+ * 사인파 입뻐끔 폴백으로 동작 — 입은 여전히 음성에 맞춰 여닫힌다). */
 export async function analyzeWav(arrayBuffer) {
+  // MP3/미지 포맷은 디코드를 건너뛴다 — renderer를 죽이는 네이티브 크래시 회피.
+  if (!isWavBuffer(arrayBuffer)) return null
   try {
     // OfflineAudioContext — autoplay 정책/리소스 누수와 무관한 분석 전용.
     // decodeAudioData가 버퍼를 detach하므로 호출부는 복제본을 줘야 한다.

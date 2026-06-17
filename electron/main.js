@@ -811,9 +811,57 @@ app.whenReady().then(() => {
   screen.on('display-removed', rewallpaperOnDisplayChange)
 })
 
+// A dead renderer (native crash / OOM / killed) leaves its window blank and
+// the in-window chat toggle can't revive it — the app looks bricked until a
+// manual restart. Reload the renderer to bring the window back. Guard against
+// crash-reload storms (a page that crashes deterministically) with a per-
+// webContents budget so we don't spin forever.
+const RECOVERABLE_GONE = new Set(['crashed', 'killed', 'oom'])
+const crashReloads = new Map() // contents.id → [reload timestamps within the window]
+const CRASH_WINDOW_MS = 60000
+const CRASH_MAX_RELOADS = 3
+
 app.on('web-contents-created', (event, contents) => {
+  // Drop the crash-budget entry when the window goes away, so the Map doesn't
+  // accumulate dead ids over a long (8h) session.
+  contents.once('destroyed', () => crashReloads.delete(contents.id))
+
   contents.on('render-process-gone', (goneEvent, details) => {
     logError('[WEB_CONTENTS_RENDER_GONE]', { id: contents.id, details })
+
+    if (quittingApia) return // app is shutting down — let it die
+    if (!RECOVERABLE_GONE.has(details?.reason)) return // clean-exit etc. — not a crash
+    if (contents.isDestroyed()) return
+    const win = BrowserWindow.fromWebContents(contents)
+    if (!win || win.isDestroyed()) return
+
+    const now = Date.now()
+    const recent = (crashReloads.get(contents.id) || []).filter((t) => now - t < CRASH_WINDOW_MS)
+    if (recent.length >= CRASH_MAX_RELOADS) {
+      logError('[WEB_CONTENTS_RECOVER_GIVEUP]', {
+        id: contents.id, reason: details?.reason, reloads: recent.length
+      })
+      return
+    }
+    recent.push(now)
+    crashReloads.set(contents.id, recent)
+
+    const wasVisible = win.isVisible()
+    logWarn('[WEB_CONTENTS_RECOVER_RELOAD]', {
+      id: contents.id, reason: details?.reason, attempt: recent.length
+    })
+    try {
+      contents.reload()
+      // Restore visibility only if the crash actually hid the window — avoids
+      // needlessly re-show()ing the wallpaper-attached main window.
+      if (wasVisible) {
+        contents.once('did-finish-load', () => {
+          if (!win.isDestroyed() && !win.isVisible()) win.show()
+        })
+      }
+    } catch (error) {
+      logError('[WEB_CONTENTS_RECOVER_FAIL]', error)
+    }
   })
 })
 
