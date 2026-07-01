@@ -40,6 +40,35 @@ const validEntry = (id) => ({
   basePath: `C:/x/${id}`
 })
 
+describe('resolveEntryPaths — 상대경로 해석(이식성) + 절대경로 하위호환', () => {
+  it('상대경로는 charactersRoot 기준 절대로, 절대경로는 그대로 통과', () => {
+    const root = registryService.getCharactersRoot()
+    const out = registryService.resolveEntryPaths({
+      id: 'x',
+      basePath: 'x',
+      modelManifestPath: 'x/model/model_manifest.json',
+      profileGeneratedPath: 'C:/abs/kept.json',
+      thumbnail: null,
+    })
+    expect(out.basePath).toBe(join(root, 'x'))
+    expect(out.modelManifestPath).toBe(join(root, 'x', 'model', 'model_manifest.json'))
+    expect(out.profileGeneratedPath).toBe('C:/abs/kept.json') // 절대 → 유지(하위호환)
+    expect(out.thumbnail).toBe(null)
+  })
+
+  it('getCharacterById가 상대경로 엔트리를 절대로 해석해 반환', async () => {
+    const root = registryService.getCharactersRoot()
+    await writeFile(registryPath(), JSON.stringify({
+      version: 2,
+      activeCharacterId: 'r1',
+      characters: [{ id: 'r1', displayName: 'R', modelType: 'pmx', basePath: 'r1', modelManifestPath: 'r1/model/model_manifest.json' }],
+    }), 'utf-8')
+    const c = registryService.getCharacterById('r1')
+    expect(c.basePath).toBe(join(root, 'r1'))
+    expect(c.modelManifestPath).toBe(join(root, 'r1', 'model', 'model_manifest.json'))
+  })
+})
+
 describe('readRegistry aggregate consistency', () => {
   it('returns the file as-is when every entry is valid and activeCharacterId points at one', async () => {
     await writeFile(registryPath(), JSON.stringify({

@@ -38,6 +38,22 @@ function atomicWriteJson(targetPath, data) {
   fs.renameSync(tmpPath, targetPath)
 }
 
+// 저장은 상대경로 허용(이식성); 읽는(소비) 순간 charactersRoot 기준 절대경로로
+// 해석한다. 이미 절대경로면 그대로 통과 — 기존 절대경로 엔트리가 안 깨진다
+// (하위호환). readRegistry는 as-stored 유지(setActive/upsert 왕복 시 상대 보존),
+// 소비용 getter(listCharacters/getCharacterById)에서만 해석한다.
+const ENTRY_PATH_FIELDS = ['basePath', 'modelManifestPath', 'profileGeneratedPath', 'profileUserPath', 'interpretationsPath', 'thumbnail']
+function resolveEntryPaths(entry) {
+  if (!entry) return entry
+  const root = getCharactersRoot()
+  const out = { ...entry }
+  for (const f of ENTRY_PATH_FIELDS) {
+    const p = out[f]
+    if (typeof p === 'string' && p && !path.isAbsolute(p)) out[f] = path.join(root, p)
+  }
+  return out
+}
+
 function ensureRegistry() {
   const root = getCharactersRoot()
   const registryPath = getRegistryPath()
@@ -124,12 +140,13 @@ function writeRegistry(data) {
 
 function listCharacters() {
   const registry = readRegistry()
-  return registry.characters || []
+  return (registry.characters || []).map(resolveEntryPaths)
 }
 
 function getCharacterById(characterId) {
   const registry = readRegistry()
-  return registry.characters.find((character) => character.id === characterId) || null
+  const entry = registry.characters.find((character) => character.id === characterId)
+  return entry ? resolveEntryPaths(entry) : null
 }
 
 function setActiveCharacter(characterId) {
@@ -255,15 +272,16 @@ function deleteCharacter(characterId) {
 
   writeRegistry(registry)
 
-  if (character.basePath && fs.existsSync(character.basePath)) {
-    if (isSafeCharacterPath(character.basePath)) {
+  const basePath = resolveEntryPaths(character).basePath
+  if (basePath && fs.existsSync(basePath)) {
+    if (isSafeCharacterPath(basePath)) {
       try {
-        fs.rmSync(character.basePath, { recursive: true, force: true })
+        fs.rmSync(basePath, { recursive: true, force: true })
       } catch (error) {
-        console.warn('[Registry] delete failed:', character.basePath, error)
+        console.warn('[Registry] delete failed:', basePath, error)
       }
     } else {
-      console.warn('[Registry] skipped deleting unexpected path:', character.basePath)
+      console.warn('[Registry] skipped deleting unexpected path:', basePath)
     }
   }
 
@@ -278,6 +296,7 @@ module.exports = {
   writeRegistry,
   listCharacters,
   getCharacterById,
+  resolveEntryPaths,
   setActiveCharacter,
   setCharacterPersonalityOverrides,
   getCharacterPersonalityOverrides,

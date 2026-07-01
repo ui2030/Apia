@@ -317,7 +317,16 @@ export async function loadOptionalJson(url, label = 'json') {
 
 export async function loadManifestByPath(manifestPath) {
   try {
-    return await fetchJsonSafe(manifestPath)
+    const manifest = await fetchJsonSafe(manifestPath)
+    if (manifest && manifest.entryRelPath) {
+      // 이식성: 저장된 절대 entryFileUrl 대신 매니페스트 실제 위치 기준 상대경로로
+      // 재해석 → 다른 PC/설치본에서도 로드. entryRelPath 없는 구 매니페스트는
+      // 저장된 절대 entryFileUrl 그대로(하위호환).
+      const dir = String(manifestPath).replace(/\\/g, '/').replace(/\/[^/]*$/, '')
+      const rel = String(manifest.entryRelPath).replace(/\\/g, '/').replace(/^\.?\//, '')
+      manifest.entryFileUrl = normalizeUrlToFetchable(`${dir}/${rel}`)
+    }
+    return manifest
   } catch (err) {
     console.warn('[Manifest 직접 로드 실패]', manifestPath, err)
     return null

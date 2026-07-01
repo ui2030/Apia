@@ -236,6 +236,10 @@ async function createCharacterFiles({
     version: 1,
     modelType,
     entryFile: path.basename(copiedEntry),
+    // 이식성: 매니페스트 위치(characterDir/model) 기준 상대경로. loadManifestByPath가
+    // 이걸로 entryFileUrl을 재해석해 다른 PC/설치본에서도 로드된다. 절대 필드는
+    // 하위호환용 유지(entryRelPath 없는 구 매니페스트는 절대 URL로 폴백).
+    entryRelPath: path.relative(path.join(characterDir, 'model'), copiedEntry).replace(/\\/g, '/'),
     entryAbsolutePath: copiedEntry,
     entryFileUrl: toFileUrl(copiedEntry),
     rootDir: extractedDir,
@@ -443,6 +447,11 @@ async function importFromZip({ zipPath, displayName, customName = '', summary = 
       scannedFiles
     })
 
+    // 이식성: 레지스트리엔 charactersRoot 기준 상대경로로 저장(다른 PC/설치본에서도
+    // 로드). getCharacterById가 읽을 때 절대로 해석. root 밖이면 relative가 ..나
+    // 절대를 줄 수 있어 그 경우 characterDir(절대) 그대로 저장.
+    const rr = path.relative(registryService.getCharactersRoot(), characterDir)
+    const relBase = (!rr || rr.startsWith('..') || path.isAbsolute(rr)) ? characterDir : rr
     const entry = registryService.upsertCharacter({
       id: characterId,
       displayName: inferredName,
@@ -451,11 +460,11 @@ async function importFromZip({ zipPath, displayName, customName = '', summary = 
       originalDescription: description,
       modelType: entryModel.ext,
       importSource: prepared.importSource,
-      basePath: characterDir,
-      modelManifestPath: path.join(characterDir, 'model', 'model_manifest.json'),
-      profileGeneratedPath: path.join(characterDir, 'profile.generated.json'),
-      profileUserPath: path.join(characterDir, 'profile.user.json'),
-      interpretationsPath: path.join(characterDir, 'interpretation_presets.json'),
+      basePath: relBase,
+      modelManifestPath: path.join(relBase, 'model', 'model_manifest.json'),
+      profileGeneratedPath: path.join(relBase, 'profile.generated.json'),
+      profileUserPath: path.join(relBase, 'profile.user.json'),
+      interpretationsPath: path.join(relBase, 'interpretation_presets.json'),
       thumbnail: null,
       documents: copiedDocs.map((doc) => ({
         name: doc.name,
