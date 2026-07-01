@@ -1336,11 +1336,12 @@ const LEG_IK_OWNED_ROLES = [
 // 이동) 뒤** 호출(Codex MUST-FIX). FK rest↔IK는 weight slerp로 pop 방지.
 const GAIT_STANCE = 0.62      // 사이클 중 발이 땅에 붙어있는 비율
 const FOOT_LIFT_WORLD = 0.06  // 스윙 발 들어올림(월드)
+const ANKLE_ROLL = 0.15       // 발목 heel-toe 롤 최대 pitch(rad, ~9°)
 const _wlFwd = new Vector3(), _wlLat = new Vector3(), _wlRootPos = new Vector3()
 const _wlRootQ = new Quaternion(), _wlTarget = new Vector3(), _wlNext = new Vector3()
 const _wlFkHip = new Quaternion(), _wlFkKnee = new Quaternion(), _wlFkAnkle = new Quaternion()
 const _wlIkHip = new Quaternion(), _wlIkKnee = new Quaternion()
-const _wlParentWQ = new Quaternion(), _wlDesiredWQ = new Quaternion(), _wlAnkleLocal = new Quaternion()
+const _wlParentWQ = new Quaternion(), _wlDesiredWQ = new Quaternion(), _wlAnkleLocal = new Quaternion(), _wlPitchQ = new Quaternion()
 const _smoothstep = (s) => s * s * (3 - 2 * s)
 
 function _captureLegRest(model, registry, root) {
@@ -1444,9 +1445,18 @@ function applyWalkLegs(model, t, delta) {
     hip.quaternion.copy(_wlFkHip).slerp(_wlIkHip, w)
     knee.quaternion.copy(_wlFkKnee).slerp(_wlIkKnee, w)
     knee.updateWorldMatrix(true, false)
-    // 발바닥 평행: ankle 월드방향 = 루트월드 * (루트기준 rest 발방향), 부모 기준 로컬로.
+    // 발바닥 평행 + heel-toe 롤: 위상 u로 발목 pitch를 더해 뒤꿈치 착지→발끝
+    // 밀기(평발 미끄럼 제거). _ap: heel(u=0)=+1 → mid-stance=0 → toe-off(u=stance)=−1,
+    // 스윙은 −1→+1 복귀(사이클 경계 연속). _wlLat(오른쪽)축 +angle은 발끝을 아래로
+    // (right×fwd=down) 회전시키므로 부호 반전: heel=toe up(−), toe-off=toe down(+).
+    // 소각(≤~9°)에 w 가중이라 과회전/스냅 없음.
+    const _ap = u < GAIT_STANCE
+      ? (1 - 2 * (u / GAIT_STANCE))
+      : (-1 + 2 * ((u - GAIT_STANCE) / (1 - GAIT_STANCE)))
     ankle.parent.getWorldQuaternion(_wlParentWQ)
+    _wlPitchQ.setFromAxisAngle(_wlLat, -_ap * ANKLE_ROLL)
     _wlDesiredWQ.copy(_wlRootQ).multiply(flat)
+    _wlDesiredWQ.premultiply(_wlPitchQ)
     _wlAnkleLocal.copy(_wlParentWQ).invert().multiply(_wlDesiredWQ)
     ankle.quaternion.copy(_wlFkAnkle).slerp(_wlAnkleLocal, w)
     ankle.updateWorldMatrix(true, false)
