@@ -854,6 +854,12 @@ function fingerCurlDelta(fkey, hand, mag) {
   const v = mag * (FINGER_CURL_SIGN[fkey]?.[hand] ?? 0)
   return [axis === 'x' ? v : 0, axis === 'y' ? v : 0, axis === 'z' ? v : 0]
 }
+// per-hand handShape 해석 — handShape가 {l,r} 객체면 손별 프리셋 키, 문자열이면
+// 양손 공용, 없으면 'relaxed'. 소품을 든 손만 grip, 반대 손은 relaxed로 두는 데 씀.
+function resolveHandShapeKey(handShape, hand) {
+  const k = (handShape && typeof handShape === 'object') ? handShape[hand] : handShape
+  return k || 'relaxed'
+}
 
 // 발끝 plantarflexion(발끝이 바닥 쪽으로). 실측(tests/gui/toe-axis-check.mjs,
 // the reference model 足先EX): z축이 거의 순수 하향(lateral≈0.001), 왼발 z+ / 오른발 z-.
@@ -882,6 +888,16 @@ const HAND_SHAPES = {
   fist: {
     thumb: [0.25, 0.55, 0.60], index: [1.1, 1.3, 1.0],
     middle: [1.1, 1.3, 1.0], ring: [1.1, 1.3, 1.0], pinky: [1.1, 1.3, 1.0],
+  },
+  // 컵/잔을 쥔 손 — 손가락을 감아 원통을 감싼다. 엄지는 대립(y축).
+  holdCup: {
+    thumb: [0.40, 0.50, 0.40], index: [0.60, 0.90, 0.70],
+    middle: [0.65, 0.95, 0.75], ring: [0.70, 1.00, 0.80], pinky: [0.72, 1.00, 0.82],
+  },
+  // 책/판형을 받친 손 — 적당히 모아 받친다(덜 감김).
+  holdBook: {
+    thumb: [0.25, 0.30, 0.25], index: [0.35, 0.45, 0.40],
+    middle: [0.37, 0.47, 0.42], ring: [0.40, 0.50, 0.45], pinky: [0.42, 0.52, 0.47],
   },
 }
 
@@ -1041,10 +1057,12 @@ export function computePoseTargets({
   // 피하고, fidgetiness가 진폭을 키운다. handShape 레이어에 합산되므로 클립이
   // 손가락을 소유하면 정적 curl과 함께 마스킹된다. 걷기/앉기에선 생략.
   // 쉬는 손(relaxed)에만 적용 — open/point/fist 등 의도적 포즈는 crisp하게 둔다.
-  if (!isSit && state !== 'walk' && (handShape || 'relaxed') === 'relaxed') {
+  if (!isSit && state !== 'walk') {
     const fingerAmp = (0.006 + fidget * 0.006) * intensity
     for (const { role, hand, fkey, segIndex } of FINGER_ROLE_PARTS) {
       if (!registry.roles.has(role)) continue
+      // 이 손이 쉬는 손(relaxed)일 때만 미세 진동 — grip/의도 포즈는 crisp.
+      if (resolveHandShapeKey(handShape, hand) !== 'relaxed') continue
       const phase = (FINGER_PHASE[fkey] || 0) + segIndex * 0.35
       const mag = Math.sin(t * breathOmega * 0.85 + phase) * fingerAmp
       const [dx, dy, dz] = fingerCurlDelta(fkey, hand, mag)
@@ -1160,9 +1178,9 @@ export function computePoseTargets({
   // relaxed 프리셋은 엄지 진폭을 작게 잡아 허용 범위. 본별 굽힘축 분리(엄지
   // 포함)와 point/fist 등 강한 굽힘 프리셋의 정확도는 P단계 2차(후속).
   // 클립이 손가락을 소유하면 clipMask로 마스킹돼 클립 트랙과 안 싸운다.
-  const shape = HAND_SHAPES[handShape] || HAND_SHAPES.relaxed
   for (const { role, hand, fkey, segIndex } of FINGER_ROLE_PARTS) {
     if (!registry.roles.has(role)) continue
+    const shape = HAND_SHAPES[resolveHandShapeKey(handShape, hand)] || HAND_SHAPES.relaxed
     const mag = shape[fkey]?.[segIndex]
     if (!mag) continue
     const [dx, dy, dz] = fingerCurlDelta(fkey, hand, mag)

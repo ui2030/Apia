@@ -215,6 +215,21 @@ describe('poseRig — fingers (autonomous hand shape)', () => {
     expect(Math.abs(index.z)).toBeGreaterThan(Math.abs(index.y)) // 검지 = z
   })
 
+  it('per-hand handShape — 든 손만 grip, 반대 손은 relaxed', () => {
+    const registry = buildBoneRegistry(fingerMesh(), 'mmd')
+    const { layers } = computePoseTargets({
+      registry, saccadeState: createSaccadeState(), t: 0,
+      look: { x: 0, y: 0 }, state: 'sit', motion: { intensity: 1 }, // sit → settle 배제
+      personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.5 },
+      handShape: { l: 'relaxed', r: 'holdCup' },
+    })
+    const rIndex = Math.abs(layers.handShape.get('rIndex2').z) // holdCup: 0.90
+    const lIndex = Math.abs(layers.handShape.get('lIndex2').z) // relaxed: 0.20
+    expect(rIndex).toBeGreaterThan(0.5)
+    expect(lIndex).toBeLessThan(0.35)
+    expect(rIndex).toBeGreaterThan(lIndex)
+  })
+
   it("explicit handShape 'relaxed' still curls; pinky curls more than index", () => {
     const registry = buildBoneRegistry(fingerMesh(), 'mmd')
     const { layers } = computePoseTargets({

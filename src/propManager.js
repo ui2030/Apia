@@ -110,6 +110,20 @@ export function createPropManager({ scene, getCurrentModel } = {}) {
     return model?.poseRig?.registry?.roles?.get?.(role)?.bone || null
   }
 
+  // 소품 종류별 손 grip 프리셋(poseRig HAND_SHAPES). 든 손만 감고 반대 손은 relaxed.
+  const GRIP_PRESET = { cup: 'holdCup', glass: 'holdCup', book: 'holdBook' }
+  function applyGrip(kind, hand) {
+    const pr = getCurrentModel?.()?.poseRig
+    if (!pr) return
+    const key = GRIP_PRESET[kind] || 'holdCup'
+    const h = hand === 'left' ? 'l' : 'r'
+    pr.handShape = { l: h === 'l' ? key : 'relaxed', r: h === 'r' ? key : 'relaxed' }
+  }
+  function clearGrip() {
+    const pr = getCurrentModel?.()?.poseRig
+    if (pr) pr.handShape = null // → 기본 relaxed(양손)
+  }
+
   function attach({ kind, hand = 'right' } = {}) {
     const mesh = meshFor(kind)
     if (!mesh) return false
@@ -118,11 +132,13 @@ export function createPropManager({ scene, getCurrentModel } = {}) {
     held = { kind, hand, mesh }
     if (!mesh.parent) scene?.add?.(mesh)
     mesh.visible = false // 첫 sync 전 깜빡임 방지(본 위치 잡힌 뒤 보이기)
+    applyGrip(kind, hand) // 든 손 손가락을 소품에 맞춰 감기
     return true
   }
 
   function detach() {
     reaching = false
+    clearGrip() // 손 grip 원복(→ 기본 relaxed)
     if (!held) return
     const { mesh } = held
     mesh.visible = false
