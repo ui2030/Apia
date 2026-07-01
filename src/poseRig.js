@@ -838,10 +838,22 @@ function addImpulseLayer(state, t, add) {
 // 왼손은 z 음수, 오른손은 z 양수가 flexion(손바닥 쪽). 측정 스크립트:
 // tests/gui/finger-axis-check.mjs. 엄지는 굽힘면이 달라 진폭을 작게 잡았다
 // (엄지 전용 축 분리는 후속 폴리시 — relaxed에선 오차가 ~7° 이내).
-const FINGER_CURL_AXIS = 'z'              // 'x'|'y'|'z' — 굽힘이 실릴 오일러 축
-const FINGER_CURL_SIGN = { l: -1, r: 1 }  // 좌우 손이 손바닥 쪽으로 감기는 부호
+// 손가락별 굽힘 축/부호. 실측(tests/gui finger-axis, 양손 5지 프로빙): 검지·중지·
+// 약지·새끼는 z가 최대 굽힘축, 엄지만 y(대립). 엄지에 공용 z를 쓰면 옆으로
+// 비틀리던 문제(이전 스칼라 'z')를 손가락별 축으로 바로잡는다.
+const FINGER_CURL_AXIS = { thumb: 'y', index: 'z', middle: 'z', ring: 'z', pinky: 'z' }
+const FINGER_CURL_SIGN = {
+  thumb: { l: 1, r: -1 },
+  index: { l: -1, r: 1 }, middle: { l: -1, r: 1 }, ring: { l: -1, r: 1 }, pinky: { l: -1, r: 1 },
+}
 // finger settle 위상 오프셋 — 손가락마다 미세 진동을 어긋내 동시 움직임 방지.
 const FINGER_PHASE = { thumb: 0.0, index: 0.9, middle: 1.7, ring: 2.6, pinky: 3.4 }
+// 굽힘 크기(mag) → 손가락별 축/부호에 실은 {x,y,z} 오일러 델타.
+function fingerCurlDelta(fkey, hand, mag) {
+  const axis = FINGER_CURL_AXIS[fkey] || 'z'
+  const v = mag * (FINGER_CURL_SIGN[fkey]?.[hand] ?? 0)
+  return [axis === 'x' ? v : 0, axis === 'y' ? v : 0, axis === 'z' ? v : 0]
+}
 
 // 발끝 plantarflexion(발끝이 바닥 쪽으로). 실측(tests/gui/toe-axis-check.mjs,
 // the reference model 足先EX): z축이 거의 순수 하향(lateral≈0.001), 왼발 z+ / 오른발 z-.
@@ -1034,11 +1046,9 @@ export function computePoseTargets({
     for (const { role, hand, fkey, segIndex } of FINGER_ROLE_PARTS) {
       if (!registry.roles.has(role)) continue
       const phase = (FINGER_PHASE[fkey] || 0) + segIndex * 0.35
-      const v = Math.sin(t * breathOmega * 0.85 + phase) * fingerAmp * (FINGER_CURL_SIGN[hand] || 1)
-      add('handShape', role,
-        FINGER_CURL_AXIS === 'x' ? v : 0,
-        FINGER_CURL_AXIS === 'y' ? v : 0,
-        FINGER_CURL_AXIS === 'z' ? v : 0)
+      const mag = Math.sin(t * breathOmega * 0.85 + phase) * fingerAmp
+      const [dx, dy, dz] = fingerCurlDelta(fkey, hand, mag)
+      add('handShape', role, dx, dy, dz)
     }
   }
 
@@ -1155,13 +1165,8 @@ export function computePoseTargets({
     if (!registry.roles.has(role)) continue
     const mag = shape[fkey]?.[segIndex]
     if (!mag) continue
-    const curl = mag * (FINGER_CURL_SIGN[hand] || 1)
-    add(
-      'handShape', role,
-      FINGER_CURL_AXIS === 'x' ? curl : 0,
-      FINGER_CURL_AXIS === 'y' ? curl : 0,
-      FINGER_CURL_AXIS === 'z' ? curl : 0,
-    )
+    const [dx, dy, dz] = fingerCurlDelta(fkey, hand, mag)
+    add('handShape', role, dx, dy, dz)
   }
 
   return { summed, layers }
