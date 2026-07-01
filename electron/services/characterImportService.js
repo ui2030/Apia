@@ -268,6 +268,14 @@ async function createCharacterFiles({
     ready: true
   }
 
+  // 엔진 기본 프롬프트는 특정 작품·인물에 종속되지 않는 일반 서술(모델 불문 원칙).
+  // 사용자가 import 시 description/summary를 주면 그걸 우선한다 — 캐릭터 고유
+  // 정체성은 이 엔진 기본값이 아니라 사용자가 채우는 몫. (모델 이름을 프롬프트에
+  // 박지 않는다 — 이전 `${displayName} base` 는 IP 파생명이 새는 경로였음.)
+  const defaultPersonaPrompt = '데스크톱에서 사용자와 함께 지내는 3D 캐릭터 동반자. '
+    + '차분하고 균형 잡힌 성격으로 자연스럽고 부드럽게 대화하며, 특정 작품·인물에 '
+    + '종속되지 않는다. 세부 성향은 프로필의 성격 수치로 결정된다.'
+
   const profileGenerated = {
     version: 1,
     identity: {
@@ -309,7 +317,7 @@ async function createCharacterFiles({
         walk: []
       }
     },
-    systemPromptCore: description || summary || `${displayName} base character profile`
+    systemPromptCore: description || summary || defaultPersonaPrompt
   }
 
   const profileUser = {

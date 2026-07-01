@@ -27,6 +27,17 @@ function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true })
 }
 
+// tmp → rename 원자적 JSON 쓰기. 저장 도중 크래시/전원차단이 나도 반쪽 JSON이
+// 대상 경로에 노출되지 않아 레지스트리/프로필이 손상되지 않는다(반쪽이면
+// readRegistry가 emptyRegistry로 폴백해 캐릭터 목록이 통째 유실됐음).
+// backendEnvRepository.#atomicWrite와 동일 패턴. mkdir recursive는 idempotent.
+function atomicWriteJson(targetPath, data) {
+  const tmpPath = `${targetPath}.tmp`
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8')
+  fs.renameSync(tmpPath, targetPath)
+}
+
 function ensureRegistry() {
   const root = getCharactersRoot()
   const registryPath = getRegistryPath()
@@ -39,7 +50,7 @@ function ensureRegistry() {
       activeCharacterId: null,
       characters: []
     }
-    fs.writeFileSync(registryPath, JSON.stringify(initial, null, 2), 'utf-8')
+    atomicWriteJson(registryPath, initial)
   }
 
   return registryPath
@@ -107,7 +118,7 @@ function readRegistry() {
 
 function writeRegistry(data) {
   const registryPath = ensureRegistry()
-  fs.writeFileSync(registryPath, JSON.stringify(data, null, 2), 'utf-8')
+  atomicWriteJson(registryPath, data)
   return data
 }
 
@@ -210,8 +221,7 @@ function setCharacterPersonalityOverrides(characterId, overrides) {
     ...existing,
     personalityOverrides: { ...(existing.personalityOverrides || {}), ...cleaned }
   }
-  fs.mkdirSync(path.dirname(character.profileUserPath), { recursive: true })
-  fs.writeFileSync(character.profileUserPath, JSON.stringify(next, null, 2), 'utf-8')
+  atomicWriteJson(character.profileUserPath, next)
   return { ok: true, characterId, overrides: next.personalityOverrides }
 }
 

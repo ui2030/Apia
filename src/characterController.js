@@ -472,8 +472,15 @@ function _walk(mesh, t, dt) {
   // the heading vector when active.
   const yawTarget = _isFacingCameraActive() ? CAM_LOOK_ROT : Math.atan2(nx, nz)
   mesh.rotation.y += _shortAngle(yawTarget, mesh.rotation.y) * 0.18
-  mesh.position.y = Math.abs(Math.sin(t * 6.2)) * 0.008
-  mesh.rotation.z = Math.sin(t * 6.2) * 0.01
+  // 몸통 bob(상하)·sway(좌우)를 실제 발딛기 케이던스에 커플링한다. 하드코딩
+  // 6.2rad/s는 gait(walkStepsPerSec)와 무관해 박자가 어긋나 보였다. 같은 t와
+  // 같은 공식으로 cyc를 구하므로 main.js 다리 gait와 위상이 자동 일치.
+  // bob은 발딛기마다(사이클당 2회, |sin|이라 위상 무관), sway는 사이클당 1회.
+  // walkStepsPerSec 공식은 main.js와 동일(순환의존 회피 위해 복제 — 함께 수정).
+  const _energy = _vec()?.energy ?? 0.5
+  const _cyc = t * ((2.4 + (_energy - 0.5) * 0.8) / 2)
+  mesh.position.y = Math.abs(Math.sin(Math.PI * 2 * _cyc)) * 0.008
+  mesh.rotation.z = Math.sin(Math.PI * 2 * _cyc) * 0.01
 }
 
 function _sit(mesh, t) {

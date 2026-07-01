@@ -174,16 +174,31 @@ describe('poseRig — fingers (autonomous hand shape)', () => {
     expect(registry.roles.get('rPinky3').bone.name).toBe('右小指３')
   })
 
-  it('omitted handShape defaults to open (no curl) — relaxed 비틀림 버그 회피', () => {
+  it('omitted handShape defaults to relaxed (natural finger curl, not stiff open)', () => {
     const registry = buildBoneRegistry(fingerMesh(), 'mmd')
     const { layers } = computePoseTargets({
       registry, saccadeState: createSaccadeState(), t: 0,
       look: { x: 0, y: 0 }, state: 'idle', motion: { intensity: 1 },
       personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.5 },
-      // handShape omitted → 기본 open → 손가락 굽힘 레이어 비어 있어야
+      // handShape 생략 → 기본 relaxed(막대 손 제거). 손가락 굽힘 레이어에 값이 실려야.
     })
-    expect(layers.handShape.get('lIndex2')).toBeFalsy()
-    expect(layers.handShape.get('lPinky2')).toBeFalsy()
+    // P단계 1단계 #1: 기본 손이 펴진 'open'이 아니라 살짝 말린 'relaxed'.
+    expect(layers.handShape.get('lIndex2')).toBeTruthy()
+    expect(layers.handShape.get('lPinky2')).toBeTruthy()
+    // 왼손은 손바닥 쪽 굽힘이 z 음수(FINGER_CURL_SIGN.l = -1).
+    expect(layers.handShape.get('lIndex2').z).toBeLessThan(0)
+  })
+
+  it('finger settle가 손가락에 미세한 시간 변화를 준다 (판자 아님)', () => {
+    const registry = buildBoneRegistry(fingerMesh(), 'mmd')
+    const zAt = (t) => computePoseTargets({
+      registry, saccadeState: createSaccadeState(), t,
+      look: { x: 0, y: 0 }, state: 'idle', motion: { intensity: 1 },
+      personality: { energy: 0.5, expressiveness: 0.5, fidgetiness: 0.8 },
+    }).layers.handShape.get('lIndex2').z
+    const a = zAt(0.0), b = zAt(1.3)
+    expect(a).not.toBe(b)                       // 시간에 따라 변함(정적 아님)
+    expect(Math.abs(a - b)).toBeLessThan(0.06)  // 그러나 미세(<~3°)
   })
 
   it("explicit handShape 'relaxed' still curls; pinky curls more than index", () => {

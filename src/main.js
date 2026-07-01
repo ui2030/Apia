@@ -1520,7 +1520,7 @@ function updateBody(t, delta) {
     // 손모양 — 행동 디렉터가 currentModel.poseRig.handShape를 세팅하면 그걸,
     // 없으면 'relaxed'(자연스러운 휴식 손). 후속 단계에서 디렉터가 가리키기/
     // 주먹 등을 상황에 맞춰 바꾼다.
-    handShape: currentModel.poseRig?.handShape || 'open',
+    handShape: currentModel.poseRig?.handShape || 'relaxed',
     clipMask: effClipMask,
   })
 

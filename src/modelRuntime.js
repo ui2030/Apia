@@ -68,7 +68,11 @@ export async function getMmdRuntime() {
       import('three/examples/jsm/animation/MMDAnimationHelper.js')
     ]).then(([loaderModule, helperModule]) => {
       if (!cachedMmdHelper) {
-        cachedMmdHelper = new helperModule.MMDAnimationHelper()
+        // resetPhysicsOnLoop:false — 루프마다 물리(치마/꼬리) 강체 속도가 0으로
+        // 리셋되며 생기던 주기적 스냅(뻣뻣했다 다시 흔들림)을 제거한다. 루트 이동
+        // 트랙은 이미 제거·크로스페이드로 이어 붙으므로 루프 경계에서 물리를
+        // 리셋할 이유가 없다. 초기 정착은 로드 시 stabilizeMmdPhysics가 담당.
+        cachedMmdHelper = new helperModule.MMDAnimationHelper({ resetPhysicsOnLoop: false })
       }
 
       return {

@@ -41,7 +41,20 @@ const MANAGED_MORPHS = (() => {
 
 const RATE_IN = 10  // 1/s — 목표가 현재보다 클 때 (표정 떠오름)
 const RATE_OUT = 4  // 1/s — 목표가 작을 때 (여운을 남기며 풀림)
-const HOLD_MS = 6000
+
+// 감정 유지 시간(ms). 고정 6s의 '타이머처럼 기계적인' 복귀를 없애려 감정
+// 종류별 기준값 + 소량 지터(±18%)로 변조한다. surprised는 순간 반응이라 짧게,
+// sad는 여운이 길게. (성격 expressiveness 연동은 후속 — 여기선 자립적 변조.)
+const HOLD_MS_BASE = { happy: 6500, sad: 7500, angry: 5500, surprised: 3200 }
+const HOLD_MS_DEFAULT = 6000
+const HOLD_JITTER = 0.18
+
+/** 감정별 유지 시간(ms)을 지터와 함께 계산. rand 주입으로 테스트 결정론. */
+export function computeHoldMs(emotion, rand = Math.random) {
+  const base = HOLD_MS_BASE[emotion] ?? HOLD_MS_DEFAULT
+  const jitter = 1 + (rand() * 2 - 1) * HOLD_JITTER
+  return Math.round(base * jitter)
+}
 
 let _emotion = 'neutral'
 let _holdUntil = 0
@@ -76,7 +89,7 @@ export function setExpressionEmotion(emotion) {
   _emotion = key
   _holdUntil = key === 'neutral'
     ? 0
-    : (typeof performance !== 'undefined' ? performance.now() : Date.now()) + HOLD_MS
+    : (typeof performance !== 'undefined' ? performance.now() : Date.now()) + computeHoldMs(key)
   const preset = EMOTION_PRESETS[key]
   for (const name of MANAGED_MORPHS) {
     if (name === BLINK_MORPH) continue

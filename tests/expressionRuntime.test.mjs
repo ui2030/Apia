@@ -4,7 +4,26 @@ import {
   setExpressionEmotion,
   resetExpression,
   updateExpression,
+  computeHoldMs,
 } from '../src/expressionRuntime.js'
+
+describe('expressionRuntime — computeHoldMs (감정 유지시간 변조)', () => {
+  const mid = () => 0.5 // 지터 중립(1.0배)
+  it('감정 종류별로 기준 유지시간이 다르다 (surprised 짧고 sad 길다)', () => {
+    expect(computeHoldMs('surprised', mid)).toBeLessThan(computeHoldMs('happy', mid))
+    expect(computeHoldMs('happy', mid)).toBeLessThan(computeHoldMs('sad', mid))
+  })
+  it('알 수 없는 감정은 기본값(6000)로 폴백', () => {
+    expect(computeHoldMs('bogus', mid)).toBe(6000)
+  })
+  it('지터가 ±18% 범위로 값을 흔든다 (고정 6초 아님)', () => {
+    const lo = computeHoldMs('happy', () => 0) // -18%
+    const hi = computeHoldMs('happy', () => 1) // +18%
+    expect(lo).toBe(Math.round(6500 * 0.82))
+    expect(hi).toBe(Math.round(6500 * 1.18))
+    expect(lo).not.toBe(hi)
+  })
+})
 
 // 표정 모프 + *건드리면 안 되는* 의상/뚫림방지 모프를 섞은 가짜 모델.
 function makeModel(extraMorphs = []) {

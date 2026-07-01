@@ -840,6 +840,8 @@ function addImpulseLayer(state, t, add) {
 // (엄지 전용 축 분리는 후속 폴리시 — relaxed에선 오차가 ~7° 이내).
 const FINGER_CURL_AXIS = 'z'              // 'x'|'y'|'z' — 굽힘이 실릴 오일러 축
 const FINGER_CURL_SIGN = { l: -1, r: 1 }  // 좌우 손이 손바닥 쪽으로 감기는 부호
+// finger settle 위상 오프셋 — 손가락마다 미세 진동을 어긋내 동시 움직임 방지.
+const FINGER_PHASE = { thumb: 0.0, index: 0.9, middle: 1.7, ring: 2.6, pinky: 3.4 }
 
 // 발끝 plantarflexion(발끝이 바닥 쪽으로). 실측(tests/gui/toe-axis-check.mjs,
 // the reference model 足先EX): z축이 거의 순수 하향(lateral≈0.001), 왼발 z+ / 오른발 z-.
@@ -1022,6 +1024,24 @@ export function computePoseTargets({
     }
   }
 
+  // — Layer 2.6: finger settle. 손가락도 발끝처럼 판자로 굳지 않게 숨결에 맞춰
+  // 아주 미세하게(<1°) 말렸다 풀린다. 손가락·마디마다 위상을 어긋내 동시 움직임을
+  // 피하고, fidgetiness가 진폭을 키운다. handShape 레이어에 합산되므로 클립이
+  // 손가락을 소유하면 정적 curl과 함께 마스킹된다. 걷기/앉기에선 생략.
+  // 쉬는 손(relaxed)에만 적용 — open/point/fist 등 의도적 포즈는 crisp하게 둔다.
+  if (!isSit && state !== 'walk' && (handShape || 'relaxed') === 'relaxed') {
+    const fingerAmp = (0.006 + fidget * 0.006) * intensity
+    for (const { role, hand, fkey, segIndex } of FINGER_ROLE_PARTS) {
+      if (!registry.roles.has(role)) continue
+      const phase = (FINGER_PHASE[fkey] || 0) + segIndex * 0.35
+      const v = Math.sin(t * breathOmega * 0.85 + phase) * fingerAmp * (FINGER_CURL_SIGN[hand] || 1)
+      add('handShape', role,
+        FINGER_CURL_AXIS === 'x' ? v : 0,
+        FINGER_CURL_AXIS === 'y' ? v : 0,
+        FINGER_CURL_AXIS === 'z' ? v : 0)
+    }
+  }
+
   // — Layer 3: gaze. Eyes get the full target; the head/neck share
   // progressively less. The spring's slower ω for head/neck (vs eyes)
   // naturally produces the eye-leads-head lag without an explicit delay
@@ -1125,11 +1145,12 @@ export function computePoseTargets({
   // 자세 위에 가산(applyPose가 restQuat*delta 합성). 클립이 팔/손가락을
   // 소유하면 해당 role은 stepPoseSpring/applyPose에서 마스킹돼 클립 손가락
   // 트랙과 싸우지 않는다. add()는 모델에 없는 손가락 role은 자동 무시.
-  // 기본은 'open'(굽힘 0) — relaxed 절차 굽힘이 엄지/일부 마디에서 기괴하게
-  // 비틀리는 문제(굽힘 축을 검지로만 실측)가 있어 기본 비활성. 모델 휴식 손
-  // 자세를 그대로 쓴다. 클립/디렉터가 명시하면 그 프리셋을 쓴다. 제대로 된
-  // 손 굽힘은 본별 굽힘축 도출 후 재활성(후속).
-  const shape = HAND_SHAPES[handShape] || HAND_SHAPES.open
+  // 기본은 'relaxed'(가볍게 쥔 휴식 손) — 펴진 막대 손 대신 자연스러운 굽힘.
+  // 굽힘 축을 검지로만 실측한 한계로 엄지가 약간(~7° 이내) 어긋날 수 있으나
+  // relaxed 프리셋은 엄지 진폭을 작게 잡아 허용 범위. 본별 굽힘축 분리(엄지
+  // 포함)와 point/fist 등 강한 굽힘 프리셋의 정확도는 P단계 2차(후속).
+  // 클립이 손가락을 소유하면 clipMask로 마스킹돼 클립 트랙과 안 싸운다.
+  const shape = HAND_SHAPES[handShape] || HAND_SHAPES.relaxed
   for (const { role, hand, fkey, segIndex } of FINGER_ROLE_PARTS) {
     if (!registry.roles.has(role)) continue
     const mag = shape[fkey]?.[segIndex]
