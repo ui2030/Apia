@@ -25,6 +25,20 @@ describe('expressionRuntime — computeHoldMs (감정 유지시간 변조)', () 
   })
 })
 
+describe('expressionRuntime — 모프명 별칭 어댑터 (모델 불문)', () => {
+  it('비표준(영문) 모프명 모델도 별칭으로 표정이 나오고, 관리 밖 모프는 보존', () => {
+    const names = ['blink', 'smile', 'joy', 'grin', 'surprised', 'brow_up', 'angry', '貫通対策']
+    const morphs = {}; names.forEach((n, i) => { morphs[n] = i })
+    const influences = new Array(names.length).fill(0)
+    const model = { type: 'mmd', obj: { morphTargetInfluences: influences }, morphs }
+    resetExpression()
+    setExpressionEmotion('happy')
+    for (let i = 0; i < 30; i++) updateExpression(model, 1 / 60, 0, { expressiveness: 0.5 })
+    expect(influences[morphs.smile]).toBeGreaterThan(0.2) // 笑い→smile 별칭 해석
+    expect(influences[morphs['貫通対策']]).toBe(0)        // 관리 대상 밖 불가침
+  })
+})
+
 // 표정 모프 + *건드리면 안 되는* 의상/뚫림방지 모프를 섞은 가짜 모델.
 function makeModel(extraMorphs = []) {
   const names = ['まばたき', '笑い', 'にこり', 'にっこり', '困る', '怒り',

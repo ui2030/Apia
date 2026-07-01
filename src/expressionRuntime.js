@@ -39,6 +39,39 @@ const MANAGED_MORPHS = (() => {
   return [...set]
 })()
 
+// 표정 모프명은 모델마다 다를 수 있다(일본어 표준 vs 영문/기타). 표준 canonical
+// 이름이 없으면 별칭 후보로 해석해 "표준 모프명 안 쓰는 모델에서도 표정이 나오게"
+// 한다(모델 불문). 별칭은 표정 전용 이름만 — 의상/貫通 모프 오탐 방지.
+const MORPH_ALIASES = {
+  'まばたき': ['blink', 'Blink', 'ウィンク', 'wink', 'eye_close', 'まばたき2'],
+  '笑い': ['smile', 'Smile', 'joy', 'Joy', 'happy'],
+  'にこり': ['grin', 'fun', 'Fun', 'smile2'],
+  'にっこり': ['bigsmile', 'joy2'],
+  '困る': ['sad', 'Sorrow', 'sorrow', 'trouble', 'worried'],
+  'なごみ': ['calm', 'relaxed'],
+  '口角下げ': ['frown', 'mouth_down', '口角下'],
+  '怒り': ['angry', 'Angry', 'mad'],
+  'じと目': ['glare', 'squint'],
+  'びっくり': ['surprised', 'Surprised', 'surprise', 'shock', '驚き'],
+  '眉上移動': ['brow_up', 'eyebrow_up', '眉上'],
+}
+// dict(모프명→influence idx)에서 canonical(또는 별칭) 모프 idx 해석. dict 정체성별
+// 캐시(모델 교체 시 자동 무효화). 미존재는 undefined.
+let _idxCacheDict = null
+const _idxCache = new Map()
+function resolveMorphIdx(dict, canonical) {
+  if (_idxCacheDict !== dict) { _idxCacheDict = dict; _idxCache.clear() }
+  if (_idxCache.has(canonical)) return _idxCache.get(canonical)
+  let idx = dict[canonical]
+  if (idx === undefined) {
+    for (const alt of MORPH_ALIASES[canonical] || []) {
+      if (dict[alt] !== undefined) { idx = dict[alt]; break }
+    }
+  }
+  _idxCache.set(canonical, idx)
+  return idx
+}
+
 const RATE_IN = 10  // 1/s — 목표가 현재보다 클 때 (표정 떠오름)
 const RATE_OUT = 4  // 1/s — 목표가 작을 때 (여운을 남기며 풀림)
 
@@ -129,7 +162,7 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
 
   if (!_loggedMissing) {
     _loggedMissing = true
-    const missing = MANAGED_MORPHS.filter((n) => dict[n] === undefined)
+    const missing = MANAGED_MORPHS.filter((n) => resolveMorphIdx(dict, n) === undefined)
     if (missing.length) console.info('[expression] 모델에 없는 표정 모프(스킵):', missing)
   }
 
@@ -140,7 +173,7 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
 
   const clampedDt = Math.max(0, Math.min(dt, 0.1))
   for (const [name, target] of _targets) {
-    const idx = dict[name]
+    const idx = resolveMorphIdx(dict, name)
     if (idx === undefined) continue
     const cur = _weights.get(name) ?? 0
     const rate = target > cur ? RATE_IN : RATE_OUT
@@ -155,7 +188,7 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
   if (!_autoResolved) {
     _autoResolved = true
     const managed = new Set(MANAGED_MORPHS) // 안전망: 관리 대상 밖이면 거부
-    const pick = (cands) => cands.find((n) => managed.has(n) && dict[n] !== undefined) ?? null
+    const pick = (cands) => cands.find((n) => managed.has(n) && resolveMorphIdx(dict, n) !== undefined) ?? null
     _autoBrowName = pick(AUTO_BROW_CANDIDATES)
     _autoSmileName = pick(AUTO_SMILE_CANDIDATES)
   }
@@ -167,7 +200,7 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
   // brow flick — Poisson 간격(평균은 expressiveness가 높을수록 짧음), 0.7s
   // 동안 부드럽게 떴다 내린다. 가끔만 일어나 "표정 깜빡임"으로 읽힌다.
   if (_autoBrowName && autoGain > 0) {
-    const idx = dict[_autoBrowName]
+    const idx = resolveMorphIdx(dict, _autoBrowName)
     if (_autoT >= _autoBrowNextAt) {
       _autoBrowOnset = _autoT
       const mean = 8 - expr * 4 // 평균 4~8s 간격
@@ -184,7 +217,7 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
 
   // micro-smile — 아주 옅은 미소가 느리게 드나든다(항상 ≥0). 슬픔/분노 땐 생략.
   if (_autoSmileName && _emotion !== 'sad' && _emotion !== 'angry' && autoGain > 0) {
-    const idx = dict[_autoSmileName]
+    const idx = resolveMorphIdx(dict, _autoSmileName)
     const drift = (0.5 + 0.5 * Math.sin(_autoT * 0.13)) // 0..1, 매우 느림
     const offset = drift * (0.04 + expr * 0.08) * autoGain
     const base = _weights.get(_autoSmileName) ?? 0
@@ -192,7 +225,7 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
   }
 
   // 깜빡임 — 눈웃음(笑い) 가중만큼 줄여 이중 감김 방지
-  const blinkIdx = dict[BLINK_MORPH]
+  const blinkIdx = resolveMorphIdx(dict, BLINK_MORPH)
   if (blinkIdx !== undefined) {
     const smile = _weights.get(EYE_SMILE_MORPH) ?? 0
     influences[blinkIdx] = Math.max(0, Math.min(1, blinkValue)) * (1 - smile)
