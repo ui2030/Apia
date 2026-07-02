@@ -319,9 +319,26 @@ class WindowManager {
       return this.#settings
     }
 
+    // 캐릭터가 있는 디스플레이의 작업영역 중앙에 띄운다. x/y를 안 주면 보조
+    // 모니터(음수 좌표)로 새거나 다른 창 뒤에 숨어 사용자가 못 보는 일이 생긴다
+    // — 벽지모드에선 핫코너 버튼이 유일한 진입점이라 가시성이 특히 중요하다.
+    const SETTINGS_W = 440
+    const SETTINGS_H = 700
+    let settingsDisplay
+    try {
+      settingsDisplay = (this.#main && !this.#main.isDestroyed())
+        ? this.#screen.getDisplayMatching(this.#main.getBounds())
+        : this.#screen.getPrimaryDisplay()
+    } catch {
+      settingsDisplay = this.#screen.getPrimaryDisplay()
+    }
+    const sWa = settingsDisplay.workArea
+
     this.#settings = new this.#BrowserWindow({
-      width: 440,
-      height: 700,
+      width: SETTINGS_W,
+      height: SETTINGS_H,
+      x: Math.round(Math.max(sWa.x, sWa.x + (sWa.width - SETTINGS_W) / 2)),
+      y: Math.round(Math.max(sWa.y, sWa.y + (sWa.height - SETTINGS_H) / 2)),
       resizable: false,
       frame: false,
       alwaysOnTop: true,
