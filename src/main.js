@@ -30,6 +30,7 @@ import { createPropManager } from './propManager.js'
 import { createNeedsManager } from './needsManager.js'
 import { createAdaptation } from './adaptationStore.js'
 import { createPresenceMonitor } from './presenceManager.js'
+import { pickBehaviorSlot, createLingerIntent } from './behaviorPlanner.js'
 import { resolveMotionAsset, resolveMmdMotionAsset } from './motionAssets.js'
 import {
   buildBoneRegistry,
@@ -527,6 +528,10 @@ const activityRunner = createActivityRunner({
 // J단계 — 디렉터 컨텍스트용 직전 완료 활동.
 let lastActivityId = null
 
+// ④ 행동 일관성 — 직전 자율 슬롯(약한 반복 회피)과 걷기 후 머무름 의도.
+let lastBehaviorSlot = null
+const lingerIntent = createLingerIntent()
+
 // J단계 — 사용자 존재 인지. 메인 프로세스의 유휴초 폴링(5s)+절전/잠금 이벤트를
 // presenceManager 상태기계에 넣고, 전이에 반응한다. 복귀 인사·recordPace 스킵·
 // 디렉터 컨텍스트·잠금 중 자율행동 정지가 이 상태를 읽는다.
@@ -813,23 +818,43 @@ function scheduleAutoBehavior() {
       const safe = (v, d) => (Number.isFinite(v) ? Math.min(0.6, Math.max(0, v)) : d)
       const idleBias = safe(behaviorConfig.inPlaceIdleBias, 0.28)
       const walkShare = safe(behaviorConfig.walkShare, 0.36)
-      const walkCut = Math.min(0.97, idleBias + walkShare)
       // 방금 대화했으면(attentiveness 높음) "듣는 듯한" 제스처 선호. 디렉터가
-      // 명시적으로 무드를 지시(config.idleMood)하면 그게 우선.
+      // 명시적으로 무드를 지시(config.idleMood)하면 그가 우선.
       const idleMood = behaviorConfig.idleMood || (behaviorConfig.attentiveness > 0.4 ? 'engaged' : undefined)
       // 4단계 적응 — 학습된 제스처 선호로 가중. 데이터 부족/미지 제스처는 1.0(탐험).
       const gestureBias = (m) => adaptation.getGestureBias(m)
-      const roll = Math.random()
       let handled = false
-      if (roll < idleBias) {
+      let slotDone = null
+
+      // ④ 행동 일관성 — 걷기 도착 후 첫 틱은 "둘러보는" 조용한 제스처로 잇는다
+      // (의도 연쇄: 걸어간 자리에 목적이 생긴다). 1회성 소비, 45s 넘기면 만료.
+      if (lingerIntent.consume()) {
+        const linger = motionManager.pickIdleMotion({ mood: 'quiet', bias: gestureBias })
+        if (linger) {
+          playMotion(linger)
+          noteAutoGesture(linger.name)
+          handled = true
+          slotDone = 'idle'
+        }
+      }
+
+      // ④ 행동 일관성 — 직전 슬롯의 확률 질량을 절반으로 약화해 같은 종류가
+      // 연달아 나오는 걸 줄인다(완전 금지 아님 — 고착도 단조로움도 회피).
+      const slot = handled ? null : pickBehaviorSlot({ idleBias, walkShare, lastSlot: lastBehaviorSlot })
+      if (!handled && slot === 'idle') {
         const idleGesture = motionManager.pickIdleMotion({ mood: idleMood, bias: gestureBias })
         if (idleGesture) {
           playMotion(idleGesture)
           noteAutoGesture(idleGesture.name) // 자율 재생된 제스처만 보상 후보(Codex)
           handled = true
+          slotDone = 'idle'
         }
-      } else if (roll < walkCut) {
+      } else if (!handled && slot === 'walk') {
         handled = walkToRandomSpot({ minDistance: 1.4 }) === true
+        if (handled) {
+          slotDone = 'walk'
+          lingerIntent.armAfterWalk() // 도착 후 첫 idle 틱이 둘러보기로 잇는다
+        }
       }
       if (!handled) {
         handled =
@@ -841,12 +866,15 @@ function scheduleAutoBehavior() {
             // keeps it out of *random* picks; this flag only opens the gate.
             includeDecor: true
           }) === true
+        if (handled) slotDone = 'furniture'
       }
       if (!handled) {
         const idleMotion = motionManager.pickIdleMotion({ mood: idleMood, bias: gestureBias })
         playMotion(idleMotion)
         noteAutoGesture(idleMotion.name)
+        slotDone = 'idle'
       }
+      if (slotDone) lastBehaviorSlot = slotDone
     }
 
     scheduleAutoBehavior()
