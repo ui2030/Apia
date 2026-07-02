@@ -53,7 +53,8 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         settings: resolve(__dirname, 'settings.html'),
-        chat: resolve(__dirname, 'chat.html')
+        chat: resolve(__dirname, 'chat.html'),
+        corner: resolve(__dirname, 'corner.html')
       },
       output: {
         manualChunks(id) {
