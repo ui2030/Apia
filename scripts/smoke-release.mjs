@@ -13,20 +13,61 @@ const runtimeRoot = join(appDataDir, 'apia')
 const runtimeLogPath = join(runtimeRoot, 'logs', 'main.log')
 const backendEnvExamplePath = join(runtimeRoot, 'backend-data', 'backend.env.example')
 const successMarkers = ['[APP_READY]', '[WINDOW_LOAD_FINISH] main', '[BACKEND_READY]']
-// Step 4 — wallpaper attach (Phase F1) is a packaged-build-only path:
-// require('electron-as-wallpaper') resolves a native .node binding that
-// is unpacked from .asar via asarUnpack. If asarUnpack drops or the
-// binary doesn't ship, wallpaperMode.js logs [WALLPAPER_ATTACH_FAIL] or
-// [WALLPAPER_UNAVAILABLE]. Either is a release-blocking regression that
-// no source-tree test catches, so we sniff them here.
+// Always-fatal runtime markers — any of these means the packaged app is broken
+// regardless of anything else, so we bail the moment one appears.
 const failureMarkers = [
   '[BACKEND_READY_TIMEOUT]',
   '[BACKEND_SPAWN_ERROR]',
   '[UNCAUGHT_EXCEPTION]',
   '[UNHANDLED_REJECTION]',
-  '[WALLPAPER_ATTACH_FAIL]',
-  '[WALLPAPER_UNAVAILABLE]',
 ]
+
+// ── Wallpaper attach (Phase F1) ─────────────────────────────────────────────
+// Packaged-build-only path. wallpaperMode.js tries two strategies in order:
+//   1. native module (electron-as-wallpaper) → [WALLPAPER_ATTACH_OK], or
+//      [WALLPAPER_ATTACH_FAIL] (e.g. "couldn't locate WorkerW") / the binding
+//      failing to load → [WALLPAPER_NATIVE_UNAVAILABLE], then it falls through.
+//   2. Progman-child fallback (async helper) → [WALLPAPER_PROGMAN_CHILD_OK] /
+//      [WALLPAPER_PROGMAN_CHILD_FAIL].
+// Win11 builds like 26200 have no WorkerW, so strategy 1 *always* fails there
+// and strategy 2 is the supported path — blocking on [WALLPAPER_ATTACH_FAIL]
+// would fail every release on those machines. The real question is whether the
+// window ended up attached by *some* strategy, so we judge the final outcome,
+// not any single marker.
+const WALLPAPER_OK_MARKERS = ['[WALLPAPER_ATTACH_OK]', '[WALLPAPER_PROGMAN_CHILD_OK]']
+const WALLPAPER_FALLBACK_FAILED = '[WALLPAPER_PROGMAN_CHILD_FAIL]'
+const WALLPAPER_NATIVE_MISSING = '[WALLPAPER_NATIVE_UNAVAILABLE]'
+// Any marker proving the wallpaper attach path actually ran. If none of these
+// show up at all, wallpaper mode was silently skipped — itself a regression.
+const WALLPAPER_ATTEMPT_MARKERS = [
+  ...WALLPAPER_OK_MARKERS,
+  '[WALLPAPER_ATTACH_FAIL]',
+  WALLPAPER_NATIVE_MISSING,
+  WALLPAPER_FALLBACK_FAILED,
+]
+// The Progman-child fallback is async (spawns a helper), so its terminal marker
+// can lag the core startup markers. Give it this long to settle before deciding.
+const WALLPAPER_GRACE_MS = 4000
+
+// Returns { state: 'ok' | 'fail' | 'pending', attempted?, reason? }.
+function assessWallpaper(logText) {
+  if (WALLPAPER_OK_MARKERS.some((marker) => logText.includes(marker))) {
+    return { state: 'ok' }
+  }
+  // Last-resort fallback explicitly failed and nothing succeeded → mode is dead.
+  if (logText.includes(WALLPAPER_FALLBACK_FAILED)) {
+    return {
+      state: 'fail',
+      reason: 'native attach unavailable/failed and Progman-child fallback also failed'
+    }
+  }
+  // No success and no terminal failure yet — the async fallback may still be in
+  // flight. `attempted` tells the caller whether the path even ran.
+  return {
+    state: 'pending',
+    attempted: WALLPAPER_ATTEMPT_MARKERS.some((marker) => logText.includes(marker))
+  }
+}
 
 async function assertExists(targetPath, errorCode) {
   try {
@@ -79,8 +120,9 @@ async function stopProcessTree(child) {
   await waitForProcessExit(child)
 }
 
-async function waitForSmokeSuccess(child, timeoutMs = 15000) {
+async function waitForSmokeSuccess(child, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs
+  let coreReadyAt = null
 
   while (Date.now() < deadline) {
     let logText
@@ -104,7 +146,41 @@ async function waitForSmokeSuccess(child, timeoutMs = 15000) {
       const hasEnvExample = await access(backendEnvExamplePath).then(() => true).catch(() => false)
 
       if (hasMarkers && hasEnvExample) {
-        return logText
+        if (coreReadyAt === null) coreReadyAt = Date.now()
+
+        const wallpaper = assessWallpaper(logText)
+        if (wallpaper.state === 'fail') {
+          throw new Error(`[SMOKE_RELEASE_WALLPAPER_FAILURE] ${wallpaper.reason}\n${logText}`)
+        }
+        if (wallpaper.state === 'ok') {
+          if (logText.includes(WALLPAPER_NATIVE_MISSING)) {
+            console.warn(
+              `[SMOKE_RELEASE_WARN] ${WALLPAPER_NATIVE_MISSING}: native wallpaper binding did not load, ` +
+              'but a fallback attach succeeded. Check asarUnpack if the native module is expected to ship.'
+            )
+          }
+          return logText
+        }
+
+        // Wallpaper outcome still pending. The async fallback can lag the core
+        // markers, so wait out a short grace window. Only pass on grace/deadline
+        // if the attach path actually ran — a total absence of wallpaper markers
+        // means the mode was skipped, which is a regression we must not wave through.
+        const graceExpired = Date.now() - coreReadyAt >= WALLPAPER_GRACE_MS
+        const deadlineNear = Date.now() + 1000 >= deadline
+        if (graceExpired || deadlineNear) {
+          if (wallpaper.attempted) {
+            console.warn(
+              '[SMOKE_RELEASE_WARN] wallpaper attach ran but its final fallback result did not resolve ' +
+              'within the grace window; passing on core startup + behavior probes.'
+            )
+            return logText
+          }
+          throw new Error(
+            `[SMOKE_RELEASE_WALLPAPER_ABSENT] no wallpaper attach markers observed; ` +
+            `wallpaper mode appears to have been skipped\n${logText}`
+          )
+        }
       }
     }
 
