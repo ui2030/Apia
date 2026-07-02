@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<!--
+  벽지(wallpaper)모드 전용 좌하단 핫코너 창.
+  메인 캐릭터 창은 바탕화면 뒤(HWND_BOTTOM)라 클릭을 못 받으므로, 설정·채팅
+  버튼을 이 별도 always-on-top 창에 둔다. 평소엔 완전히 숨겨(투명) 깔끔한
+  바탕화면을 유지하고, 메인 프로세스가 전역 커서를 폴링해 이 창 영역에 마우스가
+  들어오면 `corner:reveal`로 버튼을 띄운다(그 순간 main이 클릭 통과도 해제).
+  벗어나면 다시 숨김+클릭 통과. 버튼 2개뿐이라 입력창은 두지 않는다.
+-->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    :root {
+      --bg-panel: rgba(24, 24, 35, 0.92);
+      --bg-border: rgba(255, 255, 255, 0.12);
+      --purple: rgba(124, 58, 237, 0.32);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: transparent;
+      overflow: hidden;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      -webkit-user-select: none; user-select: none;
+    }
+    /* 버튼 묶음: 창의 좌하단에 고정. 기본은 완전히 숨김(투명+아래로 살짝+클릭불가). */
+    #dock {
+      position: fixed;
+      left: 18px; bottom: 16px;
+      display: flex; gap: 10px; align-items: center;
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+    body.revealed #dock {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .corner-btn {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: var(--bg-panel);
+      border: 1px solid var(--bg-border);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, transform 0.1s;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    }
+    .corner-btn:hover { background: var(--purple); }
+    .corner-btn:active { transform: scale(0.92); }
+  </style>
+</head>
+<body>
+  <div id="dock">
+    <button class="corner-btn" id="chat-btn" title="채팅">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="none">
+        <path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v7a1 1 0 01-1 1H5l-3 3V3z" fill="rgba(167,139,250,0.95)"/>
+      </svg>
+    </button>
+    <button class="corner-btn" id="settings-btn" title="설정">
+      <svg width="16" height="16" viewBox="0 0 15 15" fill="none">
+        <circle cx="7.5" cy="7.5" r="2" stroke="rgba(167,139,250,0.95)" stroke-width="1.3"/>
+        <path d="M7.5 1v1.5M7.5 12.5V14M1 7.5h1.5M12.5 7.5H14M3.2 3.2l1.1 1.1M10.7 10.7l1.1 1.1M3.2 11.8l1.1-1.1M10.7 4.3l1.1-1.1" stroke="rgba(167,139,250,0.95)" stroke-width="1.3" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+  <script>
+    const api = window.cornerApi
+    document.getElementById('chat-btn').addEventListener('click', () => api?.chatToggle?.())
+    document.getElementById('settings-btn').addEventListener('click', () => api?.openSettings?.())
+    api?.onReveal?.((on) => {
+      document.body.classList.toggle('revealed', on === true)
+    })
+  </script>
+</body>
+</html>
