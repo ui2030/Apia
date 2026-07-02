@@ -30,6 +30,21 @@ export function pickBehaviorSlot({ idleBias = 0.28, walkShare = 0.36, lastSlot =
   return 'furniture'
 }
 
+// 시간대 기초 활기 곡선(엔진 공통 모양) + 캐릭터 크로노타입 시프트.
+// shift(+)는 아침형(곡선을 앞당김 — 일찍 활기, 일찍 차분), shift(−)는 저녁형.
+// 곡선 모양 자체는 엔진 소유, "언제 활기찬가"는 캐릭터 프로필 소유(dailyRhythm).
+// 위에 adaptationStore의 학습된 hour bias가 곱연쇄된다(프로필=사전값, 학습=보정).
+export function timeOfDayEnergyCurve(hour, shift = 0) {
+  const base = Number.isFinite(hour) ? Math.floor(hour) : 12
+  const s = Number.isFinite(shift) ? Math.round(shift) : 0
+  const h = ((base + s) % 24 + 24) % 24
+  if (h < 6) return 0.55 // 깊은 밤 — 느긋
+  if (h < 11) return 1.12 // 아침 — 활기
+  if (h < 17) return 1.0 // 낮 — 평소
+  if (h < 22) return 0.9 // 저녁 — 살짝 차분
+  return 0.65 // 늦은 밤
+}
+
 // 걷기 후 머무름 의도. armAfterWalk()로 무장, consume()은 유효 창 안에서 1회만
 // true(그 틱은 "도착해서 둘러보기"). 창을 넘기면 조용히 만료 — 도착 전에 다른
 // 행동(대화·활동)이 끼어들었으면 억지로 잇지 않는다.

@@ -28,11 +28,44 @@ const BASE_RISE_PER_MIN = {
 }
 
 // 성격별 상승 가중(없는 키는 1). active=잘 심심해함·덜 안락 추구, shy=안락·돌봄↑,
-// calm=중립.
-const PERSONALITY_RISE = {
+// calm=중립. deriveNeedsTendency가 이 표를 기반으로 쓰므로 export(단일 출처 —
+// motionManager 쪽에 복제 금지, Codex MUST-FIX).
+export const PERSONALITY_RISE = {
   active: { boredom: 1.4, tiredness: 1.2, comfort: 0.8 },
   shy: { comfort: 1.3, care: 1.3, boredom: 0.8 },
   calm: {}
+}
+
+// 캐릭터 프로필 구동 — 욕구 상승 성향 파생(순수).
+// 우선순위: explicit(프로필 needsTendency 명시값) > 버킷(PERSONALITY_RISE) ×
+// 연속 페르소나 축 변조. 축이 전부 기본(0.5)이면 변조≈1.0이라 버킷 결과와 같다
+// (기본 프로필 무회귀). 명시값·파생값 모두 [0.5, 1.6] 클램프.
+// 주의: 페르소나 축이 기본이 아닌 기존 생성 프로필은 이 변조만큼 행동이
+// 미세하게 달라진다 — 캐릭터별 차별화가 목적이므로 의도된 변화.
+const TENDENCY_MIN = 0.5
+const TENDENCY_MAX = 1.6
+
+export function deriveNeedsTendency({ personality = 'calm', persona = {}, explicit = null } = {}) {
+  const bucket = PERSONALITY_RISE[personality] || {}
+  const axis = (v, d = 0.5) => (Number.isFinite(v) ? clamp01(v) : d)
+  const energy = axis(persona.energy)
+  const confidence = axis(persona.confidence)
+  const warmth = axis(persona.warmth)
+  const axisMod = {
+    boredom: 0.85 + energy * 0.3, // 활기찰수록 빨리 심심
+    tiredness: 0.9 + energy * 0.2, // 활동량이 많으면 빨리 지침
+    comfort: 1.15 - confidence * 0.3, // 소심할수록 안락 갈구
+    care: 1.0 + (0.5 - confidence) * 0.3 + (warmth - 0.5) * 0.2, // 소심·다정 → 돌봄 갈구
+    thirst: 1, // 생리 욕구는 중립
+    hygiene: 1
+  }
+  const out = {}
+  for (const k of NEED_KEYS) {
+    let m = (bucket[k] || 1) * (axisMod[k] || 1)
+    if (explicit && Number.isFinite(explicit[k])) m = explicit[k]
+    out[k] = Math.min(TENDENCY_MAX, Math.max(TENDENCY_MIN, m))
+  }
+  return out
 }
 
 const MAX_TICK_MS = 60000 // 한 틱 최대 1분치(절전 복귀 점프 방지)
@@ -46,13 +79,17 @@ function clamp01(v) {
   return v < 0 ? 0 : v > 1 ? 1 : v
 }
 
-export function createNeedsManager({ now = () => Date.now(), rng = Math.random, getPersonality = () => 'calm', initial = null } = {}) {
+export function createNeedsManager({ now = () => Date.now(), rng = Math.random, getPersonality = () => 'calm', getRiseTendency = null, initial = null } = {}) {
   const needs = {}
   for (const k of NEED_KEYS) needs[k] = initial && Number.isFinite(initial[k]) ? clamp01(initial[k]) : 0
   const lastCompletedAt = new Map() // activityId → ms
   let lastTickAt = now()
 
+  // 프로필 구동 성향(getRiseTendency 주입)이 있으면 그것이 권위 — 없으면
+  // 기존 3버킷 폴백(기존 소비자/테스트 무회귀).
   function riseMult(key) {
+    const t = getRiseTendency?.()
+    if (t && Number.isFinite(t[key])) return t[key]
     const p = PERSONALITY_RISE[getPersonality?.()] || {}
     return p[key] || 1
   }

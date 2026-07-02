@@ -1,9 +1,33 @@
 // src/motionManager.js
 
+import { NEED_KEYS, deriveNeedsTendency } from './needsManager.js'
+
 const PERSONALITY = {
   SHY: 'shy',
   ACTIVE: 'active',
   CALM: 'calm'
+}
+
+// 캐릭터 프로필 구동 — 하루 리듬(크로노타입). 저작은 enum, 내부는 시간 시프트.
+// 아침형=곡선을 +2h 앞당김(일찍 활기·일찍 차분), 저녁형=−3h(밤에 쌩쌩).
+const CHRONOTYPE_SHIFT = { morning: 2, evening: -3, balanced: 0 }
+
+function normalizeDailyRhythm(input) {
+  const raw = typeof input?.chronotype === 'string' ? input.chronotype.toLowerCase() : ''
+  const chronotype = Object.hasOwn(CHRONOTYPE_SHIFT, raw) ? raw : 'balanced'
+  return { chronotype, energyHourShift: CHRONOTYPE_SHIFT[chronotype] }
+}
+
+// 프로필의 명시적 욕구 성향(needsTendency) — 아는 욕구 키의 수치만 통과.
+// 클램프는 파생과 합쳐 deriveNeedsTendency가 최종 수행.
+function pickExplicitNeedsTendency(input) {
+  if (!input || typeof input !== 'object') return null
+  const out = {}
+  let any = false
+  for (const k of NEED_KEYS) {
+    if (Number.isFinite(input[k])) { out[k] = input[k]; any = true }
+  }
+  return any ? out : null
 }
 
 const MOTION_LIBRARY = {
@@ -229,6 +253,8 @@ function createDefaultProfile() {
       react: {},
       locomotion: {}
     },
+    needsTendencyExplicit: null,
+    dailyRhythm: { chronotype: 'balanced', energyHourShift: 0 },
     source: null
   }
 }
@@ -380,6 +406,10 @@ function normalizeCharacterProfile(bundle = null) {
     canonicalPersona,
     behaviorTendency,
     motionPresetGroups: normalizeMotionPresetGroups(generated.motionPresetGroups),
+    // 캐릭터 프로필 구동 — 욕구 성향·하루 리듬. 사용자 파일이 생성 프로필보다
+    // 우선(페르소나 슬라이더와 같은 오버라이드 철학).
+    needsTendencyExplicit: pickExplicitNeedsTendency(bundle.user?.needsTendency ?? generated.needsTendency),
+    dailyRhythm: normalizeDailyRhythm(bundle.user?.dailyRhythm ?? generated.dailyRhythm),
     source: bundle
   }
 }
@@ -430,10 +460,25 @@ export class MotionManager {
     // Stable vector — same object ref across frames so callers can cache.
     this._vector = createEmptyVector()
     refreshVector(this._vector, this.profile)
+    this._refreshNeedsTendency()
+  }
+
+  // 프로필 구동 욕구 성향 재계산. 반드시 personality/persona가 최종 확정된 뒤
+  // (오버라이드 머지 포함)에 불러야 한다 — Codex MUST-FIX: user 슬라이더가
+  // 파생에 반영되도록 setCharacterProfile/setPersonalityOverrides 끝에서 호출.
+  _refreshNeedsTendency() {
+    this._needsTendency = deriveNeedsTendency({
+      personality: this.personality,
+      persona: this.profile.canonicalPersona,
+      explicit: this.profile.needsTendencyExplicit
+    })
   }
 
   setPersonality(personality) {
     this.personality = normalizePersonality(personality)
+    // 버킷이 바뀌면 파생 욕구 성향도 따라가야 한다 — 외부에서 직접 부르는
+    // 미래 호출자 보호(Codex NICE-TO-HAVE). 생성자는 직접 대입이라 안 탄다.
+    if (this.profile) this._refreshNeedsTendency()
   }
 
   getPersonality() {
@@ -460,6 +505,7 @@ export class MotionManager {
     }
     this.setPersonality(this.profile.personality)
     refreshVector(this._vector, this.profile)
+    this._refreshNeedsTendency()
     this.lastMotion = null
     this.cooldowns.clear()
   }
@@ -468,6 +514,7 @@ export class MotionManager {
     this.profile = createDefaultProfile()
     this.setPersonality(this.profile.personality)
     refreshVector(this._vector, this.profile)
+    this._refreshNeedsTendency()
     this.lastMotion = null
     this.cooldowns.clear()
   }
@@ -486,6 +533,7 @@ export class MotionManager {
       this.profile.behaviorTendency
     ))
     refreshVector(this._vector, this.profile)
+    this._refreshNeedsTendency() // 라이브 슬라이더도 욕구 성향에 반영(Codex)
   }
 
   _mergePersonaOverrides(overrides) {
@@ -512,6 +560,17 @@ export class MotionManager {
 
   getCharacterProfile() {
     return this.profile
+  }
+
+  // 프로필 구동 욕구 상승 성향(파생+명시 오버라이드 합성, [0.5,1.6] 클램프됨).
+  // needsManager.riseMult가 매 tick 읽는다.
+  getNeedsTendency() {
+    return this._needsTendency
+  }
+
+  // 프로필 구동 하루 리듬 — { chronotype, energyHourShift }.
+  getDailyRhythm() {
+    return this.profile.dailyRhythm || { chronotype: 'balanced', energyHourShift: 0 }
   }
 
   getBehaviorConfig() {

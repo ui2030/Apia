@@ -3,7 +3,7 @@
  * 머무름 의도). 순수/주입식이라 결정론으로 검증한다.
  */
 import { describe, it, expect } from 'vitest'
-import { pickBehaviorSlot, createLingerIntent } from '../src/behaviorPlanner.js'
+import { pickBehaviorSlot, createLingerIntent, timeOfDayEnergyCurve } from '../src/behaviorPlanner.js'
 
 describe('pickBehaviorSlot — probability shape', () => {
   it('maps the rng range onto idle → walk → furniture in order', () => {
@@ -49,6 +49,32 @@ describe('pickBehaviorSlot — probability shape', () => {
   it('survives garbage inputs with a sane default', () => {
     expect(['idle', 'walk', 'furniture']).toContain(pickBehaviorSlot({ idleBias: NaN, walkShare: -3, rng: () => 0.5 }))
     expect(pickBehaviorSlot()).toMatch(/^(idle|walk|furniture)$/)
+  })
+})
+
+describe('timeOfDayEnergyCurve — 크로노타입 시프트', () => {
+  it('balanced (shift 0) keeps the engine base curve', () => {
+    expect(timeOfDayEnergyCurve(3)).toBe(0.55) // 깊은 밤
+    expect(timeOfDayEnergyCurve(8)).toBe(1.12) // 아침
+    expect(timeOfDayEnergyCurve(13)).toBe(1.0) // 낮
+    expect(timeOfDayEnergyCurve(19)).toBe(0.9) // 저녁
+    expect(timeOfDayEnergyCurve(23)).toBe(0.65) // 늦은 밤
+  })
+
+  it('morning person (+2) is lively earlier and calm earlier', () => {
+    expect(timeOfDayEnergyCurve(5, 2)).toBe(1.12) // 5시부터 이미 아침 활기
+    expect(timeOfDayEnergyCurve(21, 2)).toBe(0.65) // 21시엔 벌써 늦은 밤 모드
+  })
+
+  it('evening person (−3) is slow in the morning and lively at night', () => {
+    expect(timeOfDayEnergyCurve(8, -3)).toBe(0.55) // 8시에도 아직 깊은 밤 느낌
+    expect(timeOfDayEnergyCurve(23, -3)).toBe(0.9) // 23시에도 저녁 수준 활기
+  })
+
+  it('wraps around midnight and survives garbage input', () => {
+    expect(timeOfDayEnergyCurve(23, 2)).toBe(timeOfDayEnergyCurve(1)) // 23+2=25→1
+    expect(timeOfDayEnergyCurve(NaN)).toBe(1.0) // 기본 12시 취급
+    expect(timeOfDayEnergyCurve(8, NaN)).toBe(1.12) // shift 무효 → 0
   })
 })
 

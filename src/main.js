@@ -30,7 +30,7 @@ import { createPropManager } from './propManager.js'
 import { createNeedsManager } from './needsManager.js'
 import { createAdaptation } from './adaptationStore.js'
 import { createPresenceMonitor } from './presenceManager.js'
-import { pickBehaviorSlot, createLingerIntent } from './behaviorPlanner.js'
+import { pickBehaviorSlot, createLingerIntent, timeOfDayEnergyCurve } from './behaviorPlanner.js'
 import { resolveMotionAsset, resolveMmdMotionAsset } from './motionAssets.js'
 import {
   buildBoneRegistry,
@@ -295,14 +295,11 @@ const motionManager = new MotionManager({
   personality: 'calm'
 })
 
-// J단계(상황 인지) — 시간대별 활기 계수. 아침 활기·밤 차분. 자율 행동은 수 초마다
-// 도므로 계단식으로 충분(경계 급변은 체감 작음). hour 인자는 테스트용.
+// J단계(상황 인지) — 시간대별 활기 계수. 곡선 모양은 엔진(behaviorPlanner),
+// "언제 활기찬가"는 캐릭터 프로필(dailyRhythm 크로노타입 시프트)이 정한다.
+// hour 인자는 테스트용.
 function timeOfDayEnergy(hour = new Date().getHours()) {
-  if (hour < 6) return 0.55   // 깊은 밤 — 느긋
-  if (hour < 11) return 1.12  // 아침 — 활기
-  if (hour < 17) return 1.0   // 낮 — 평소
-  if (hour < 22) return 0.9   // 저녁 — 살짝 차분
-  return 0.65                 // 늦은 밤
+  return timeOfDayEnergyCurve(hour, motionManager.getDailyRhythm?.()?.energyHourShift || 0)
 }
 
 // J단계(상황 인지) — 대화 최근성. lastInteractionAt은 "사용자 입력 시점"이 아니라
@@ -498,7 +495,11 @@ const propManager = createPropManager({ scene, getCurrentModel: () => currentMod
 
 // J단계 거주형 비서 — 욕구+성격 유틸리티 AI. 시간에 따라 욕구가 차오르고, 활동이
 // 채워준다(정상 완료 시에만). 성격으로 상승 속도 가중.
-const needsManager = createNeedsManager({ getPersonality: () => motionManager.getPersonality?.() })
+const needsManager = createNeedsManager({
+  getPersonality: () => motionManager.getPersonality?.(),
+  // 프로필 구동 — 캐릭터별 욕구 상승 성향(페르소나 파생+프로필 명시 오버라이드).
+  getRiseTendency: () => motionManager.getNeedsTendency?.() || null
+})
 // 시작 스코프('default')의 저장분 복원 + 꺼져 있던 시간만큼 욕구 반영.
 loadNeedsData()
 

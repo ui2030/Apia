@@ -8,7 +8,7 @@
  * injected so everything is deterministic.
  */
 import { describe, it, expect } from 'vitest'
-import { createNeedsManager } from '../src/needsManager.js'
+import { createNeedsManager, deriveNeedsTendency, PERSONALITY_RISE } from '../src/needsManager.js'
 
 // Deterministic clock + rng helpers.
 function fixedRng(value = 0) { return () => value }
@@ -40,6 +40,48 @@ describe('needsManager — rise over time (tick)', () => {
     t = 10 * 60000
     active.tick(); shy.tick()
     expect(active.snapshot().boredom).toBeGreaterThan(shy.snapshot().boredom)
+  })
+
+  it('injected getRiseTendency (profile-driven) overrides the personality bucket', () => {
+    let t = 0
+    const n = createNeedsManager({
+      now: () => t,
+      getPersonality: () => 'active', // 버킷대로면 boredom 1.4배
+      getRiseTendency: () => ({ boredom: 0.5 }) // 프로필이 "안 심심해하는 성격"이라 명시
+    })
+    const plain = createNeedsManager({ now: () => t, getPersonality: () => 'active' })
+    t = 10 * 60000
+    n.tick(); plain.tick()
+    expect(n.snapshot().boredom).toBeLessThan(plain.snapshot().boredom)
+    // 성향에 없는 키(thirst)는 버킷/기본으로 폴백해 정상 상승.
+    expect(n.snapshot().thirst).toBeCloseTo(plain.snapshot().thirst, 10)
+  })
+})
+
+describe('deriveNeedsTendency — 프로필 구동 파생', () => {
+  it('default axes (0.5) reproduce the personality bucket values (무회귀)', () => {
+    const t = deriveNeedsTendency({ personality: 'active', persona: {} })
+    expect(t.boredom).toBeCloseTo(PERSONALITY_RISE.active.boredom * 1.0, 5)
+    expect(t.comfort).toBeCloseTo(PERSONALITY_RISE.active.comfort * 1.0, 5)
+    expect(t.thirst).toBe(1) // 생리 욕구 중립
+  })
+
+  it('continuous axes modulate around the bucket', () => {
+    const lowConf = deriveNeedsTendency({ personality: 'calm', persona: { confidence: 0.1 } })
+    const highConf = deriveNeedsTendency({ personality: 'calm', persona: { confidence: 0.9 } })
+    expect(lowConf.comfort).toBeGreaterThan(highConf.comfort)
+    expect(lowConf.care).toBeGreaterThan(highConf.care)
+  })
+
+  it('explicit values win and are clamped to [0.5, 1.6]', () => {
+    const t = deriveNeedsTendency({ personality: 'shy', persona: {}, explicit: { comfort: 9, boredom: 0.01 } })
+    expect(t.comfort).toBe(1.6)
+    expect(t.boredom).toBe(0.5)
+  })
+
+  it('derived values are also clamped (extreme bucket × axis stays ≤1.6)', () => {
+    const t = deriveNeedsTendency({ personality: 'active', persona: { energy: 1 } })
+    expect(t.boredom).toBeLessThanOrEqual(1.6)
   })
 })
 

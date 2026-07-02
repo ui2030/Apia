@@ -48,6 +48,77 @@ describe('pickIdleMotion flavor steering', () => {
       expect(MOTION_LIBRARY.idle.active).toContain(pick('active', key))
     }
   })
+})
+
+describe('profile-driven needs tendency + daily rhythm', () => {
+  function bundleWith(generated = {}, user = {}) {
+    return { generated, user, interpretations: {} }
+  }
+
+  it('default profile → neutral-ish tendency (calm bucket, axes 0.5)', () => {
+    const m = new MotionManager({})
+    const t = m.getNeedsTendency()
+    expect(t.thirst).toBe(1)
+    expect(t.boredom).toBeCloseTo(1.0, 5) // 0.85 + 0.5*0.3
+    expect(t.comfort).toBeCloseTo(1.0, 5) // 1.15 - 0.5*0.3
+    expect(m.getDailyRhythm()).toEqual({ chronotype: 'balanced', energyHourShift: 0 })
+  })
+
+  it('high-energy persona raises boredom tendency (derived, continuous)', () => {
+    const m = new MotionManager({})
+    m.setCharacterProfile(bundleWith({ canonicalPersona: { energy: 0.9, expressiveness: 0.7 } }))
+    // energy 0.9 → active 버킷(1.4) × (0.85+0.27)=1.12 → 1.568
+    expect(m.getNeedsTendency().boredom).toBeGreaterThan(1.4)
+    expect(m.getNeedsTendency().boredom).toBeLessThanOrEqual(1.6) // 클램프
+  })
+
+  it('explicit needsTendency in the profile overrides derivation and clamps', () => {
+    const m = new MotionManager({})
+    m.setCharacterProfile(bundleWith({ needsTendency: { thirst: 1.5, boredom: 9, care: 0.1, junk: 3 } }))
+    const t = m.getNeedsTendency()
+    expect(t.thirst).toBe(1.5)
+    expect(t.boredom).toBe(1.6) // 상한 클램프
+    expect(t.care).toBe(0.5) // 하한 클램프
+    expect(t).not.toHaveProperty('junk')
+  })
+
+  it('user profile needsTendency wins over generated', () => {
+    const m = new MotionManager({})
+    m.setCharacterProfile(bundleWith(
+      { needsTendency: { thirst: 1.4 } },
+      { needsTendency: { thirst: 0.8 } }
+    ))
+    expect(m.getNeedsTendency().thirst).toBe(0.8)
+  })
+
+  it('chronotype normalizes with whitelist and user precedence', () => {
+    const m = new MotionManager({})
+    m.setCharacterProfile(bundleWith({ dailyRhythm: { chronotype: 'evening' } }))
+    expect(m.getDailyRhythm()).toEqual({ chronotype: 'evening', energyHourShift: -3 })
+    m.setCharacterProfile(bundleWith(
+      { dailyRhythm: { chronotype: 'evening' } },
+      { dailyRhythm: { chronotype: 'MORNING' } }
+    ))
+    expect(m.getDailyRhythm().energyHourShift).toBe(2)
+    m.setCharacterProfile(bundleWith({ dailyRhythm: { chronotype: 'vampire' } }))
+    expect(m.getDailyRhythm().chronotype).toBe('balanced')
+  })
+
+  it('live persona slider (setPersonalityOverrides) re-derives the tendency', () => {
+    const m = new MotionManager({})
+    const before = m.getNeedsTendency().comfort
+    m.setPersonalityOverrides({ confidence: 0.1 }) // 소심 → 안락 갈구↑
+    const after = m.getNeedsTendency().comfort
+    expect(after).toBeGreaterThan(before)
+  })
+
+  it('clearCharacterProfile resets tendency and rhythm to defaults', () => {
+    const m = new MotionManager({})
+    m.setCharacterProfile(bundleWith({ needsTendency: { thirst: 1.5 }, dailyRhythm: { chronotype: 'morning' } }))
+    m.clearCharacterProfile()
+    expect(m.getNeedsTendency().thirst).toBe(1)
+    expect(m.getDailyRhythm().energyHourShift).toBe(0)
+  })
 
   it('idle_wave is intentionally both energetic and engaged (AI clip reachable in both)', () => {
     expect(GESTURE_FLAVORS.energetic.has('idle_wave')).toBe(true)
