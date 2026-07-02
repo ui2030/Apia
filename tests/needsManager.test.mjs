@@ -74,6 +74,35 @@ describe('needsManager — chooseActivity', () => {
     expect(pick.id).toBe('rest') // cooldown pushed water below rest
   })
 
+  it('directive activityHint flips a close call toward the hinted activity', () => {
+    // water: thirst 0.5×0.85 = 0.425. coffee: comfort 0.7×0.6 = 0.42.
+    // hint ×1.25 → coffee 0.525 beats water.
+    const base = { thirst: 0.5, comfort: 0.7 }
+    const n = createNeedsManager({ now: () => 0, rng: fixedRng(), initial: base })
+    expect(n.chooseActivity([WATER, COFFEE], { activityHint: 'brewCoffee' }).id).toBe('brewCoffee')
+  })
+
+  it('activityHint cannot push a zero-need activity over the threshold', () => {
+    const n = createNeedsManager({ now: () => 0, rng: fixedRng() }) // all needs 0
+    expect(n.chooseActivity([WATER, COFFEE], { activityHint: 'brewCoffee' })).toBeNull()
+  })
+
+  it('hint and focus do not defeat the cooldown penalty (no fixation)', () => {
+    let t = 0
+    const n = createNeedsManager({ now: () => t, rng: fixedRng() })
+    n.setNeed('comfort', 1)
+    n.setNeed('boredom', 1)
+    n.setNeed('tiredness', 0.5)
+    expect(n.chooseActivity([COFFEE, REST]).id).toBe('brewCoffee')
+    n.satisfy(COFFEE)
+    n.setNeed('comfort', 1)
+    n.setNeed('boredom', 1)
+    t = 5000 // within 90s cooldown
+    // even with hint+focus stacked toward coffee, cooldown wins → rest
+    const pick = n.chooseActivity([COFFEE, REST], { activityHint: 'brewCoffee', directiveFocus: 'self' })
+    expect(pick.id).toBe('rest')
+  })
+
   it('directive focus match flips a close call toward the focused activity', () => {
     // water: thirst 0.5×0.85 = 0.425. coffee: comfort 0.7×0.6 = 0.42 (boredom 0).
     // Without focus water edges it; with focus:self coffee ×1.15 = 0.483 clears

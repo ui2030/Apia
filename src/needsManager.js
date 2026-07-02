@@ -76,19 +76,27 @@ export function createNeedsManager({ now = () => Date.now(), rng = Math.random, 
       if (fill[k]) score += needs[k] * fill[k]
     }
     const last = lastCompletedAt.get(activity?.id)
-    if (last != null && nowMs - last < COOLDOWN_MS) score *= COOLDOWN_PENALTY
-    return score
+    const cooling = last != null && nowMs - last < COOLDOWN_MS
+    if (cooling) score *= COOLDOWN_PENALTY
+    return { score, cooling }
   }
 
   // 후보 활동 중 점수 최고를 고른다(임계 미만이면 null). 동점 부근은 무작위.
-  // ctx.directiveFocus가 활동 focus와 맞으면 약간 가산(LLM 디렉터의 약한 색칠).
+  // ctx.directiveFocus가 활동 focus와 맞으면 약간 가산, ctx.activityHint가 id와
+  // 일치하면 조금 더 가산(LLM 디렉터의 약한 색칠 — 임계는 그대로라 욕구가 0인
+  // 활동을 강제하진 못한다). 쿨다운 중인 활동엔 어떤 가산도 안 붙는다 — LLM이
+  // 같은 힌트를 반복해도 고착 방지 페널티를 무력화 못 함(Codex MUST-FIX).
   function chooseActivity(activities = [], ctx = {}) {
     const nowMs = now()
     const scored = []
     for (const a of activities) {
       if (!a || !a.needFill) continue
-      let s = scoreActivity(a, nowMs)
-      if (ctx.directiveFocus && a.focus && ctx.directiveFocus === a.focus) s *= 1.15
+      const { score, cooling } = scoreActivity(a, nowMs)
+      let s = score
+      if (!cooling) {
+        if (ctx.directiveFocus && a.focus && ctx.directiveFocus === a.focus) s *= 1.15
+        if (ctx.activityHint && a.id === ctx.activityHint) s *= 1.25
+      }
       if (s > 0) scored.push({ a, s })
     }
     if (!scored.length) return null

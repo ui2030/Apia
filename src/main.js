@@ -478,7 +478,13 @@ function runBehaviorDirector() {
     idleStreakMs: lastInteractionAt ? Date.now() - lastInteractionAt : 0,
     // J단계 — 물리적 존재(유휴 기반). attentiveness(대화 최근성)와 다른 축.
     presence: presence.getState(),
-    awayMs: presence.awayMsNow()
+    awayMs: presence.awayMsNow(),
+    // J단계 — 디렉터가 캐릭터의 내부 상태(욕구)와 방의 어포던스를 보고
+    // activityHint로 활동을 제안할 수 있게 한다(가산만, 강제 아님).
+    needs: needsManager.snapshot(),
+    activities: (worldManager?.getActivityObjects?.() || []).map((o) => o.activity?.id).filter(Boolean),
+    currentActivity: activityRunner.isActive() ? activityRunner.currentId() : null,
+    lastActivity: lastActivityId
   })
   // fire-and-forget — 실패는 runner가 흡수, directive는 다음 틱에 반영.
   Promise.resolve(behaviorDirector.maybeRun(ctx)).catch(() => {})
@@ -509,10 +515,17 @@ const activityRunner = createActivityRunner({
   setReach: (on) => propManager.setReach(on),
   onFinish: (reason, activity) => {
     // 만족은 드물고 유실되면 "방금 마신 커피"가 되살아나므로 즉시 영속.
-    if (reason === 'complete' && activity) { needsManager.satisfy(activity); saveNeeds(true) }
+    if (reason === 'complete' && activity) {
+      needsManager.satisfy(activity)
+      saveNeeds(true)
+      lastActivityId = activity.id || null // 디렉터 컨텍스트용(직전 완료 활동)
+    }
     scheduleAutoBehavior()
   }
 })
+
+// J단계 — 디렉터 컨텍스트용 직전 완료 활동.
+let lastActivityId = null
 
 // J단계 — 사용자 존재 인지. 메인 프로세스의 유휴초 폴링(5s)+절전/잠금 이벤트를
 // presenceManager 상태기계에 넣고, 전이에 반응한다. 복귀 인사·recordPace 스킵·
@@ -696,7 +709,10 @@ function maybeStartActivity() {
   if (!activities.length) return false
 
   const directive = behaviorDirector.current?.()
-  const pick = needsManager.chooseActivity(activities, { directiveFocus: directive?.focus || null })
+  const pick = needsManager.chooseActivity(activities, {
+    directiveFocus: directive?.focus || null,
+    activityHint: directive?.activityHint || null
+  })
   if (!pick) return false
   return activityRunner.start(pick) === true
 }

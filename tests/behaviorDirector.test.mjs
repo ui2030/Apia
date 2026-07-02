@@ -21,11 +21,19 @@ const BASE_CFG = { walkShare: 0.36, inPlaceIdleBias: 0.28, chairBias: 0.5 }
 describe('buildDirectorContext', () => {
   it('normalizes and clamps fields', () => {
     const c = buildDirectorContext({ hour: 14, personality: 'active', attentiveness: 0.731, idleStreakMs: 185000, presence: 'away', awayMs: 421000 })
-    expect(c).toEqual({ hour: 14, personality: 'active', attentiveness: 0.73, idleMinutes: 3, presence: 'away', awayMinutes: 7 })
+    expect(c).toEqual({
+      hour: 14, personality: 'active', attentiveness: 0.73, idleMinutes: 3,
+      presence: 'away', awayMinutes: 7,
+      needs: {}, activities: [], currentActivity: null, lastActivity: null
+    })
   })
   it('falls back on missing/invalid input', () => {
     const c = buildDirectorContext({})
-    expect(c).toEqual({ hour: null, personality: 'calm', attentiveness: 0, idleMinutes: 0, presence: 'active', awayMinutes: 0 })
+    expect(c).toEqual({
+      hour: null, personality: 'calm', attentiveness: 0, idleMinutes: 0,
+      presence: 'active', awayMinutes: 0,
+      needs: {}, activities: [], currentActivity: null, lastActivity: null
+    })
   })
   it('clamps out-of-range hour and attentiveness', () => {
     const c = buildDirectorContext({ hour: 99, attentiveness: 5 })
@@ -35,6 +43,19 @@ describe('buildDirectorContext', () => {
   it('whitelists presence values (unknown → active)', () => {
     expect(buildDirectorContext({ presence: 'zombie' }).presence).toBe('active')
     expect(buildDirectorContext({ presence: 'short-idle' }).presence).toBe('short-idle')
+  })
+  it('keeps only the top-3 needs, clamped and rounded', () => {
+    const c = buildDirectorContext({ needs: { thirst: 0.917, boredom: 7, comfort: 0.2, care: 0.31, hygiene: 'x' } })
+    expect(c.needs).toEqual({ boredom: 1, thirst: 0.92, care: 0.31 }) // top-3 by pressure
+  })
+  it('filters activity ids to a safe shape and caps the list at 8', () => {
+    const dirty = ['brewCoffee', 'rest', 'bad id!', '<script>', 'x'.repeat(40), ...Array.from({ length: 10 }, (_, i) => `act_${i}`)]
+    const c = buildDirectorContext({ activities: dirty, currentActivity: 'brewCoffee', lastActivity: 'nope nope' })
+    expect(c.activities).toHaveLength(8)
+    expect(c.activities.slice(0, 2)).toEqual(['brewCoffee', 'rest'])
+    expect(c.activities.every((id) => /^[a-zA-Z0-9_-]{1,32}$/.test(id))).toBe(true)
+    expect(c.currentActivity).toBe('brewCoffee')
+    expect(c.lastActivity).toBeNull() // unsafe shape rejected
   })
 })
 
@@ -52,6 +73,20 @@ describe('parseDirective', () => {
     const d = parseDirective(raw, now)
     expect(d.mood).toBe('focused')
     expect(d.activityBias).toBe(-0.3)
+  })
+
+  it('accepts a safe activityHint and rejects unsafe/oversize ones', () => {
+    expect(parseDirective({ mood: 'calm', activityHint: ' brewCoffee ' }, now).activityHint).toBe('brewCoffee')
+    expect(parseDirective({ mood: 'calm', activityHint: 'rm -rf /' }, now).activityHint).toBeNull()
+    expect(parseDirective({ mood: 'calm', activityHint: 'x'.repeat(40) }, now).activityHint).toBeNull()
+    expect(parseDirective({ mood: 'calm' }, now).activityHint).toBeNull()
+  })
+
+  it('a directive with only an activityHint is still usable', () => {
+    const d = parseDirective({ activityHint: 'rest' }, now)
+    expect(d).not.toBeNull()
+    expect(d.activityHint).toBe('rest')
+    expect(d.mood).toBeNull()
   })
 
   it('rejects non-JSON strings', () => {

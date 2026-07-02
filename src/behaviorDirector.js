@@ -42,15 +42,38 @@ function clamp(v, lo, hi) {
 // presence는 물리적 존재(시스템 유휴 기반) — attentiveness(대화 최근성)와 다른
 // 축이다. away=자리에 없음이지 무관심이 아니다(프롬프트에도 명시).
 const PRESENCES = new Set(['active', 'short-idle', 'away'])
+// 활동 id는 앱이 정의하는 값이지만 프롬프트에 나가는 것이라 안전한 모양만 통과.
+const SAFE_ID = /^[a-zA-Z0-9_-]{1,32}$/
+const MAX_ACTIVITIES = 8
+const MAX_NEEDS = 3
 
-export function buildDirectorContext({ hour, personality, attentiveness, idleStreakMs, presence, awayMs } = {}) {
+function safeId(v) {
+  return typeof v === 'string' && SAFE_ID.test(v) ? v : null
+}
+
+// 욕구 스냅샷 → 압력 큰 순 상위 MAX_NEEDS개만, 0..1 clamp + 소수 2자리.
+function topNeeds(needs) {
+  if (!needs || typeof needs !== 'object') return {}
+  const entries = []
+  for (const [k, v] of Object.entries(needs)) {
+    if (Number.isFinite(v)) entries.push([k, Number(clamp(v, 0, 1).toFixed(2))])
+  }
+  entries.sort((a, b) => b[1] - a[1])
+  return Object.fromEntries(entries.slice(0, MAX_NEEDS))
+}
+
+export function buildDirectorContext({ hour, personality, attentiveness, idleStreakMs, presence, awayMs, needs, activities, currentActivity, lastActivity } = {}) {
   return {
     hour: Number.isFinite(hour) ? Math.floor(clamp(hour, 0, 23)) : null,
     personality: typeof personality === 'string' ? personality : 'calm',
     attentiveness: Number.isFinite(attentiveness) ? Number(clamp(attentiveness, -1, 1).toFixed(2)) : 0,
     idleMinutes: Number.isFinite(idleStreakMs) ? Math.max(0, Math.round(idleStreakMs / 60000)) : 0,
     presence: PRESENCES.has(presence) ? presence : 'active',
-    awayMinutes: Number.isFinite(awayMs) ? Math.max(0, Math.round(awayMs / 60000)) : 0
+    awayMinutes: Number.isFinite(awayMs) ? Math.max(0, Math.round(awayMs / 60000)) : 0,
+    needs: topNeeds(needs),
+    activities: Array.isArray(activities) ? activities.map(safeId).filter(Boolean).slice(0, MAX_ACTIVITIES) : [],
+    currentActivity: safeId(currentActivity),
+    lastActivity: safeId(lastActivity)
   }
 }
 
@@ -69,13 +92,16 @@ export function parseDirective(raw, now = Date.now()) {
   const mood = MOODS.has(obj.mood) ? obj.mood : null
   const focus = FOCI.has(obj.focus) ? obj.focus : null
   const hasBias = Number.isFinite(obj.activityBias)
-  if (!mood && !focus && !hasBias) return null // 쓸 차원이 하나도 없음
+  // 활동 제안(선택) — 안전한 id 모양만. 소비측(chooseActivity)이 정확 일치로만
+  // 쓰므로 방에 없는 id는 그냥 무해하게 무시된다.
+  const activityHint = safeId(typeof obj.activityHint === 'string' ? obj.activityHint.trim() : null)
+  if (!mood && !focus && !hasBias && !activityHint) return null // 쓸 차원이 하나도 없음
 
   const activityBias = hasBias ? clamp(obj.activityBias, -1, 1) : 0
   const ttlSec = Number.isFinite(obj.ttlSec) ? clamp(obj.ttlSec, TTL_MIN_SEC, TTL_MAX_SEC) : 300
   const note = typeof obj.note === 'string' ? obj.note.slice(0, NOTE_MAX) : ''
 
-  return { mood, focus, activityBias, note, expiresAt: now + ttlSec * 1000 }
+  return { mood, focus, activityBias, activityHint, note, expiresAt: now + ttlSec * 1000 }
 }
 
 export function directiveActive(directive, now = Date.now()) {
