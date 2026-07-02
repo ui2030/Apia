@@ -140,7 +140,12 @@ function playMotion(motion) {
       if (currentModel) currentModel._vmdClipActive = false
       return
     }
-    if (currentModel) currentModel._vmdClipActive = true
+    if (currentModel) {
+      currentModel._vmdClipActive = true
+      // one-shot 연기 클립 존중 게이트용 — 스케줄러가 클립 종료까지 새 자율
+      // 행동을 얹지 않게 loop 여부를 기록(_vmdClipActive가 꺼지면 무의미).
+      currentModel._activeClipLoop = asset.loop
+    }
     playMMDAnimation(asset.url, { loop: asset.loop })
       .catch((err) => {
         if (currentModel) currentModel._vmdClipActive = false
@@ -863,6 +868,14 @@ function scheduleAutoBehavior() {
         try { adaptation.recordPace(userRecent); saveAdaptation() } catch {}
       }
 
+      // 진행 중인 one-shot 연기 클립(기지개·초조 등 8~13s)은 끝까지 존중 —
+      // 그 위에 새 자율 행동을 얹지 않는다(연기 중간 전환은 관성 보간이 있어도
+      // 어색). 클립이 끝나면 _vmdClipActive가 꺼져 다음 틱이 정상 진행.
+      if (currentModel?._vmdClipActive && currentModel._activeClipLoop === false) {
+        scheduleAutoBehavior()
+        return
+      }
+
       // J단계 스마트 오브젝트 — 별도 저확률 "활동" 슬롯. 일반 가구 폴백에 숨기지
       // 않고 독립 확률로 둬 사물 행동 빈도를 따로 튜닝(Codex NICE-TO-HAVE).
       // 디렉터 focus:'self'(혼자 시간) + 차분/밤이면 약간 더 자주. 활동이 시작되면
@@ -890,13 +903,16 @@ function scheduleAutoBehavior() {
       const idleMood = behaviorConfig.idleMood || (behaviorConfig.attentiveness > 0.4 ? 'engaged' : undefined)
       // 4단계 적응 — 학습된 제스처 선호로 가중. 데이터 부족/미지 제스처는 1.0(탐험).
       const gestureBias = (m) => adaptation.getGestureBias(m)
+      // 클립 전용 연기 어휘 가용성 — 현재 모델 타입에 맞는 클립 파일이 실제로
+      // 있을 때만 후보에 포함(재배포 금지 팩 미보유 설치본 보호).
+      const clipAvail = (m) => (currentModel?.type === 'mmd' ? !!resolveMmdMotionAsset(m) : !!resolveMotionAsset(m))
       let handled = false
       let slotDone = null
 
       // ④ 행동 일관성 — 걷기 도착 후 첫 틱은 "둘러보는" 조용한 제스처로 잇는다
       // (의도 연쇄: 걸어간 자리에 목적이 생긴다). 1회성 소비, 45s 넘기면 만료.
       if (lingerIntent.consume()) {
-        const linger = motionManager.pickIdleMotion({ mood: 'quiet', bias: gestureBias })
+        const linger = motionManager.pickIdleMotion({ mood: 'quiet', bias: gestureBias, isClipAvailable: clipAvail })
         if (linger) {
           playMotion(linger)
           noteAutoGesture(linger.name)
@@ -909,7 +925,7 @@ function scheduleAutoBehavior() {
       // 연달아 나오는 걸 줄인다(완전 금지 아님 — 고착도 단조로움도 회피).
       const slot = handled ? null : pickBehaviorSlot({ idleBias, walkShare, lastSlot: lastBehaviorSlot })
       if (!handled && slot === 'idle') {
-        const idleGesture = motionManager.pickIdleMotion({ mood: idleMood, bias: gestureBias })
+        const idleGesture = motionManager.pickIdleMotion({ mood: idleMood, bias: gestureBias, isClipAvailable: clipAvail })
         if (idleGesture) {
           playMotion(idleGesture)
           noteAutoGesture(idleGesture.name) // 자율 재생된 제스처만 보상 후보(Codex)
@@ -936,7 +952,7 @@ function scheduleAutoBehavior() {
         if (handled) slotDone = 'furniture'
       }
       if (!handled) {
-        const idleMotion = motionManager.pickIdleMotion({ mood: idleMood, bias: gestureBias })
+        const idleMotion = motionManager.pickIdleMotion({ mood: idleMood, bias: gestureBias, isClipAvailable: clipAvail })
         playMotion(idleMotion)
         noteAutoGesture(idleMotion.name)
         slotDone = 'idle'

@@ -12,6 +12,11 @@
     "idle_look_down_soft":    { "path": "idle/look_down_soft.vmd",    "loop": false, "fadeIn": 0.4 },
     "idle_shift_weight":      { "path": "idle/shift_weight.vmd",      "loop": false, "fadeIn": 0.4 },
     "idle_small_fidget":      { "path": "idle/small_fidget.vmd",      "loop": false, "fadeIn": 0.4 },
+    "idle_air_scent":         { "path": "idle/air_scent.vmd",         "loop": false, "fadeIn": 0.4 },
+    "idle_impatient":         { "path": "idle/impatient.vmd",         "loop": false, "fadeIn": 0.4 },
+    "idle_skywatch":          { "path": "idle/skywatch.vmd",          "loop": false, "fadeIn": 0.4 },
+    "idle_stretch":           { "path": "idle/stretch.vmd",           "loop": false, "fadeIn": 0.4 },
+    "idle_sway":              { "path": "idle/sway.vmd",              "loop": false, "fadeIn": 0.4 },
 
     "talk_soft":              { "path": "talk/soft.vmd",              "loop": true,  "fadeIn": 0.3 },
     "talk_neutral":           { "path": "talk/neutral.vmd",           "loop": true,  "fadeIn": 0.3 },

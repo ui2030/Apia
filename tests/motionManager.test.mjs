@@ -50,6 +50,38 @@ describe('pickIdleMotion flavor steering', () => {
   })
 })
 
+describe('pickIdleMotion — 클립 전용 연기 어휘 가용성 필터', () => {
+  const CLIP_ONLY = ['idle_air_scent', 'idle_impatient', 'idle_skywatch', 'idle_stretch', 'idle_sway']
+
+  it('isClipAvailable 미주입이면 클립 전용 이름은 절대 안 나온다(보수 기본)', () => {
+    for (let i = 0; i < 60; i++) {
+      const name = new MotionManager({ personality: 'calm' }).pickIdleMotion({}).name
+      expect(CLIP_ONLY).not.toContain(name)
+    }
+  })
+
+  it('isClipAvailable=false면 제외, true면 후보에 포함된다', () => {
+    for (let i = 0; i < 60; i++) {
+      const name = new MotionManager({ personality: 'calm' }).pickIdleMotion({ isClipAvailable: () => false }).name
+      expect(CLIP_ONLY).not.toContain(name)
+    }
+    // 가용이면 언젠가 뽑힌다(calm 풀에 4종 편입 — 60회면 통계적으로 확실).
+    let seen = false
+    for (let i = 0; i < 60; i++) {
+      const name = new MotionManager({ personality: 'calm' }).pickIdleMotion({ isClipAvailable: () => true }).name
+      if (CLIP_ONLY.includes(name)) { seen = true; break }
+    }
+    expect(seen).toBe(true)
+  })
+
+  it('quiet flavor에서도 가용성 필터가 함께 작동한다', () => {
+    for (let i = 0; i < 40; i++) {
+      const name = new MotionManager({ personality: 'shy' }).pickIdleMotion({ mood: 'quiet', isClipAvailable: () => false }).name
+      expect(CLIP_ONLY).not.toContain(name)
+    }
+  })
+})
+
 describe('profile-driven needs tendency + daily rhythm', () => {
   function bundleWith(generated = {}, user = {}) {
     return { generated, user, interpretations: {} }

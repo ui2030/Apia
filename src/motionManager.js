@@ -35,6 +35,9 @@ const MOTION_LIBRARY = {
     // 절차적 idle(breath/gaze/fidget/weightshift) + 캐릭터다운 포즈 클립 혼합.
     // 포즈 클립(hands_clasped/ponder/…)은 .vmd가 있으면 재생, VRM·미존재면
     // 절차적 폴백. look_around/look_down은 절차적 시선 임펄스(main.js).
+    // 연기 클립(air_scent/skywatch/stretch/sway/impatient)은 2026-07-03 다각도
+    // 해부학 검수 통과분만 편입(fix_hair=치맛자락 걷어올림, tidy/tracker=회전·
+    // 이동 연출이라 탈락). 클립 전용이라 CLIP_ONLY_IDLE 가용성 필터를 탄다.
     shy: [
       'idle_breath_soft',
       'idle_look_down_soft',
@@ -42,7 +45,10 @@ const MOTION_LIBRARY = {
       'idle_hands_clasped',
       'idle_ponder',
       'idle_head_tilt_soft',
-      'idle_sway_relax'
+      'idle_sway_relax',
+      'idle_air_scent',
+      'idle_sway',
+      'idle_skywatch'
     ],
     active: [
       'idle_shift_weight',
@@ -53,7 +59,9 @@ const MOTION_LIBRARY = {
       'idle_head_tilt',
       'idle_lean_in',
       'idle_stretch_arms',
-      'idle_wave'
+      'idle_wave',
+      'idle_impatient',
+      'idle_stretch'
     ],
     calm: [
       'idle_breath_soft',
@@ -63,7 +71,11 @@ const MOTION_LIBRARY = {
       'idle_relaxed',
       'idle_head_tilt_soft',
       'idle_lean_in',
-      'idle_sway_relax'
+      'idle_sway_relax',
+      'idle_air_scent',
+      'idle_skywatch',
+      'idle_sway',
+      'idle_stretch'
     ]
   },
 
@@ -104,6 +116,16 @@ const MOTION_LIBRARY = {
   }
 }
 
+// 클립 전용 어휘 — 절차 폴백이 없는 연기 클립 이름들. pickIdleMotion이
+// isClipAvailable 콜백으로 파일 존재를 확인해, 없으면 후보에서 제외한다.
+const CLIP_ONLY_IDLE = new Set([
+  'idle_air_scent',
+  'idle_impatient',
+  'idle_skywatch',
+  'idle_stretch',
+  'idle_sway'
+])
+
 // J단계 — "듣는 듯한/관여된" idle 제스처(방금 대화 직후 선호). 갸웃·손 모음·
 // 생각·둘러보기는 사용자를 향한 주의로 읽힌다. hands_back/arms_crossed 같은
 // 닫힌/독립 포즈는 제외.
@@ -131,7 +153,8 @@ const ENERGETIC_IDLE = new Set([
   'idle_lean_in',
   'idle_look_around',
   'idle_look_around_soft', // calm 풀에도 있어 calm×energetic 교집합을 1→2로 (반복 방지)
-  'idle_hand_on_hip'
+  'idle_hand_on_hip',
+  'idle_stretch' // 연기 클립 — 기지개(활기 순간)
 ])
 const QUIET_IDLE = new Set([
   'idle_breath_soft',
@@ -140,7 +163,10 @@ const QUIET_IDLE = new Set([
   'idle_sway_relax',
   'idle_neutral',
   'idle_look_around_soft',
-  'idle_hands_clasped'
+  'idle_hands_clasped',
+  'idle_air_scent', // 연기 클립 — 뒷짐지고 여유
+  'idle_skywatch', // 연기 클립 — 눈 감고 평온(표정 트랙 포함)
+  'idle_sway' // 연기 클립 — 잔잔한 흔들림
 ])
 const FIDGETY_IDLE = new Set([
   'idle_small_fidget',
@@ -149,7 +175,8 @@ const FIDGETY_IDLE = new Set([
   'idle_head_tilt_soft',
   'idle_look_around',
   'idle_look_around_soft', // calm 풀에도 있어 calm×fidgety 교집합을 1→2로 (반복 방지)
-  'idle_hand_on_hip'
+  'idle_hand_on_hip',
+  'idle_impatient' // 연기 클립 — 초조하게 손 만지작
 ])
 const GESTURE_FLAVORS = {
   engaged: ENGAGED_IDLE,
@@ -635,8 +662,14 @@ export class MotionManager {
     this.cooldowns.set(motionName, Date.now() + this.cooldownMs)
   }
 
-  pickIdleMotion({ mood, bias } = {}) {
-    const candidates = this.getMotionCandidates('idle')
+  pickIdleMotion({ mood, bias, isClipAvailable } = {}) {
+    let candidates = this.getMotionCandidates('idle')
+    // 클립 전용 어휘 가용성 필터 — 연기 클립(재배포 금지 팩 등)은 절차 폴백이
+    // 없으므로, 파일이 없는 설치본/모델에선 후보에서 제외한다. 콜백 미주입이면
+    // 보수적으로 전부 제외(테스트·미지 소비자 안전, Codex MUST-FIX).
+    candidates = candidates.filter(
+      (m) => !CLIP_ONLY_IDLE.has(m) || (typeof isClipAvailable === 'function' && isClipAvailable(m))
+    )
     // J/2단계 — 디렉터(또는 attentiveness)가 제스처 flavor를 지시하면 그 flavor로
     // 후보를 좁힌다. mood가 알 수 없거나 null이면 전체 풀(무회귀), 알려진 flavor라도
     // 성격 어휘와 교집합이 2개 미만이면 전체 풀로 폴백(반복 방지·어휘 보존).
