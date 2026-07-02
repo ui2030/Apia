@@ -180,6 +180,37 @@ function runWithUnscaledMesh(mesh, fn) {
   }
 }
 
+// MMD 숨김 토글 파츠(제작자가 transparent+opacity 0으로 꺼둔 재질 — 여우꼬리·
+// 대체신발·OFF_* 등)가 본 패스/외곽선에서 **불투명 흰 셸**로 새는 것을 차단한다.
+// (실측: MMDToonMaterial+OutlineEffect 경로에서 opacity 0이 무시되고 흰색으로
+// 그려짐 — visible=false만이 본 패스·외곽선 둘 다 확실히 끈다.)
+// 재질 모프가 런타임에 opacity를 올릴 수 있으므로(예: 홍조 0→1) 일회성이 아니라
+// 매 프레임 동기화한다. 우리가 숨긴 재질(__hiddenByOpacity)만 복원하고, 다른
+// 코드가 숨긴 재질은 절대 강제로 켜지 않는다.
+// 트레이드오프: "opacity 0인데 그려져야 하는" 가상의 depth-only 패스는 미지원 —
+// 숨김 토글 파츠 관례가 압도적으로 일반적이라 그 쪽을 택한다.
+export function syncHiddenMaterialVisibility(materials, eps = 0.001) {
+  if (!materials) return 0
+  const list = Array.isArray(materials) ? materials : [materials]
+  let hidden = 0
+  for (const m of list) {
+    if (!m) continue
+    const shouldHide = m.transparent === true && (m.opacity ?? 1) <= eps
+    if (shouldHide) {
+      if (m.visible !== false) {
+        if (m.userData) m.userData.__hiddenByOpacity = true
+        m.visible = false
+      }
+      if (m.userData?.__hiddenByOpacity) hidden++
+    } else if (m.userData?.__hiddenByOpacity) {
+      // 모프가 다시 켠 재질 — 우리가 숨긴 것만 복원.
+      m.visible = true
+      delete m.userData.__hiddenByOpacity
+    }
+  }
+  return hidden
+}
+
 export function stabilizeMmdPhysics(mesh, { warmupCycles = 60 } = {}) {
   const helper = getMmdHelper()
   const item = helper?.objects?.get?.(mesh)

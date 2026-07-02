@@ -66,6 +66,7 @@ import {
   getMmdHelper,
   getAmmoRuntime,
   stabilizeMmdPhysics,
+  syncHiddenMaterialVisibility,
   applyAuthorTailLift,
   normalizeUrlToFetchable,
   loadOptionalJson,
@@ -1867,6 +1868,9 @@ function animate() {
         currentModel, delta, getBlinkValue(),
         motionManager.getPersonalityVector?.() || null,
       )
+      // 숨김 토글 파츠(opacity 0) 흰 셸 차단 — 모든 모프/재질 기록자(helper·
+      // lipsync·updateExpression) 뒤 = MMD 분기 맨 끝(Codex MUST-FIX 위치).
+      syncHiddenMaterialVisibility(currentModel.obj?.material)
     } else {
       updateCharacter(root, t, delta)
 
