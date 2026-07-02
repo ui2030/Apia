@@ -470,7 +470,12 @@ class ClaudeService:
         "string under 80 chars}. Guidance: late night -> sleepy/calm and low "
         "activity; morning -> livelier; just talked (high attentiveness) -> "
         "focus the user, lower activity; long idle -> more independent, higher "
-        "activity. Match the character's personality. Output ONLY the JSON."
+        "activity. `presence` is PHYSICAL: 'active'/'short-idle' means the user "
+        "is at the computer, 'away' (with awayMinutes) means they left the desk "
+        "— absence, NOT disinterest. When away, prefer focus 'room' or 'self' "
+        "and self-directed living; do not read it as the user ignoring the "
+        "character (attentiveness alone covers engagement while present). "
+        "Match the character's personality. Output ONLY the JSON."
     )
 
     async def decide_directive(

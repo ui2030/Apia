@@ -36,6 +36,7 @@ const PERSONALITY_RISE = {
 }
 
 const MAX_TICK_MS = 60000 // 한 틱 최대 1분치(절전 복귀 점프 방지)
+const OFFLINE_RISE_CAP = 0.5 // 오프라인 경과 반영 시 욕구당 최대 증가분
 const COOLDOWN_MS = 90000 // 같은 활동 재발동 억제 구간
 const COOLDOWN_PENALTY = 0.15
 const SCORE_THRESHOLD = 0.32 // 이 미만이면 활동 안 함(idle/walk로 폴백)
@@ -112,12 +113,35 @@ export function createNeedsManager({ now = () => Date.now(), rng = Math.random, 
     return { ...needs }
   }
 
+  // 저장된 상태를 복원한다(캐릭터 교체·앱 시작). 쿨다운은 세션 로컬이라 리셋.
+  function load(saved = null, nowMs = now()) {
+    for (const k of NEED_KEYS) {
+      needs[k] = saved && Number.isFinite(saved[k]) ? clamp01(saved[k]) : 0
+    }
+    lastCompletedAt.clear()
+    lastTickAt = nowMs
+  }
+
+  // 앱이 꺼져 있던(또는 잠금으로 멈춰 있던) 시간만큼 욕구를 올린다.
+  // 욕구별 증가분에 상한(OFFLINE_RISE_CAP)을 둬서 밤새 자리를 비워도 전부
+  // 만렙으로 시작해 아침마다 같은 활동 사슬이 결정론적으로 도는 걸 막는다
+  // ("아침엔 욕구가 좀 있는" 정도까지만). Codex: 상한은 목표값이 아니라 증가분.
+  function applyOfflineRise(elapsedMs, nowMs = now()) {
+    if (!(elapsedMs > 0)) return
+    const minutes = elapsedMs / 60000
+    for (const k of NEED_KEYS) {
+      const add = Math.min(BASE_RISE_PER_MIN[k] * riseMult(k) * minutes, OFFLINE_RISE_CAP)
+      needs[k] = clamp01(needs[k] + add)
+    }
+    lastTickAt = nowMs
+  }
+
   // 테스트/디버그용 — 욕구 직접 설정.
   function setNeed(key, value) {
     if (NEED_KEYS.includes(key)) needs[key] = clamp01(value)
   }
 
-  return { tick, chooseActivity, satisfy, snapshot, setNeed, NEED_KEYS }
+  return { tick, chooseActivity, satisfy, snapshot, load, applyOfflineRise, setNeed, NEED_KEYS }
 }
 
 export default createNeedsManager

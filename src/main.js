@@ -29,6 +29,7 @@ import { createActivityRunner } from './activityRunner.js'
 import { createPropManager } from './propManager.js'
 import { createNeedsManager } from './needsManager.js'
 import { createAdaptation } from './adaptationStore.js'
+import { createPresenceMonitor } from './presenceManager.js'
 import { resolveMotionAsset, resolveMmdMotionAsset } from './motionAssets.js'
 import {
   buildBoneRegistry,
@@ -308,18 +309,66 @@ let lastInteractionAt = 0 // ms; 0 = 아직 대화 없음
 
 // #1 적응 학습 — 사용자의 하루 리듬을 누적해 시간대 활기를 사용자에 맞춘다.
 // localStorage 영속(렌더러). 데이터 쌓이기 전엔 중립이라 안전.
-const ADAPT_KEY = 'apia-adaptation'
-const adaptation = createAdaptation((() => {
-  try { const s = localStorage.getItem(ADAPT_KEY); return s ? JSON.parse(s) : null } catch { return null }
-})())
+// J단계 — 학습·욕구는 캐릭터별 키로 분리한다(캐릭터마다 관계가 따로 쌓인다).
+// 예전 단일 키(apia-adaptation)는 per-char 키가 비어 있을 때 시드로만 읽는다.
+const ADAPT_KEY_PREFIX = 'apia-adaptation:'
+const LEGACY_ADAPT_KEY = 'apia-adaptation'
+function loadAdaptationData(key) {
+  try {
+    const s = localStorage.getItem(key) ?? localStorage.getItem(LEGACY_ADAPT_KEY)
+    return s ? JSON.parse(s) : null
+  } catch { return null }
+}
+let adaptKey = ADAPT_KEY_PREFIX + 'default'
+let adaptation = createAdaptation(loadAdaptationData(adaptKey))
 let _adaptSaveAt = 0
 function saveAdaptation(force = false) {
   try {
     const now = Date.now()
     if (!force && now - _adaptSaveAt < 5000) return // 쓰기 스로틀(force면 즉시=유실 방지)
     _adaptSaveAt = now
-    localStorage.setItem(ADAPT_KEY, JSON.stringify(adaptation.serialize()))
+    localStorage.setItem(adaptKey, JSON.stringify(adaptation.serialize()))
   } catch {}
+}
+
+// J단계 — 욕구 영속(캐릭터별). savedAt을 같이 저장해 다음 시작 때 오프라인
+// 경과분을 상한부로 반영한다(needsManager.applyOfflineRise).
+const NEEDS_KEY_PREFIX = 'apia-needs:'
+let needsKey = NEEDS_KEY_PREFIX + 'default'
+let _needsSaveAt = 0
+function saveNeeds(force = false) {
+  try {
+    const now = Date.now()
+    if (!force && now - _needsSaveAt < 5000) return
+    _needsSaveAt = now
+    localStorage.setItem(needsKey, JSON.stringify({ needs: needsManager.snapshot(), savedAt: now }))
+  } catch {}
+}
+function loadNeedsData() {
+  let saved = null
+  try {
+    const s = localStorage.getItem(needsKey)
+    saved = s ? JSON.parse(s) : null
+  } catch {}
+  needsManager.load(saved?.needs || null)
+  if (Number.isFinite(saved?.savedAt)) needsManager.applyOfflineRise(Date.now() - saved.savedAt)
+}
+
+// 캐릭터 교체 시 학습·욕구 스코프 전환. Codex MUST-FIX 두 가지 순서 보장:
+//  1) 저장은 항상 "현재" 키로 쓰므로 flush는 키를 바꾸기 전에(옛 캐릭터 몫으로).
+//  2) 로드는 새 프로필 적용 *후*에 — loadNeedsData의 오프라인 보정이 성격 가중
+//     (getPersonality)을 쓰므로, 먼저 부르면 옛 캐릭터 성격으로 계산된다.
+// 그래서 flush와 load를 분리해 applyCharacterProfileBundle이 프로필 적용을
+// 사이에 끼운다.
+function flushLearningScope() {
+  try { saveAdaptation(true); saveNeeds(true) } catch {}
+}
+function loadLearningScope(charId) {
+  const scope = charId || 'default'
+  adaptKey = ADAPT_KEY_PREFIX + scope
+  adaptation = createAdaptation(loadAdaptationData(adaptKey))
+  needsKey = NEEDS_KEY_PREFIX + scope
+  loadNeedsData()
 }
 
 // 4단계 적응 — 제스처 선호. 자율 idle 제스처가 *실제로 재생*된 것만 기록(Codex
@@ -425,7 +474,10 @@ function runBehaviorDirector() {
     hour: new Date().getHours(),
     personality: motionManager.getPersonality?.(),
     attentiveness: interactionRecencyFactor(),
-    idleStreakMs: lastInteractionAt ? Date.now() - lastInteractionAt : 0
+    idleStreakMs: lastInteractionAt ? Date.now() - lastInteractionAt : 0,
+    // J단계 — 물리적 존재(유휴 기반). attentiveness(대화 최근성)와 다른 축.
+    presence: presence.getState(),
+    awayMs: presence.awayMsNow()
   })
   // fire-and-forget — 실패는 runner가 흡수, directive는 다음 틱에 반영.
   Promise.resolve(behaviorDirector.maybeRun(ctx)).catch(() => {})
@@ -438,6 +490,8 @@ const propManager = createPropManager({ scene, getCurrentModel: () => currentMod
 // J단계 거주형 비서 — 욕구+성격 유틸리티 AI. 시간에 따라 욕구가 차오르고, 활동이
 // 채워준다(정상 완료 시에만). 성격으로 상승 속도 가중.
 const needsManager = createNeedsManager({ getPersonality: () => motionManager.getPersonality?.() })
+// 시작 스코프('default')의 저장분 복원 + 꺼져 있던 시간만큼 욕구 반영.
+loadNeedsData()
 
 // J단계 스마트 오브젝트 — 활동 시퀀서(커피 한 잔 등 사물 행동 사슬). 기존 원시
 // 동작 + 소품에만 의존. 정상 완료(complete) 시에만 욕구를 충족하고, abort면 안 함.
@@ -453,10 +507,84 @@ const activityRunner = createActivityRunner({
   detachProp: () => propManager.detach(),
   setReach: (on) => propManager.setReach(on),
   onFinish: (reason, activity) => {
-    if (reason === 'complete' && activity) needsManager.satisfy(activity)
+    // 만족은 드물고 유실되면 "방금 마신 커피"가 되살아나므로 즉시 영속.
+    if (reason === 'complete' && activity) { needsManager.satisfy(activity); saveNeeds(true) }
     scheduleAutoBehavior()
   }
 })
+
+// J단계 — 사용자 존재 인지. 메인 프로세스의 유휴초 폴링(5s)+절전/잠금 이벤트를
+// presenceManager 상태기계에 넣고, 전이에 반응한다. 복귀 인사·recordPace 스킵·
+// 디렉터 컨텍스트·잠금 중 자율행동 정지가 이 상태를 읽는다.
+const presence = createPresenceMonitor({ onTransition: handlePresenceTransition })
+// 잠금/절전 자율행동 정지. Codex MUST-FIX: 잠금과 절전은 독립 사건이라 플래그를
+// 분리한다 — 잠금→절전→resume 순서에서 resume이 (아직 잠금인데) 정지를 풀면
+// 잠금 화면 뒤에서 행동이 돌고 욕구 보정 구간도 끊긴다.
+let pauseLocked = false
+let pauseSuspended = false
+let powerPausedAt = 0 // 정지 시작 시각(0=정상). 두 플래그가 다 풀려야 끝난다.
+let pauseResumeTimer = null
+const RESUME_GRACE_MS = 8000 // 재개 유예 — 복귀 확정(유휴 폴링)·인사 기회 먼저
+
+function startPowerPause() {
+  clearTimeout(pauseResumeTimer)
+  pauseResumeTimer = null
+  if (!powerPausedAt) powerPausedAt = Date.now()
+  clearAutoBehaviorTimer()
+}
+
+function maybeEndPowerPause() {
+  if (pauseLocked || pauseSuspended) return // 아직 다른 쪽이 정지 중
+  if (powerPausedAt) {
+    // Codex MUST-FIX: 정지 동안 needs tick이 안 돌았으므로 경과분을 상한부 반영.
+    needsManager.applyOfflineRise(Date.now() - powerPausedAt)
+    powerPausedAt = 0
+  }
+  // Codex MUST-FIX: 즉시 재예약하면 복귀 확정(다음 유휴 폴링, ≤5s) 전에 활동이
+  // 시작돼 인사를 no-activity 게이트로 막을 수 있다. 한 유예를 두고 재개한다 —
+  // 입력 없이 잠금이 풀린 경우에도 유예 뒤엔 자율 생활 재개(영구 동결 방지).
+  clearTimeout(pauseResumeTimer)
+  pauseResumeTimer = setTimeout(() => {
+    pauseResumeTimer = null
+    scheduleAutoBehavior()
+  }, RESUME_GRACE_MS)
+}
+
+function handlePresenceTransition(evt) {
+  if (evt.type !== 'user-returned' || !evt.greet) return
+  // Codex MUST-FIX 게이트: 모델 로드됨·idle·립싱크 없음·활동 없음일 때만.
+  // 인사는 반드시 playMotion(관성 보간 경로) — 새 관절 수학 금지.
+  if (!currentModel) return
+  if (lipsync.active) return
+  if (activityRunner.isActive()) return
+  if (getState?.() !== 'idle') return
+  const react = motionManager.pickReactMotion({ emotion: 'happy' })
+  playMotion(react)
+  applyEmotion('happy')
+}
+
+window.api?.onPresenceIdle?.(({ idleSec } = {}) => presence.onIdle(idleSec))
+window.api?.onPresenceEvent?.(({ name } = {}) => {
+  presence.onEvent(name)
+  // 화면이 안 보이는 동안 자율 행동 정지(전력·CPU 절약). 욕구는 재개 때 보정.
+  if (name === 'lock-screen') { pauseLocked = true; startPowerPause() }
+  else if (name === 'suspend') { pauseSuspended = true; startPowerPause() }
+  else if (name === 'unlock-screen') { pauseLocked = false; maybeEndPowerPause() }
+  else if (name === 'resume') { pauseSuspended = false; maybeEndPowerPause() }
+})
+
+// 디버그/E2E — 실제 피드와 같은 입구로 전이를 주입한다(상태 직접 변조 금지).
+window.__presenceDebug = {
+  idle: (sec) => presence.onIdle(sec),
+  event: (name) => presence.onEvent(name),
+  state: () => presence.getState()
+}
+
+// 종료 직전 학습·욕구 flush(스로틀에 걸려 안 쓰인 마지막 몇 초 유실 방지).
+// 벽지모드 Electron에선 beforeunload가 항상 보장되진 않아 pagehide도 겸한다(Codex).
+const flushPersistence = () => { try { saveAdaptation(true); saveNeeds(true) } catch {} }
+window.addEventListener('beforeunload', flushPersistence)
+window.addEventListener('pagehide', flushPersistence)
 
 // 인터럽트 — 진행 중인 활동을 중단한다. 기본은 "최우선(호출 응답) 활동은 건드리지
 // 않음": markInteraction(그녀가 말함)·onCharacterAction은 호출 응답 중이면 그녀를
@@ -553,6 +681,7 @@ function endCallResponseIfIdle() {
 function maybeStartActivity() {
   if (activityRunner.isActive()) return false
   needsManager.tick()
+  saveNeeds() // 스로틀(5s) 걸린 영속 — 틱마다 불러도 싸다
   const activities = (worldManager?.getActivityObjects?.() || [])
     .map((o) => o.activity)
     .filter(Boolean)
@@ -570,6 +699,15 @@ function maybeStartActivity() {
 let currentCharacterId = null
 
 function applyCharacterProfileBundle(bundle = null) {
+  // J단계 — 캐릭터가 바뀌면 학습(적응)·욕구를 그 캐릭터의 저장분으로 전환.
+  // 순서(Codex MUST-FIX): 옛 활동 중단 → 옛 키로 flush → 새 프로필 적용 →
+  // 새 스코프 로드(오프라인 욕구 보정이 새 캐릭터 성격 가중을 쓰도록).
+  const nextId = bundle?.characterId || null
+  const scopeChanged = nextId !== currentCharacterId
+  if (scopeChanged) {
+    try { interruptActivity(true) } catch {}
+    flushLearningScope()
+  }
   if (bundle) {
     motionManager.setCharacterProfile(bundle)
     currentCharacterId = bundle.characterId || null
@@ -577,6 +715,7 @@ function applyCharacterProfileBundle(bundle = null) {
     motionManager.clearCharacterProfile()
     currentCharacterId = null
   }
+  if (scopeChanged) loadLearningScope(nextId)
   // Codex MUST-FIX (step 1): characterController must see the new vector
   // every time the profile (including dummy/clear path) changes, otherwise
   // a previous character's walk speed / sit duration / look strength bleeds
@@ -596,6 +735,8 @@ function scheduleAutoBehavior() {
   clearAutoBehaviorTimer()
 
   if (!autoBehaviorEnabled) return
+  // 잠금/절전 정지 중엔 재예약 금지(활동 onFinish 등 다른 경로의 재예약 차단).
+  if (powerPausedAt) return
 
   const behaviorConfig = getAutoBehaviorConfig()
   const minDelay = Math.max(2000, Math.round(behaviorConfig.autoBehaviorMinMs ?? 9000))
@@ -619,8 +760,12 @@ function scheduleAutoBehavior() {
       // *직접 입력*했는가를 표로 던져 장기 곁/독립 성향을 학습한다. tick 단위 균형
       // 샘플이라 입력-true/틱-false 비대칭(독립 쏠림)을 피하고, lastUserEngagedAt
       // 기반이라 캐릭터 발화/감정은 안 섞인다(Codex — 엄격 user-initiated).
-      const userRecent = lastUserEngagedAt > 0 && (Date.now() - lastUserEngagedAt < USER_ENGAGED_RECENT_MS)
-      try { adaptation.recordPace(userRecent); saveAdaptation() } catch {}
+      // J단계 — 사용자가 자리에 없는 틱은 표본에서 뺀다. 부재는 "독립 선호"
+      // 신호가 아니라 그냥 부재다(Codex — 이걸 안 빼면 closeness가 아래로 쏠림).
+      if (presence.isPresent()) {
+        const userRecent = lastUserEngagedAt > 0 && (Date.now() - lastUserEngagedAt < USER_ENGAGED_RECENT_MS)
+        try { adaptation.recordPace(userRecent); saveAdaptation() } catch {}
+      }
 
       // J단계 스마트 오브젝트 — 별도 저확률 "활동" 슬롯. 일반 가구 폴백에 숨기지
       // 않고 독립 확률로 둬 사물 행동 빈도를 따로 튜닝(Codex NICE-TO-HAVE).

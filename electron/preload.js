@@ -47,6 +47,18 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('cursor:pos', listener)
   },
 
+  // J단계 — 사용자 존재 피드 구독(시스템 유휴초 5s 폴링 + 절전/잠금 이벤트).
+  onPresenceIdle: (cb) => {
+    const listener = (_e, payload) => cb(payload)
+    ipcRenderer.on('presence:idle', listener)
+    return () => ipcRenderer.removeListener('presence:idle', listener)
+  },
+  onPresenceEvent: (cb) => {
+    const listener = (_e, payload) => cb(payload)
+    ipcRenderer.on('presence:event', listener)
+    return () => ipcRenderer.removeListener('presence:event', listener)
+  },
+
   // Phase F2 — chat window IPC. `notifyCharacter` lets the standalone chat
   // window forward emotion/face-camera/bubble/lipsync actions to the
   // wallpaper main window. Main process applies an action allowlist before

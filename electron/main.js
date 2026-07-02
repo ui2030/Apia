@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } = require('electron')
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, screen, shell, Tray } = require('electron')
 app.commandLine.appendSwitch('allow-file-access-from-files')
 
 const path = require('path')
@@ -906,7 +906,11 @@ app.whenReady().then(async () => {
   // 창 content 기준 정규화 좌표를 renderer에 푸시한다.
   // E2E는 피드를 끈다 — 러너 도는 동안 사용자가 마우스를 움직이면 시선이
   // 덮어써져 스크린샷/단언이 비결정적이 된다 (launchApia가 항상 세팅).
-  if (process.env.APIA_E2E_NO_CURSOR_FEED !== '1') startCursorFeed()
+  if (process.env.APIA_E2E_NO_CURSOR_FEED !== '1') {
+    startCursorFeed()
+    // J단계 — 사용자 존재 피드도 같은 이유(E2E 결정론)로 함께 끈다.
+    startPresenceFeed()
+  }
 
   // Phase F1: drop the main overlay into the Windows wallpaper layer (behind
   // desktop icons). Codex MUST-FIX: lazy + graceful — if the native module
@@ -954,6 +958,34 @@ function stopCursorFeed() {
   if (cursorPollTimer) {
     clearInterval(cursorPollTimer)
     cursorPollTimer = null
+  }
+}
+
+// ── J단계: 사용자 존재 피드 ─────────────────────────────────────────────────
+//
+// powerMonitor.getSystemIdleTime()(초·전역 입력 기준)을 5s로 폴링해 renderer에
+// 밀어주고, 절전/잠금 이벤트를 그대로 전달한다. 활성/자리비움 분류와 전이 반응
+// (복귀 인사 등)은 renderer의 presenceManager가 단일 관할 — 메인은 원시 신호만.
+const PRESENCE_POLL_MS = 5000
+let presencePollTimer = null
+
+function startPresenceFeed() {
+  if (presencePollTimer) return
+  presencePollTimer = setInterval(() => {
+    const main = windows.getMain()
+    if (!main || main.isDestroyed()) return
+    let idleSec
+    try { idleSec = powerMonitor.getSystemIdleTime() } catch { return }
+    try { main.webContents.send('presence:idle', { idleSec }) } catch {}
+  }, PRESENCE_POLL_MS)
+  for (const name of ['suspend', 'resume', 'lock-screen', 'unlock-screen']) {
+    try {
+      powerMonitor.on(name, () => {
+        const main = windows.getMain()
+        if (!main || main.isDestroyed()) return
+        try { main.webContents.send('presence:event', { name }) } catch {}
+      })
+    } catch {}
   }
 }
 

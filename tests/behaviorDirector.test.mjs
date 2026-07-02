@@ -20,17 +20,21 @@ const BASE_CFG = { walkShare: 0.36, inPlaceIdleBias: 0.28, chairBias: 0.5 }
 
 describe('buildDirectorContext', () => {
   it('normalizes and clamps fields', () => {
-    const c = buildDirectorContext({ hour: 14, personality: 'active', attentiveness: 0.731, idleStreakMs: 185000 })
-    expect(c).toEqual({ hour: 14, personality: 'active', attentiveness: 0.73, idleMinutes: 3 })
+    const c = buildDirectorContext({ hour: 14, personality: 'active', attentiveness: 0.731, idleStreakMs: 185000, presence: 'away', awayMs: 421000 })
+    expect(c).toEqual({ hour: 14, personality: 'active', attentiveness: 0.73, idleMinutes: 3, presence: 'away', awayMinutes: 7 })
   })
   it('falls back on missing/invalid input', () => {
     const c = buildDirectorContext({})
-    expect(c).toEqual({ hour: null, personality: 'calm', attentiveness: 0, idleMinutes: 0 })
+    expect(c).toEqual({ hour: null, personality: 'calm', attentiveness: 0, idleMinutes: 0, presence: 'active', awayMinutes: 0 })
   })
   it('clamps out-of-range hour and attentiveness', () => {
     const c = buildDirectorContext({ hour: 99, attentiveness: 5 })
     expect(c.hour).toBe(23)
     expect(c.attentiveness).toBe(1)
+  })
+  it('whitelists presence values (unknown → active)', () => {
+    expect(buildDirectorContext({ presence: 'zombie' }).presence).toBe('active')
+    expect(buildDirectorContext({ presence: 'short-idle' }).presence).toBe('short-idle')
   })
 })
 

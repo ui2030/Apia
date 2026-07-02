@@ -39,12 +39,18 @@ function clamp(v, lo, hi) {
 }
 
 // 프롬프트에 넣을 컴팩트 컨텍스트. 순수. (실제 직렬화/프롬프트는 호출측에서)
-export function buildDirectorContext({ hour, personality, attentiveness, idleStreakMs } = {}) {
+// presence는 물리적 존재(시스템 유휴 기반) — attentiveness(대화 최근성)와 다른
+// 축이다. away=자리에 없음이지 무관심이 아니다(프롬프트에도 명시).
+const PRESENCES = new Set(['active', 'short-idle', 'away'])
+
+export function buildDirectorContext({ hour, personality, attentiveness, idleStreakMs, presence, awayMs } = {}) {
   return {
     hour: Number.isFinite(hour) ? Math.floor(clamp(hour, 0, 23)) : null,
     personality: typeof personality === 'string' ? personality : 'calm',
     attentiveness: Number.isFinite(attentiveness) ? Number(clamp(attentiveness, -1, 1).toFixed(2)) : 0,
-    idleMinutes: Number.isFinite(idleStreakMs) ? Math.max(0, Math.round(idleStreakMs / 60000)) : 0
+    idleMinutes: Number.isFinite(idleStreakMs) ? Math.max(0, Math.round(idleStreakMs / 60000)) : 0,
+    presence: PRESENCES.has(presence) ? presence : 'active',
+    awayMinutes: Number.isFinite(awayMs) ? Math.max(0, Math.round(awayMs / 60000)) : 0
   }
 }
 

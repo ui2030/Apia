@@ -110,3 +110,53 @@ describe('needsManager — satisfy (complete only)', () => {
     expect(n.snapshot().thirst).toBe(0) // 0.5 - 0.85 clamped to 0
   })
 })
+
+describe('needsManager — persistence (load + offline rise)', () => {
+  it('load restores saved values, clamps garbage, zeroes missing keys', () => {
+    const n = createNeedsManager({ now: () => 0 })
+    n.load({ thirst: 0.4, boredom: 7, care: 'x' })
+    expect(n.snapshot().thirst).toBe(0.4)
+    expect(n.snapshot().boredom).toBe(1) // clamped
+    expect(n.snapshot().care).toBe(0) // non-numeric → 0
+    expect(n.snapshot().tiredness).toBe(0) // missing → 0
+  })
+
+  it('load(null) resets everything to 0', () => {
+    const n = createNeedsManager({ now: () => 0, initial: { thirst: 0.9 } })
+    n.load(null)
+    expect(n.snapshot().thirst).toBe(0)
+  })
+
+  it('applyOfflineRise adds real elapsed rise for short gaps (no MAX_TICK clamp)', () => {
+    const n = createNeedsManager({ now: () => 0, getPersonality: () => 'calm' })
+    n.applyOfflineRise(10 * 60000) // 10 minutes offline
+    // thirst rises 1/45 per min → 10/45 ≈ 0.222 (a real 10-min rise, not 1-min)
+    expect(n.snapshot().thirst).toBeCloseTo(10 / 45, 2)
+  })
+
+  it('caps the per-need added delta at 0.5 for an overnight gap', () => {
+    const n = createNeedsManager({ now: () => 0, getPersonality: () => 'calm' })
+    n.applyOfflineRise(8 * 60 * 60000) // 8 hours
+    // uncapped thirst would be 8*60/45 > 10 → capped to +0.5
+    expect(n.snapshot().thirst).toBe(0.5)
+    expect(n.snapshot().care).toBeCloseTo(0.5, 5) // slowest need also capped-or-less
+  })
+
+  it('cap is an added delta, not a target — already-high needs keep their level and clamp at 1', () => {
+    const n = createNeedsManager({ now: () => 0, getPersonality: () => 'calm' })
+    n.setNeed('thirst', 0.8)
+    n.applyOfflineRise(8 * 60 * 60000)
+    expect(n.snapshot().thirst).toBe(1) // 0.8 + 0.5 → clamp 1 (not pulled DOWN to 0.5)
+  })
+
+  it('after load+applyOfflineRise the next tick does not double-count the gap', () => {
+    let t = 0
+    const n = createNeedsManager({ now: () => t, getPersonality: () => 'calm' })
+    t = 60 * 60000 // "woke up" an hour later
+    n.load({ thirst: 0.1 }, t)
+    n.applyOfflineRise(60 * 60000, t)
+    const afterRestore = n.snapshot().thirst
+    n.tick(t) // same instant — dt 0
+    expect(n.snapshot().thirst).toBe(afterRestore)
+  })
+})
