@@ -641,6 +641,54 @@ ipcMain.handle('apply-settings', (e, s) => {
   return { ok: true, settings }
 })
 
+// ── 환경설정: 다중 모니터 선택 ───────────────────────────────────────────────
+//
+// get-displays: 설정 창이 모니터 목록을 그릴 수 있게 최소 정보만 준다(현재
+// 캐릭터가 있는 모니터 표시 포함). settings:moveToDisplay: 캐릭터 오버레이를
+// 지정 모니터로 옮긴다 — 앵커는 WindowManager가 즉시 영속하므로 별도 설정
+// 필드 없이 다음 실행에도 같은 모니터로 복원된다(단일 출처 유지).
+ipcMain.handle('get-displays', () => {
+  const displays = screen.getAllDisplays()
+  const primaryId = screen.getPrimaryDisplay()?.id
+  let currentId = null
+  try {
+    const main = windows.getMain()
+    if (main && !main.isDestroyed()) {
+      currentId = screen.getDisplayMatching(main.getBounds())?.id ?? null
+    }
+  } catch {}
+  return displays.map((d, i) => ({
+    id: d.id,
+    index: i + 1,
+    primary: d.id === primaryId,
+    current: d.id === currentId,
+    width: d.size?.width ?? d.bounds?.width ?? 0,
+    height: d.size?.height ?? d.bounds?.height ?? 0
+  }))
+})
+
+ipcMain.handle('settings:moveToDisplay', (e, payload) => {
+  const displayId = Number(payload?.displayId)
+  if (!Number.isFinite(displayId)) return { ok: false, error: 'bad-display-id' }
+  const display = screen.getAllDisplays().find((d) => d.id === displayId)
+  if (!display?.workArea) return { ok: false, error: 'display-not-found' }
+  const main = windows.getMain()
+  if (!main || main.isDestroyed()) return { ok: false, error: 'no-main-window' }
+  // 벽지모드로 부착된 채 setBounds만 하면 Progman-child 좌표가 어긋날 수 있고,
+  // enableWallpaper는 attached 상태에선 no-op이라 재부착이 안 돈다 — 반드시
+  // 분리 → 이동 → 재부착 순서(Codex MUST-FIX).
+  if (wallpaperMode.isAttached()) {
+    try { wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn }) } catch {}
+  }
+  if (!windows.moveMainToWorkArea(display.workArea)) {
+    return { ok: false, error: 'move-failed' }
+  }
+  syncWallpaperMode() // 벽지모드면 새 모니터 전체 bounds로 재부착, 아니면 유지
+  repositionCornerWindow() // 핫코너도 캐릭터를 따라간다
+  logInfo('[DISPLAY_MOVE]', { displayId })
+  return { ok: true }
+})
+
 // Opens the user-data/backend-data directory in the OS file manager so the
 // user can edit backend.env directly. shell.openPath returns '' on success
 // and a non-empty error string on failure — propagate it so the renderer can

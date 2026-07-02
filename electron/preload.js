@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld('api', {
   // renderer can switch to an opaque, screen-filling scene; false in overlay
   // mode where the character should float over the live desktop.
   onWallpaperOpaque: (cb) => ipcRenderer.on('wallpaper:opaque', (e, on) => cb(on)),
+  // 환경설정 — 다중 모니터 선택(2대 이상일 때 설정 창에 노출).
+  getDisplays: () => ipcRenderer.invoke('get-displays'),
+  moveToDisplay: (displayId) => ipcRenderer.invoke('settings:moveToDisplay', { displayId }),
+
   openBackendDataDir: () => ipcRenderer.invoke('settings:openBackendDataDir'),
   openBackendEnvFile: () => ipcRenderer.invoke('settings:openBackendEnvFile'),
   getBackendEnvKeys: () => ipcRenderer.invoke('settings:getBackendEnvKeys'),

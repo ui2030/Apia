@@ -219,6 +219,30 @@ class WindowManager {
     this.#flushAnchor()
   }
 
+  /**
+   * 환경설정의 모니터 선택 — 메인 창을 지정 workArea로 옮기고 앵커를 즉시
+   * 영속한다. 보류 중인 move 디바운스를 걷어내고 flush하므로 사용자의 명시적
+   * 선택이 앵커 저장의 권위가 된다(Codex MUST-FIX). 다음 실행은 기존
+   * pickTargetWorkArea 경로가 이 앵커로 같은 모니터를 복원한다.
+   */
+  moveMainToWorkArea(workArea) {
+    const main = this.#main
+    if (!main || main.isDestroyed()) return false
+    if (!workArea || ![workArea.x, workArea.y, workArea.width, workArea.height].every(Number.isFinite)) return false
+    try {
+      main.setBounds({
+        x: workArea.x,
+        y: workArea.y,
+        width: workArea.width,
+        height: workArea.height
+      })
+    } catch {
+      return false
+    }
+    this.flushPendingAnchor()
+    return true
+  }
+
   #attachDiagnostics(window, label) {
     window.on('closed', () => {
       this.#log.warn(`[WINDOW_CLOSED] ${label}`)

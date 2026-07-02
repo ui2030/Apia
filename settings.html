@@ -322,6 +322,16 @@
       </label>
     </div>
 
+    <!-- 다중 모니터 선택 — 모니터가 2대 이상일 때만 JS가 노출한다. 선택 즉시
+         적용(캐릭터가 바로 이동), 저장 버튼과 무관. -->
+    <div class="row" id="display-row" style="display:none">
+      <div>
+        <div class="row-label">표시 모니터</div>
+        <div class="row-sub">캐릭터를 띄울 화면</div>
+      </div>
+      <select id="display-select"></select>
+    </div>
+
     <div class="row">
       <div class="row-label">캐릭터 크기</div>
       <div style="display:flex;align-items:center;gap:8px;">
@@ -1144,6 +1154,48 @@ document.getElementById('char-scale').addEventListener('input', e => {
 document.getElementById('memory-turns').addEventListener('input', e => {
   document.getElementById('memory-val').textContent = e.target.value + '턴'
 })
+
+// ── 다중 모니터 선택 ──
+// 모니터가 2대 이상일 때만 행을 노출. 선택 즉시 캐릭터 창이 이동한다(앵커가
+// 메인 프로세스에서 바로 저장되므로 다음 실행에도 같은 모니터로 복원).
+// 실패하면 이전 선택으로 되돌리고 토스트로 알린다.
+;(async function initDisplayPicker() {
+  try {
+    const displays = await window.api.getDisplays?.()
+    if (!Array.isArray(displays) || displays.length < 2) return
+    const row = document.getElementById('display-row')
+    const sel = document.getElementById('display-select')
+    if (!row || !sel) return
+    sel.innerHTML = ''
+    for (const d of displays) {
+      const opt = document.createElement('option')
+      opt.value = String(d.id)
+      opt.textContent = `모니터 ${d.index}${d.primary ? ' (주)' : ''} — ${d.width}×${d.height}`
+      if (d.current) opt.selected = true
+      sel.appendChild(opt)
+    }
+    let lastValue = sel.value
+    sel.addEventListener('change', async () => {
+      const picked = sel.value
+      sel.disabled = true
+      try {
+        const result = await window.api.moveToDisplay?.(Number(picked))
+        if (result?.ok) {
+          lastValue = picked
+        } else {
+          sel.value = lastValue
+          showToast('모니터 이동에 실패했어요. 연결 상태를 확인해 주세요.', 'error')
+        }
+      } catch {
+        sel.value = lastValue
+        showToast('모니터 이동에 실패했어요.', 'error')
+      } finally {
+        sel.disabled = false
+      }
+    })
+    row.style.display = ''
+  } catch {}
+})()
 
 // ── Provider status ──
 // Polls GET /warmup via the warmup:status IPC channel. Renders four states:
