@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "basePath": "src/assets/motions/vrma",
+  "defaultFadeIn": 0.4,
+  "clips": {
+    "idle_breath_soft":       { "path": "idle/breath_soft.vrma",       "loop": true,  "fadeIn": 0.6 },
+    "idle_breath_lively":     { "path": "idle/breath_lively.vrma",     "loop": true,  "fadeIn": 0.5 },
+    "idle_neutral":           { "path": "idle/neutral.vrma",           "loop": true,  "fadeIn": 0.5 },
+    "idle_look_around":       { "path": "idle/look_around.vrma",       "loop": false, "fadeIn": 0.4 },
+    "idle_look_around_soft":  { "path": "idle/look_around_soft.vrma",  "loop": false, "fadeIn": 0.4 },
+    "idle_look_down_soft":    { "path": "idle/look_down_soft.vrma",    "loop": false, "fadeIn": 0.4 },
+    "idle_shift_weight":      { "path": "idle/shift_weight.vrma",      "loop": false, "fadeIn": 0.4 },
+    "idle_small_fidget":      { "path": "idle/small_fidget.vrma",      "loop": false, "fadeIn": 0.4 },
+
+    "talk_soft":              { "path": "talk/soft.vrma",              "loop": true,  "fadeIn": 0.3 },
+    "talk_neutral":           { "path": "talk/neutral.vrma",           "loop": true,  "fadeIn": 0.3 },
+    "talk_happy":             { "path": "talk/happy.vrma",             "loop": true,  "fadeIn": 0.3 },
+    "talk_explain":           { "path": "talk/explain.vrma",           "loop": true,  "fadeIn": 0.3 },
+    "talk_explain_soft":      { "path": "talk/explain_soft.vrma",      "loop": true,  "fadeIn": 0.3 },
+    "talk_think":             { "path": "talk/think.vrma",             "loop": false, "fadeIn": 0.3 },
+    "talk_small_nod":         { "path": "talk/small_nod.vrma",         "loop": false, "fadeIn": 0.25 },
+    "talk_big_nod":           { "path": "talk/big_nod.vrma",           "loop": false, "fadeIn": 0.25 },
+
+    "react_nod":              { "path": "react/nod.vrma",              "loop": false, "fadeIn": 0.2 },
+    "react_small_nod":        { "path": "react/small_nod.vrma",        "loop": false, "fadeIn": 0.2 },
+    "react_big_nod":          { "path": "react/big_nod.vrma",          "loop": false, "fadeIn": 0.2 },
+    "react_surprised":        { "path": "react/surprised.vrma",        "loop": false, "fadeIn": 0.2 },
+    "react_small_surprised":  { "path": "react/small_surprised.vrma",  "loop": false, "fadeIn": 0.2 },
+    "react_happy":            { "path": "react/happy.vrma",            "loop": false, "fadeIn": 0.25 },
+    "react_shy":              { "path": "react/shy.vrma",              "loop": false, "fadeIn": 0.3 },
+    "react_neutral":          { "path": "react/neutral.vrma",          "loop": false, "fadeIn": 0.3 }
+  }
+}
