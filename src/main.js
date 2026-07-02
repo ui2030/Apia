@@ -66,6 +66,8 @@ import {
   getMmdHelper,
   getAmmoRuntime,
   stabilizeMmdPhysics,
+  getDynamicPhysicsBones,
+  capturePhysicsBoneRest,
   syncHiddenMaterialVisibility,
   applyAuthorTailLift,
   normalizeUrlToFetchable,
@@ -276,6 +278,11 @@ if (typeof window !== 'undefined') {
   window.__listActivities = () => (worldManager?.getActivityObjects?.() || []).map((o) => o.activity?.id)
   window.__playMotion = (category, name, intensity = 1) => playMotion({ category, name, intensity })
   window.__currentMotion = () => getCurrentMotion()
+  window.__clothMonitorTick = () => { clothMonitorTick(); return clothRideStreak }
+  window.__reseatPhysics = () => {
+    if (currentModel?.type !== 'mmd') return false
+    try { return stabilizeMmdPhysics(currentModel.obj, { warmupCycles: 30, reseatBones: true }) } catch { return false }
+  }
   window.__boneWorldPos = (role = 'lWrist') => {
     const b = currentModel?.poseRig?.registry?.roles?.get?.(role)?.bone
     if (!b) return null
@@ -534,6 +541,60 @@ let lastActivityId = null
 let lastBehaviorSlot = null
 const lingerIntent = createLingerIntent()
 
+// 옷 매무새 자가 회복 — 치맛자락이 머리카락/꼬리 물리에 걸려 말려 올라간 채
+// 스스로 못 내려오는 상태(실측: 옷자락 패널이 트윈테일에 감김)를 감지해
+// 재안착한다. 모델 불문: 본 이름이 아니라 동적 물리 본들의 "루트 대비 rest
+// 높이" 기준선을 첫 안정 틱에 캡처하고, 서있는 유휴 중 다수 본이 기준선보다
+// 크게 떠 있는 상태가 연속 틱으로 지속되면 stabilizeMmdPhysics로 재안착.
+// (엉킴 유발 자체는 patchRealtimePhysicsStep의 정속화가 크게 줄인다.)
+const CLOTH_RIDE_DEVIATION = 0.15 // 본당 "떠 있음" 판정 편차(월드 단위 ≈ 15cm)
+const CLOTH_RIDE_MIN_BONES = 6 // 이만큼 이상 동시에 떠 있어야 엉킴으로 간주
+const CLOTH_RIDE_STREAK = 2 // 연속 틱(~20s) 지속 시에만 개입(일시 출렁임 무시)
+let clothRest = null // { scale, rels: Map(bone → rest relY) }
+let clothRideStreak = 0
+const _clothVec = new Vector3()
+
+function clothMonitorTick() {
+  if (currentModel?.type !== 'mmd' || !currentModel.obj?.skeleton) return
+  // VMD 클립이 포즈를 소유 중이면 reset+warmup을 얹지 않는다(로드 재안착과
+  // 동일한 안전 게이트, Codex MUST-FIX). 다음 클립 없는 유휴 틱에 회복.
+  if (currentModel._vmdClipActive) return
+  const mesh = currentModel.obj
+  const bones = getDynamicPhysicsBones(mesh)
+  if (!bones.length) return
+  mesh.getWorldPosition(_clothVec)
+  const rootY = _clothVec.y
+  const scale = mesh.scale?.x || 1
+  // 기준선 캡처(첫 안정 틱) — 스케일이 바뀌면 기준선도 무효라 재캡처.
+  if (!clothRest || Math.abs(scale - clothRest.scale) > scale * 0.01) {
+    const rels = new Map()
+    for (const b of bones) {
+      b.getWorldPosition(_clothVec)
+      rels.set(b, _clothVec.y - rootY)
+    }
+    clothRest = { scale, rels }
+    clothRideStreak = 0
+    return
+  }
+  let deviant = 0
+  for (const b of bones) {
+    const rest = clothRest.rels.get(b)
+    if (rest === undefined) continue
+    b.getWorldPosition(_clothVec)
+    if (_clothVec.y - rootY - rest > CLOTH_RIDE_DEVIATION) deviant++
+  }
+  if (deviant >= CLOTH_RIDE_MIN_BONES) {
+    clothRideStreak++
+    if (clothRideStreak >= CLOTH_RIDE_STREAK) {
+      clothRideStreak = 0
+      console.info('[Apia cloth] 매무새 자가 회복 — 떠 있는 물리 본', deviant, '개, 재안착')
+      try { stabilizeMmdPhysics(mesh, { warmupCycles: 30, reseatBones: true }) } catch {}
+    }
+  } else {
+    clothRideStreak = 0
+  }
+}
+
 // J단계 — 사용자 존재 인지. 메인 프로세스의 유휴초 폴링(5s)+절전/잠금 이벤트를
 // presenceManager 상태기계에 넣고, 전이에 반응한다. 복귀 인사·recordPace 스킵·
 // 디렉터 컨텍스트·잠금 중 자율행동 정지가 이 상태를 읽는다.
@@ -786,6 +847,10 @@ function scheduleAutoBehavior() {
       // J단계 — 느린 LLM 디렉터 리프레시(maybeRun이 ~4분 간격·single-flight로
       // 자체 스로틀). fire-and-forget이라 이번 틱은 직전 directive로 동작.
       runBehaviorDirector()
+
+      // 옷 매무새 자가 회복 — 서있는 유휴 틱에서만(앉기/걷기/활동 중 제외는
+      // 이 가드가 보장). 느린 주기(9~16s)라 비용 무시 가능.
+      try { clothMonitorTick() } catch {}
 
       // 4단계 적응 — 페이스 샘플(자율 idle 틱마다 1회). 이 순간 사용자가 최근(90s)
       // *직접 입력*했는가를 표로 던져 장기 곁/독립 성향을 학습한다. tick 단위 균형
@@ -1163,12 +1228,18 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
         // constraint counts so a user reporting "hair still fixed" can
         // tell whether the model itself shipped without physics data.
         try {
+          // 매무새 고치기 기준 스냅샷 — 어떤 포즈/시뮬도 닿기 전의 바인드
+          // 로컬(자연 드레이프)을 떠 둔다. reseatBones가 이걸로 복원한다.
+          capturePhysicsBoneRest(mesh)
           // warmup: 0 — the helper's built-in warmup runs before the
           // scale-safe reset patch is installed, so its 60 cycles would
           // settle the cloth from wrong-space positions. The real settle
           // happens in stabilizeMmdPhysics() below, after the final
           // scale/ground transform is applied.
-          helper?.add?.(mesh, { physics: true, warmup: 0 })
+          // unitStep 1/120: 기본 1/65는 60Hz 초과 화면에서 옷 물리가 계단·배속
+          // (patchRealtimePhysicsStep 참조)으로 보인다. 120Hz 스텝이면 어떤
+          // 주사율에서도 부드럽고, maxStepNum 4로 30fps까지 정속 커버.
+          helper?.add?.(mesh, { physics: true, warmup: 0, unitStep: 1 / 120, maxStepNum: 4 })
           const physicsBody = mesh.geometry?.userData?.MMD
           const rigidBodyCount = physicsBody?.rigidBodies?.length ?? 0
           const constraintCount = physicsBody?.constraints?.length ?? 0
@@ -1210,6 +1281,23 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
         // bodies to the transform the render loop will actually use.
         try { stabilizeMmdPhysics(mesh) } catch (err) {
           console.warn('[Apia MMD] physics stabilize failed', err)
+        }
+        // 로드 후 첫 프레임들의 포즈 점프(바인드→절차 포즈)가 옷자락을 허벅지
+        // 콜라이더 위로 걷어 올려 그대로 굳는다(실측: 로드 4s 후 이미 말려
+        // 올라감, 일반 reset은 엉킨 본 위치를 보존해 못 고침). 포즈가 정착한
+        // 직후 바인드 드레이프 기준으로 1회 매무새를 고쳐 준다.
+        {
+          const settledMesh = mesh
+          const settleToken = loadToken
+          setTimeout(() => {
+            if (settleToken !== activeModelLoadToken) return
+            // 클립/립싱크/활동이 이미 돌고 있으면 그 위에 reset+warmup을 얹지
+            // 않는다(Codex MUST-FIX) — 그런 상태의 엉킴은 이후 서있는 유휴 틱의
+            // clothMonitorTick이 안전한 시점에 회복한다.
+            if (getState?.() !== 'idle' || lipsync.active || activityRunner.isActive() || currentModel?._vmdClipActive) return
+            if (currentModel?.obj !== settledMesh) return
+            try { stabilizeMmdPhysics(settledMesh, { warmupCycles: 45, reseatBones: true }) } catch {}
+          }, 1200)
         }
         frameCharacterCamera()
         showBubble('안녕하세요! 모델을 불러왔어요 🎀', 3000)
@@ -1360,6 +1448,11 @@ function clearModel() {
   clearDummyBlinkTarget()
   // 이전 모델의 감정 target/스무딩 상태가 다음 모델로 새지 않게
   resetExpression()
+
+  // 매무새 감시 기준선은 구 모델의 Bone 객체를 키로 잡고 있다 — 같은 스케일의
+  // 새 모델이면 재캡처가 안 돼 감시가 죽으므로 교체/해제 시 반드시 리셋(Codex).
+  clothRest = null
+  clothRideStreak = 0
 
   if (currentModel.type === 'mmd') {
     try { getMmdHelper()?.remove(currentModel.obj) } catch {}

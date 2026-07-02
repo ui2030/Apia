@@ -211,11 +211,82 @@ export function syncHiddenMaterialVisibility(materials, eps = 0.001) {
   return hidden
 }
 
-export function stabilizeMmdPhysics(mesh, { warmupCycles = 60 } = {}) {
+// 고주사율 시간 팽창 수정 — three MMDPhysics._stepSimulation은 프레임 delta가
+// unitStep보다 짧으면 stepTime을 unitStep으로 "올려서" 시뮬한다. 120Hz 화면에선
+// 매 프레임 15.4ms(1/65)씩 돌아 물리가 ~1.7배속 → 옷·머리·꼬리가 초조하게
+// 떨리는 근본 원인(실측: idle 치맛자락 프레임당 ~1.2cm 진동). bullet은 자체
+// 시간 누적기가 있으므로 실제 delta를 그대로 넘기면 어떤 주사율에서도 정속이
+// 된다(부족분은 누적돼 다음 프레임에 스텝 — 60Hz 사용자가 보던 것과 동일한
+// 1프레임 홀드). 물리 객체는 로드 때 helper에 1회 등록 후 유지되므로(클립
+// 교체는 mixer stash 방식) 이 패치도 모델당 1회면 충분하다.
+export function patchRealtimePhysicsStep(physics) {
+  if (!physics || physics.__apiaRealtimeStep) return false
+  physics._stepSimulation = function (delta) {
+    const unitStep = this.unitStep
+    let maxStepNum = ((delta / unitStep) | 0) + 1
+    if (maxStepNum > this.maxStepNum) maxStepNum = this.maxStepNum
+    this.world.stepSimulation(delta, maxStepNum, unitStep)
+  }
+  physics.__apiaRealtimeStep = true
+  return true
+}
+
+// 동적(시뮬) 물리 본 목록 — 옷자락·머리·꼬리처럼 물리가 움직이는 본만 추린다
+// (본따라가기 kinematic 제외). 매무새 자가 회복의 감시 대상. 모델 불문:
+// 본 이름이 아니라 PMX 강체 타입(0=본추종, 1/2=물리)으로 고른다.
+export function getDynamicPhysicsBones(mesh) {
+  const helper = getMmdHelper()
+  const physics = helper?.objects?.get?.(mesh)?.physics
+  if (!physics?.bodies || !mesh?.skeleton?.bones) return []
+  const out = []
+  const seen = new Set()
+  for (const body of physics.bodies) {
+    const p = body?.params
+    if (!p || p.type === 0) continue // 본따라가기(kinematic)는 제외
+    const bone = mesh.skeleton.bones[p.boneIndex]
+    if (bone && !seen.has(bone)) { seen.add(bone); out.push(bone) }
+  }
+  return out
+}
+
+// 물리 본의 바인드(제작 시) 로컬 변환 스냅샷 — 로드 직후, 어떤 포즈/시뮬도
+// 닿기 전에 떠 둔다. "옷 매무새 고치기"의 기준: 로컬 바인드 = "부모에서 자연히
+// 늘어뜨린 모양"이라, 몸이 어떤 포즈든 이걸 복원하면 자연 드레이프의 시작점.
+export function capturePhysicsBoneRest(mesh) {
+  if (!mesh?.skeleton?.bones) return 0
+  const rest = new Map()
+  for (const b of mesh.skeleton.bones) {
+    rest.set(b, { p: b.position.clone(), q: b.quaternion.clone() })
+  }
+  mesh.userData.__apiaBoneRest = rest
+  return rest.size
+}
+
+// three physics.reset()은 강체를 본의 "현재"(=이미 엉킨) 위치로 되돌려서 엉킴을
+// 보존한다(실측: 치맛자락이 머리카락에 감긴 채 reset+warmup해도 그대로).
+// 진짜 재안착 = 동적 물리 본 로컬을 바인드로 복원 → reset → warmup.
+function restorePhysicsBoneRest(mesh) {
+  const rest = mesh?.userData?.__apiaBoneRest
+  if (!rest) return false
+  const bones = getDynamicPhysicsBones(mesh)
+  if (!bones.length) return false
+  for (const b of bones) {
+    const r = rest.get(b)
+    if (!r) continue
+    b.position.copy(r.p)
+    b.quaternion.copy(r.q)
+  }
+  mesh.updateMatrixWorld(true)
+  return true
+}
+
+export function stabilizeMmdPhysics(mesh, { warmupCycles = 60, reseatBones = false } = {}) {
   const helper = getMmdHelper()
   const item = helper?.objects?.get?.(mesh)
   const physics = item?.physics
   if (!physics) return false
+
+  patchRealtimePhysicsStep(physics)
 
   if (!physics.__apiaScaleSafeReset) {
     const originalReset = physics.reset.bind(physics)
@@ -224,11 +295,14 @@ export function stabilizeMmdPhysics(mesh, { warmupCycles = 60 } = {}) {
   }
 
   const t0 = performance.now()
+  // 매무새 고치기 — 엉킨 옷자락/머리를 바인드 드레이프에서 다시 정착시킨다.
+  const reseated = reseatBones ? restorePhysicsBoneRest(mesh) : false
   physics.reset()
   // warmup() goes through update(), which un-scales by itself — no wrapper.
   physics.warmup(warmupCycles)
   console.info('[Apia MMD physics] stabilized', {
     warmupCycles,
+    reseated,
     ms: Math.round(performance.now() - t0)
   })
   return true
