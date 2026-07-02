@@ -273,6 +273,7 @@ if (typeof window !== 'undefined') {
   window.__setNeed = (k, v) => needsManager.setNeed(k, v)
   window.__listActivities = () => (worldManager?.getActivityObjects?.() || []).map((o) => o.activity?.id)
   window.__playMotion = (category, name, intensity = 1) => playMotion({ category, name, intensity })
+  window.__currentMotion = () => getCurrentMotion()
   window.__boneWorldPos = (role = 'lWrist') => {
     const b = currentModel?.poseRig?.registry?.roles?.get?.(role)?.bone
     if (!b) return null
@@ -563,20 +564,27 @@ function handlePresenceTransition(evt) {
   applyEmotion('happy')
 }
 
-window.api?.onPresenceIdle?.(({ idleSec } = {}) => presence.onIdle(idleSec))
-window.api?.onPresenceEvent?.(({ name } = {}) => {
+function handlePresenceIdleFeed(idleSec) {
+  presence.onIdle(idleSec)
+}
+
+function handlePresenceEventFeed(name) {
   presence.onEvent(name)
   // 화면이 안 보이는 동안 자율 행동 정지(전력·CPU 절약). 욕구는 재개 때 보정.
   if (name === 'lock-screen') { pauseLocked = true; startPowerPause() }
   else if (name === 'suspend') { pauseSuspended = true; startPowerPause() }
   else if (name === 'unlock-screen') { pauseLocked = false; maybeEndPowerPause() }
   else if (name === 'resume') { pauseSuspended = false; maybeEndPowerPause() }
-})
+}
 
-// 디버그/E2E — 실제 피드와 같은 입구로 전이를 주입한다(상태 직접 변조 금지).
+window.api?.onPresenceIdle?.(({ idleSec } = {}) => handlePresenceIdleFeed(idleSec))
+window.api?.onPresenceEvent?.(({ name } = {}) => handlePresenceEventFeed(name))
+
+// 디버그/E2E — 실제 IPC 피드와 완전히 같은 핸들러로 주입(잠금 정지 경로 포함,
+// 상태 직접 변조 금지).
 window.__presenceDebug = {
-  idle: (sec) => presence.onIdle(sec),
-  event: (name) => presence.onEvent(name),
+  idle: handlePresenceIdleFeed,
+  event: handlePresenceEventFeed,
   state: () => presence.getState()
 }
 
