@@ -59,3 +59,9 @@ src/assets/Vanya/
 src/assets/nozomi-hikari/
 src/assets/characters/
 src/assets/character_registry.json
+
+# Python bytecode + local test/tool artifacts.
+__pycache__/
+*.pyc
+test-results/
+.claude/
