@@ -2,6 +2,26 @@
 
 Running log of edits made by the assistant. Newest first.
 
+## 2026-07-02 (J단계 행동 지능 — 존재 인지·영속·디렉터 강화·행동 일관성)
+
+User direction: *"행동이 자연스럽게 — 관절이 꺾여서 모션이 나온다거나, 행동이 기계처럼 부자연스럽다거나 그러면 안 되는 거 알지?"* — J단계 남은 갭 4종을 자연스러움 최우선으로 마감. Codex 사전/사후 검토 4라운드(MUST-FIX 8건 반영, 최종 APPROVE), `npm run verify` 341 tests ✓.
+
+### 커밋 (전부 푸시됨)
+- `21bbde3` 사용자 존재 인지 + 욕구 영속 — presenceManager(powerMonitor 유휴초 5s 폴링+잠금/절전, active/short-idle/away 상태기계), 복귀 인사(react 모션·관성 보간 경로만·10분 디바운스), 부재 틱 recordPace 제외, 잠금/절전 자율행동 정지(pauseLocked/pauseSuspended 분리, 재개 8s 유예), 욕구 localStorage 영속(`apia-needs:<charId>`, 오프라인 상승 욕구당 +0.5 상한), 학습 per-char 키(`apia-adaptation:<charId>`, 레거시 시드), flush→프로필 적용→load 순서(오프라인 보정이 새 캐릭터 성격 가중 사용).
+- `880b6ed` GUI 검증 — tests/gui/presence-check.mjs(전이·인사·디바운스·잠금 9판정 ALL PASS), presence-visual.mjs(정면·측면 클로즈업), `__presenceDebug`(실 IPC와 동일 핸들러)·`__currentMotion` 훅.
+- `25c063d` 디렉터 컨텍스트 강화 — needs 상위 3·방 활동 목록(SAFE_ID·최대 8)·진행/직전 활동, directive.activityHint(×1.25 가산만·임계 유지·쿨다운 중 가산 금지), DIRECTOR_SYSTEM에 presence="물리적 부재≠무관심" 명시.
+- `4cf47c0` 행동 일관성 — behaviorPlanner(직전 슬롯 질량 절반 약화=약한 반복 회피, 걷기 도착 후 첫 틱 "둘러보기" linger 1회성 45s).
+
+### 검증
+- vitest 341 (신규 45: presence 15·needs 11·director 12·planner 7)
+- presence-check GUI 9판정 ALL PASS, 스크린샷 해부학 검수(정면+측면) — 관절 꺾임 없음
+- life-observe.mjs 90s 자율 생활 관찰: idle→walk→sit 슬롯 다양, 제스처 3종, 욕구 상승 속도 이론값 일치(thirst 90s≈0.034), pageerror 0
+
+### Open items
+- VRM 모델은 inertialization 미적용(MMD만) — VRM 클립 쓰게 되면 그때.
+- linger는 짧은 인터럽트(45s 내 대화) 후에도 소비될 수 있음 — 자연스럽다고 판단, 어색하면 markInteraction에서 명시 취소.
+- 측면 컷에서 꼬리 형상이 희게 크게 렌더되는 기존 폴리시 항목 여전(이번 작업과 무관).
+
 ## 2026-06-13 (음성 복제 기능 — 3단 테스트 + 디스플레이 2 시각 확인)
 
 직전 세션에서 구현하다 끊긴 제로샷 음색 변환(seed-vc) 기능을 이어받아 테스트로 마감.
