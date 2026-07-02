@@ -57,6 +57,55 @@ function step(model, seconds, dt = 1 / 60, personality = { expressiveness: 0.6 }
   for (let i = 0; i < frames; i += 1) updateExpression(model, dt, 0, personality)
 }
 
+describe('expressionRuntime — 클립 소유 모프 양보 (연기 VMD 표정 보존)', () => {
+  it('재생 중인 클립이 연기하는 모프는 절차 표정이 덮지 않는다', () => {
+    const { model, influences, morphs } = makeModel()
+    model._vmdClipActive = true
+    model._clipMorphNames = new Set(['笑い']) // 클립이 미소를 연기 중
+    influences[morphs['笑い']] = 0.9 // 클립(mixer)이 쓴 값이라 가정
+    resetExpression()
+    setExpressionEmotion('happy') // 프리셋도 笑い를 올리려 함
+    step(model, 0.5)
+    expect(influences[morphs['笑い']]).toBe(0.9) // 클립 값 보존(양보)
+    expect(influences[morphs['にっこり']]).toBeGreaterThan(0.2) // 비소유 모프는 정상 구동
+  })
+
+  it('클립이 깜빡임(まばたき)을 연기하면 절차 깜빡임이 양보한다', () => {
+    const { model, influences, morphs } = makeModel()
+    model._vmdClipActive = true
+    model._clipMorphNames = new Set(['まばたき'])
+    influences[morphs['まばたき']] = 0.7 // 클립이 연출한 깜빡임 타이밍
+    resetExpression()
+    updateExpression(model, 1 / 60, 1.0, { expressiveness: 0.5 }) // 절차 blink=1.0 요청
+    expect(influences[morphs['まばたき']]).toBe(0.7) // 덮지 않음
+  })
+
+  it('클립 반납 순간 화면 값에서 이어받아 팝이 없다 (내부 가중 시드)', () => {
+    const { model, influences, morphs } = makeModel()
+    resetExpression()
+    setExpressionEmotion('neutral') // 목표 0 — 내부 가중은 0으로 수렴 중
+    model._vmdClipActive = true
+    model._clipMorphNames = new Set(['笑い'])
+    influences[morphs['笑い']] = 0.9 // 클립이 그린 미소
+    step(model, 0.5)
+    expect(influences[morphs['笑い']]).toBe(0.9) // 소유 중엔 보존
+    model._vmdClipActive = false // 클립 반납
+    updateExpression(model, 1 / 60, 0, { expressiveness: 0 })
+    const after = influences[morphs['笑い']]
+    expect(after).toBeGreaterThan(0.8) // 0.9 근처에서 한 스텝 감쇠 시작
+    expect(after).toBeLessThan(0.9) // 숨은 내부값(0)으로 점프하지 않음
+  })
+
+  it('클립이 끝나면(_vmdClipActive=false) 즉시 소유권이 절차 표정으로 복귀', () => {
+    const { model, influences, morphs } = makeModel()
+    model._vmdClipActive = false
+    model._clipMorphNames = new Set(['まばたき']) // 잔존 목록은 무시돼야 함
+    resetExpression()
+    updateExpression(model, 1 / 60, 1.0, { expressiveness: 0.5 })
+    expect(influences[morphs['まばたき']]).toBeCloseTo(1.0, 5)
+  })
+})
+
 describe('expressionRuntime — autonomous micro-expression ownership safety', () => {
   beforeEach(() => resetExpression())
 

@@ -73,7 +73,30 @@ function resolveMorphIdx(dict, canonical) {
 }
 
 const RATE_IN = 10  // 1/s — 목표가 현재보다 클 때 (표정 떠오름)
-const RATE_OUT = 4  // 1/s — 목표가 작을 때 (여운을 남기며 풀림)
+const RATE_OUT = 4  // 1/s — 목표가 작을 때 (여운을 풀며 복귀)
+
+// 클립 소유 모프 양보 — 재생 중인 VMD 연기 클립이 표정 트랙을 갖고 있으면
+// 그 모프들은 클립이 주인이다(절차 표정/깜빡임이 덮지 않는다). 고품질 연기
+// 모션(표정 포함)을 도입해도 표정이 죽지 않게 하는 전제. 입 모프는
+// lipsyncRuntime이 같은 규칙을 적용한다(말할 때만 립싱크가 우선).
+let _clipYieldRef = null
+let _clipYieldDict = null
+let _clipYieldIdx = null
+let _prevYieldIdx = null // 직전 프레임의 소유 셋 — 반납 순간 감지용
+function clipOwnedIdx(model, dict) {
+  const names = model?._vmdClipActive ? model?._clipMorphNames : null
+  if (!names || names.size === 0) return null
+  if (_clipYieldRef !== names || _clipYieldDict !== dict) {
+    _clipYieldRef = names
+    _clipYieldDict = dict
+    _clipYieldIdx = new Set()
+    for (const n of names) {
+      const i = dict[n]
+      if (i !== undefined) _clipYieldIdx.add(i)
+    }
+  }
+  return _clipYieldIdx
+}
 
 // 감정 유지 시간(ms). 고정 6s의 '타이머처럼 기계적인' 복귀를 없애려 감정
 // 종류별 기준값 + 소량 지터(±18%)로 변조한다. surprised는 순간 반응이라 짧게,
@@ -147,6 +170,10 @@ export function resetExpression() {
   _autoResolved = false
   _autoBrowName = null
   _autoSmileName = null
+  _prevYieldIdx = null // 모델 교체 시 구 dict 인덱스 잔존 방지
+  _clipYieldRef = null
+  _clipYieldDict = null
+  _clipYieldIdx = null
 }
 
 /**
@@ -172,6 +199,20 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
   }
 
   const clampedDt = Math.max(0, Math.min(dt, 0.1))
+  const clipYield = clipOwnedIdx(model, dict)
+  // 반납 순간(클립 종료/교체로 소유가 풀린 모프)엔 화면의 마지막 클립 값에서
+  // 이어가도록 절차 상태를 시드한다 — 숨은 내부 가중으로 점프하는 팝 방지
+  // (Codex MUST-FIX).
+  if (_prevYieldIdx) {
+    for (const [name] of _targets) {
+      const idx = resolveMorphIdx(dict, name)
+      if (idx === undefined) continue
+      if (_prevYieldIdx.has(idx) && !clipYield?.has(idx)) {
+        _weights.set(name, influences[idx])
+      }
+    }
+  }
+  _prevYieldIdx = clipYield
   for (const [name, target] of _targets) {
     const idx = resolveMorphIdx(dict, name)
     if (idx === undefined) continue
@@ -179,6 +220,7 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
     const rate = target > cur ? RATE_IN : RATE_OUT
     const next = cur + (target - cur) * (1 - Math.exp(-rate * clampedDt))
     _weights.set(name, next)
+    if (clipYield?.has(idx)) continue // 클립이 연기 중인 모프 — 양보
     influences[idx] = next
   }
 
@@ -207,7 +249,7 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
       _autoBrowNextAt = _autoT + 2.0 + (-Math.log(Math.max(0.001, Math.random())) * mean)
     }
     const p = _autoBrowOnset >= 0 ? (_autoT - _autoBrowOnset) / 0.7 : 1
-    if (p >= 0 && p < 1) {
+    if (p >= 0 && p < 1 && !clipYield?.has(idx)) {
       const env = Math.sin(Math.PI * p) // 떴다 내리는 산 모양(항상 위로)
       const offset = env * (0.10 + expr * 0.18) * autoGain
       const base = _weights.get(_autoBrowName) ?? 0
@@ -221,12 +263,13 @@ export function updateExpression(model, dt, blinkValue = 0, personality = null) 
     const drift = (0.5 + 0.5 * Math.sin(_autoT * 0.13)) // 0..1, 매우 느림
     const offset = drift * (0.04 + expr * 0.08) * autoGain
     const base = _weights.get(_autoSmileName) ?? 0
-    influences[idx] = Math.max(0, Math.min(1, base + offset))
+    if (!clipYield?.has(idx)) influences[idx] = Math.max(0, Math.min(1, base + offset))
   }
 
-  // 깜빡임 — 눈웃음(笑い) 가중만큼 줄여 이중 감김 방지
+  // 깜빡임 — 눈웃음(笑い) 가중만큼 줄여 이중 감김 방지. 클립이 깜빡임을
+  // 연기 중이면(타이밍까지 연출된 것) 절차 깜빡임이 양보.
   const blinkIdx = resolveMorphIdx(dict, BLINK_MORPH)
-  if (blinkIdx !== undefined) {
+  if (blinkIdx !== undefined && !clipYield?.has(blinkIdx)) {
     const smile = _weights.get(EYE_SMILE_MORPH) ?? 0
     influences[blinkIdx] = Math.max(0, Math.min(1, blinkValue)) * (1 - smile)
   }

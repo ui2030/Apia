@@ -135,7 +135,10 @@ export function releaseActiveClips(model, ctx, { fade = 0.45 } = {}) {
         model._clipRoles = null // A-1: clip no longer owns any bones
         // MMD는 mixer가 남아 있으면 물리가 동결 자세를 따라간다 —
         // 무클립 모드로 복원 (stashMmdMixer 주석 참조)
-        if (slot.flag === '_vmdClipActive') stashMmdMixer(model)
+        if (slot.flag === '_vmdClipActive') {
+          model._clipMorphNames = null // 표정/입 소유권 반납
+          stashMmdMixer(model)
+        }
       },
     }) || any
   }
@@ -578,6 +581,21 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
             })
           }
 
+          // 클립이 연기하는 모프(표정·입 트랙) 수집 — 재생 중엔 표정/립싱크
+          // 런타임이 이 모프들을 양보한다(연기 클립의 표정이 절차 표정에
+          // 덮여 죽지 않게; 고품질 연기 VMD 도입의 전제).
+          {
+            const clipMorphs = new Set()
+            for (const tr of clip.tracks) {
+              const mm = tr.name.match(/\.morphTargetInfluences\[([^\]]+)\]$/)
+              if (mm) clipMorphs.add(mm[1])
+            }
+            model._clipMorphNames = clipMorphs.size ? clipMorphs : null
+            if (clipMorphs.size) {
+              console.info('[VMD] clip owns morph tracks:', clipMorphs.size, [...clipMorphs].slice(0, 8).join(','))
+            }
+          }
+
           // 물리 보존 + 크로스페이드 (B단계 — 옷 폭발/손 자세 잔존의 본 수정).
           //
           // 예전 경로는 클립을 바꿀 때마다 helper.remove → helper.add로
@@ -691,6 +709,7 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
                       model._vmdClipActive = false
                       model._activeVmdAction = null
                       model._clipRoles = null // A-1
+                      model._clipMorphNames = null // 표정/입 양보 해제
                       stashMmdMixer(model)
                     },
                   })

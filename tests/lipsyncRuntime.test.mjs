@@ -1,5 +1,34 @@
 import { describe, it, expect } from 'vitest'
-import { isWavBuffer, analyzeWav } from '../src/lipsyncRuntime.js'
+import { isWavBuffer, analyzeWav, updateMouthMMD, stopTimeline } from '../src/lipsyncRuntime.js'
+
+describe('updateMouthMMD — 클립 소유 입 모프 양보', () => {
+  function mouthModel() {
+    const morphs = { 'あ': 0, 'い': 1, 'う': 2, 'え': 3, 'お': 4 }
+    const influences = new Array(5).fill(0)
+    return { model: { type: 'mmd', obj: { morphTargetInfluences: influences }, morphs }, influences, morphs }
+  }
+
+  it('발화 중이 아니면 클립이 연기하는 입 모프를 덮지 않는다', () => {
+    stopTimeline?.()
+    const { model, influences, morphs } = mouthModel()
+    model._vmdClipActive = true
+    model._clipMorphNames = new Set(['あ'])
+    influences[morphs['あ']] = 0.6 // 클립(mixer)이 연기한 입 벌림
+    for (let i = 0; i < 30; i++) updateMouthMMD(model, 1 / 60, false, 0)
+    expect(influences[morphs['あ']]).toBe(0.6) // 0으로 감쇠시키지 않음(양보)
+  })
+
+  it('폴백 발화 중엔 립싱크가 우선한다(말이 주인)', () => {
+    stopTimeline?.()
+    const { model, influences, morphs } = mouthModel()
+    model._vmdClipActive = true
+    model._clipMorphNames = new Set(['あ'])
+    influences[morphs['あ']] = 0.6
+    for (let i = 0; i < 30; i++) updateMouthMMD(model, 1 / 60, true, Math.PI / 2) // 사인파 폴백 발화
+    expect(influences[morphs['あ']]).toBeGreaterThan(0.3) // 립싱크가 구동
+    expect(influences[morphs['あ']]).not.toBe(0.6) // 클립 값 그대로가 아님
+  })
+})
 
 // 'RIFF' <size> 'WAVE' header, then arbitrary tail.
 function wavHeader(extraBytes = 0) {

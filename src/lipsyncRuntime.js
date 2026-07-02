@@ -181,15 +181,33 @@ function vowelTargets(frame, fallbackActive, fallbackPhase) {
 }
 
 /** 매 프레임 (MMD): lipsyncMMD 자리에서 호출. */
+let _prevMouthOwned = null // 직전 프레임의 클립 소유 입 모프 — 반납 팝 방지 시드용
 export function updateMouthMMD(model, dt, fallbackActive, fallbackPhase) {
   const mesh = model?.obj
   const dict = model?.morphs
   if (!mesh?.morphTargetInfluences || !dict) return
-  const targets = vowelTargets(currentFrame(), fallbackActive, fallbackPhase)
+  const frame = currentFrame()
+  const targets = vowelTargets(frame, fallbackActive, fallbackPhase)
+  // 클립 소유 입 모프 양보 — 발화 중이 아니면(전 모음을 0으로 감쇠 중이면)
+  // 연기 클립의 입 트랙을 덮지 않는다. 발화 중엔 립싱크가 항상 우선(말이 주인).
+  const speaking = !!frame || !!fallbackActive
+  const clipOwned = !speaking && model?._vmdClipActive ? model?._clipMorphNames : null
+  // 반납 순간엔 화면의 마지막 클립 값에서 감쇠를 이어간다(팝 방지, Codex).
+  if (_prevMouthOwned) {
+    for (const [v, morphName] of Object.entries(MMD_VOWEL_MORPHS)) {
+      if (_prevMouthOwned.has(morphName) && !clipOwned?.has(morphName)) {
+        const idx = dict[morphName]
+        if (idx !== undefined) _weights.set(`m:${v}`, mesh.morphTargetInfluences[idx])
+      }
+    }
+  }
+  _prevMouthOwned = clipOwned
   for (const [v, morphName] of Object.entries(MMD_VOWEL_MORPHS)) {
     const idx = dict[morphName]
     if (idx === undefined) continue
-    mesh.morphTargetInfluences[idx] = approach(`m:${v}`, targets[v], dt)
+    const next = approach(`m:${v}`, targets[v], dt)
+    if (clipOwned?.has(morphName)) continue // 내부 상태만 갱신, 쓰기는 양보
+    mesh.morphTargetInfluences[idx] = next
   }
 }
 
