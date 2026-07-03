@@ -49,7 +49,9 @@ const MOTION_LIBRARY = {
       'idle_air_scent',
       'idle_sway',
       'idle_skywatch',
-      'idle_curious'
+      'idle_curious',
+      'idle_yawn',
+      'idle_look_hands'
     ],
     active: [
       'idle_shift_weight',
@@ -77,7 +79,9 @@ const MOTION_LIBRARY = {
       'idle_skywatch',
       'idle_sway',
       'idle_stretch',
-      'idle_curious'
+      'idle_curious',
+      'idle_yawn',
+      'idle_look_hands'
     ]
   },
 
@@ -105,21 +109,27 @@ const MOTION_LIBRARY = {
       'react_small_surprised',
       'react_small_nod',
       'react_giggle',
-      'react_sigh'
+      'react_sigh',
+      'react_bow',
+      'react_pout'
     ],
     active: [
       'react_surprised',
       'react_happy',
       'react_big_nod',
       'react_giggle',
-      'react_sigh'
+      'react_sigh',
+      'react_bow',
+      'react_excited',
+      'react_pout'
     ],
     calm: [
       'react_nod',
       'react_small_surprised',
       'react_neutral',
       'react_giggle',
-      'react_sigh'
+      'react_sigh',
+      'react_bow'
     ]
   }
 }
@@ -130,7 +140,10 @@ const MOTION_LIBRARY = {
 // 의도를 존중해 필터를 타지 않는다(Codex 사전검토 반영 — 라이브러리만 필터).
 const REACT_EMOTION_TAGS = {
   react_giggle: new Set(['happy']),
-  react_sigh: new Set(['sad'])
+  react_sigh: new Set(['sad']),
+  react_excited: new Set(['happy']),
+  react_pout: new Set(['angry', 'sad']),
+  react_bow: new Set(['neutral', 'happy']) // 인사 꾸벅 — 감사/중립 리액션
 }
 
 // 클립 전용 어휘 — 절차 폴백이 없는 연기 클립 이름들. pickIdleMotion이
@@ -141,7 +154,9 @@ const CLIP_ONLY_IDLE = new Set([
   'idle_skywatch',
   'idle_stretch',
   'idle_sway',
-  'idle_curious' // 전신 연기 v2 (gen-vmd 자체 생성 — 커밋되지만 필터 규약 유지)
+  'idle_curious', // 전신 연기 v2 (gen-vmd 자체 생성 — 커밋되지만 필터 규약 유지)
+  'idle_yawn',
+  'idle_look_hands'
 ])
 
 // J단계 — "듣는 듯한/관여된" idle 제스처(방금 대화 직후 선호). 갸웃·손 모음·
@@ -185,7 +200,8 @@ const QUIET_IDLE = new Set([
   'idle_hands_clasped',
   'idle_air_scent', // 연기 클립 — 뒷짐지고 여유
   'idle_skywatch', // 연기 클립 — 눈 감고 평온(표정 트랙 포함)
-  'idle_sway' // 연기 클립 — 잔잔한 흔들림
+  'idle_sway', // 연기 클립 — 잔잔한 흔들림
+  'idle_yawn' // 연기 클립 — 하품(나른한 순간)
 ])
 const FIDGETY_IDLE = new Set([
   'idle_small_fidget',
@@ -195,7 +211,8 @@ const FIDGETY_IDLE = new Set([
   'idle_look_around',
   'idle_look_around_soft', // calm 풀에도 있어 calm×fidgety 교집합을 1→2로 (반복 방지)
   'idle_hand_on_hip',
-  'idle_impatient' // 연기 클립 — 초조하게 손 만지작
+  'idle_impatient', // 연기 클립 — 초조하게 손 만지작
+  'idle_look_hands' // 연기 클립 — 자기 손 구경(딴짓)
 ])
 const GESTURE_FLAVORS = {
   engaged: ENGAGED_IDLE,
