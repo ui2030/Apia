@@ -57,6 +57,7 @@ import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js'
 
 import { FURNITURE_DEFAULT } from './furnitureLayout.js'
 import { computeLighting, drawSky, createLightingRig } from './lightingRig.js'
+import { createPostFx } from './postFx.js'
 
 // Phase F — CC0 Kenney Furniture Kit GLBs (src/assets/room/, License.txt
 // included). `?url` so Vite emits each to dist and hands back a resolvable
@@ -391,6 +392,10 @@ export function createSceneRuntime({ canvasEl }) {
     200
   )
 
+  // 후처리(블룸+비네트) — 외곽선 렌더를 컴포저 체인에 편입, 알파 보존.
+  // applyViewport(리사이즈 단일 지점)보다 먼저 만들어져야 한다.
+  const postFx = createPostFx({ renderer, scene, camera, outlineEffect })
+
   function applyCameraDefault() {
     const aspect = viewportAspect()
     camera.position.copy(live.pos)
@@ -408,9 +413,12 @@ export function createSceneRuntime({ canvasEl }) {
     const aspect = viewportAspect()
     // Cap DPR at 2 — a 3x/4x monitor would otherwise blow up the transparent
     // overlay's WebGL buffer for no visible gain.
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    renderer.setPixelRatio(dpr)
     renderer.setSize(window.innerWidth, window.innerHeight)
     outlineEffect.setSize(window.innerWidth, window.innerHeight)
+    // 후처리 컴포저도 같은 뷰포트/DPR로 — 여기가 리사이즈 단일 지점(Codex).
+    postFx?.setSize(window.innerWidth, window.innerHeight, dpr)
     camera.aspect = aspect
     camera.fov = adaptiveFov(live.fov, aspect)
     camera.updateProjectionMatrix()
@@ -608,8 +616,10 @@ export function createSceneRuntime({ canvasEl }) {
     scene,
     camera,
     renderer,
-    // 애니 외곽선 렌더. main.js 렌더 루프는 renderer.render 대신 이걸.
-    outlineRender: (sc, cam) => outlineEffect.render(sc, cam),
+    // 애니 외곽선 렌더 + 후처리(블룸/비네트). main.js 렌더 루프는 renderer.render
+    // 대신 이걸. postFx가 꺼지면 내부에서 외곽선 직접 렌더로 폴백.
+    outlineRender: (sc, cam) => postFx.render(sc, cam),
+    postFx, // 킬스위치/튜닝 핸들(window.__setPostFx 등)
     clock,
     CAM_DEFAULT: live, // caller can mutate pos/target/fov on this; applyCameraDefault uses it
     applyCameraDefault,

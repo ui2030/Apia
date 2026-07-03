@@ -2057,6 +2057,13 @@ setInterval(() => {
 // E2E/수동 검증용 — 시각을 강제하고 적용된 타깃 상태를 돌려준다.
 window.__setLightingHour = (h, immediate = true) =>
   _sceneRuntime.lighting?.setHour(h, { immediate }) || null
+// 후처리 킬스위치/튜닝 — 알파나 성능이 현장에서 문제면 끌 수 있게.
+window.__setPostFx = (on) => { _sceneRuntime.postFx?.setEnabled(on); return _sceneRuntime.postFx?.isEnabled() ?? null }
+window.__tunePostFx = ({ bloom, vignette } = {}) => {
+  if (bloom) _sceneRuntime.postFx?.setBloom(bloom)
+  if (vignette !== undefined) _sceneRuntime.postFx?.setVignette(vignette)
+  return true
+}
 
 function initCameraControls() {
   const camBtn = document.getElementById('cam-btn')
