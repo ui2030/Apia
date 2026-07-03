@@ -38,6 +38,10 @@ src/assets/motions/vmd/**/*.VMD
 !src/assets/motions/vmd/idle/curious.vmd
 !src/assets/motions/vmd/idle/yawn.vmd
 !src/assets/motions/vmd/idle/look_hands.vmd
+!src/assets/motions/vmd/idle/wave.vmd
+!src/assets/motions/vmd/idle/stretch_arms.vmd
+!src/assets/motions/vmd/idle/sway_relax.vmd
+!src/assets/motions/vmd/idle/lean_in.vmd
 !src/assets/motions/vmd/idle/arms_crossed.vmd
 !src/assets/motions/vmd/idle/hand_on_hip.vmd
 !src/assets/motions/vmd/idle/hands_clasped.vmd

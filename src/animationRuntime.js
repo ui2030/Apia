@@ -108,6 +108,13 @@ function scheduleGuardedRelease(model, ctx, { action, fade, isCurrent, onRelease
       }
       action.stop()
       onRelease()
+      // 클립이 걸어둔 손모양 원복 — 정체성 가드로 디렉터 세팅은 보존.
+      if (model._clipHandShape) {
+        if (model.poseRig?.handShape === model._clipHandShape) {
+          model.poseRig.handShape = 'relaxed'
+        }
+        model._clipHandShape = null
+      }
     } catch {}
   }, fade * 1000 + 80)
   return true

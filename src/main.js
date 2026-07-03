@@ -132,6 +132,15 @@ function playMotion(motion) {
   const type = currentModel?.type
   if (type === 'mmd') {
     const asset = resolveMmdMotionAsset(motion.name)
+    // 새 모션 시작 시 이전 클립이 걸어둔 손모양을 청소(정체성 가드 — 디렉터가
+    // 소품 가리키기 등으로 직접 세팅한 손모양은 안 건드림). 새 클립이 루프면
+    // 릴리즈가 안 와서 이전 클립의 open/fist가 눌러앉는 것 방지(Codex MUST-FIX).
+    if (currentModel?._clipHandShape) {
+      if (currentModel.poseRig?.handShape === currentModel._clipHandShape) {
+        currentModel.poseRig.handShape = 'relaxed'
+      }
+      currentModel._clipHandShape = null
+    }
     if (!asset) {
       // No .vmd matched — hand any running clip back to the procedural layer
       // (fade out) so switching from a pose clip to a procedural idle doesn't
@@ -145,10 +154,35 @@ function playMotion(motion) {
       // one-shot 연기 클립 존중 게이트용 — 스케줄러가 클립 종료까지 새 자율
       // 행동을 얹지 않게 loop 여부를 기록(_vmdClipActive가 꺼지면 무의미).
       currentModel._activeClipLoop = asset.loop
+      // 매니페스트 handShape — 클립 동안 손모양 프리셋(흔들기=편 손 등).
+      // 릴리즈(scheduleGuardedRelease)와 다음 playMotion 시작에서 원복.
+      if (asset.handShape && currentModel.poseRig) {
+        currentModel.poseRig.handShape = asset.handShape
+        currentModel._clipHandShape = asset.handShape
+      }
+    }
+    // 실패 정리 — playMMDAnimation은 로드 실패/추월(race) 시 reject가 아니라
+    // null resolve라 .catch만으론 optimistic 플래그·손모양이 눌러앉는다(Codex
+    // MUST-FIX). 토큰으로 "그 사이 새 playMotion이 왔으면 손 대지 않음"을 보장
+    // (추월 null은 새 재생이 이미 자기 상태를 세팅했으므로 건드리면 안 됨).
+    // 모델 참조도 캡처 — currentModel은 가변이라, 모델 교체 후 옛 재생의 stale
+    // null이 (per-model 시퀀스가 우연히 같으면) 새 모델 상태를 지울 수 있다(Codex).
+    const playModel = currentModel
+    const playToken = playModel ? (playModel._vmdPlaySeq = (playModel._vmdPlaySeq || 0) + 1) : 0
+    const cleanupFailedPlay = () => {
+      if (!playModel || playModel !== currentModel || playModel._vmdPlaySeq !== playToken) return
+      playModel._vmdClipActive = false
+      if (playModel._clipHandShape) { // 손모양 원복(정체성 가드)
+        if (playModel.poseRig?.handShape === playModel._clipHandShape) {
+          playModel.poseRig.handShape = 'relaxed'
+        }
+        playModel._clipHandShape = null
+      }
     }
     playMMDAnimation(asset.url, { loop: asset.loop })
+      .then((clip) => { if (!clip) cleanupFailedPlay() })
       .catch((err) => {
-        if (currentModel) currentModel._vmdClipActive = false
+        cleanupFailedPlay()
         console.warn('[playMotion] vmd clip failed', motion.name, err)
       })
     return
@@ -1816,6 +1850,16 @@ function updateBody(t, delta) {
     const roles = new Set(clipMask.roles)
     for (const r of WALK_FREED_ROLES) roles.delete(r)
     for (const r of LEG_IK_OWNED_ROLES) roles.delete(r) // 다리도 보행 gait가 소유
+    effClipMask = roles.size ? { roles } : null
+  }
+  // 앉는 동안엔 다리를 클립에서 떼내 statePose의 앉기 접힘(무릎 1.55)이 이긴다.
+  // idle_curious처럼 다리 0회전 키(서서 무게이동용 소유권 이전)를 가진 클립이
+  // 활동 sit 단계의 pose로 뽑히면, 다리 마스크가 앉기 접힘을 펴버려 의자에 앉은
+  // 채 다리가 뻣뻣하게 뻗었다(실경로: activityRunner sit → pickPose engaged).
+  // 상체는 클립이 계속 연기(앉아서 갸웃 = 의도 동작). 걷기 분기와 같은 패턴.
+  if (state === 'sit' && clipMask?.roles) {
+    const roles = new Set(effClipMask?.roles ?? clipMask.roles)
+    for (const r of LEG_IK_OWNED_ROLES) roles.delete(r)
     effClipMask = roles.size ? { roles } : null
   }
 

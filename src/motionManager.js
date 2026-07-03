@@ -143,7 +143,13 @@ const REACT_EMOTION_TAGS = {
   react_sigh: new Set(['sad']),
   react_excited: new Set(['happy']),
   react_pout: new Set(['angry', 'sad']),
-  react_bow: new Set(['neutral', 'happy']) // 인사 꾸벅 — 감사/중립 리액션
+  react_bow: new Set(['neutral', 'happy']), // 인사 꾸벅 — 감사/중립 리액션
+  // 기존 어휘 확장(테스터 리포트 잔여) — 슬픈 대화에 기쁨 리액션이 나오던 헛점.
+  // nod 계열·react_neutral은 무태그 유지(맞장구는 감정 불문 유효).
+  react_happy: new Set(['happy']),
+  react_shy: new Set(['happy', 'neutral']), // 수줍음 = 칭찬/호의 반응
+  react_surprised: new Set(['surprised']),
+  react_small_surprised: new Set(['surprised'])
 }
 
 // 클립 전용 어휘 — 절차 폴백이 없는 연기 클립 이름들. pickIdleMotion이

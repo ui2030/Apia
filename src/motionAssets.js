@@ -53,7 +53,10 @@ function resolveFromManifest(manifest, pathToUrl, motionName, kind) {
     url,
     kind,
     loop: entry.loop === true,
-    fadeIn: Number.isFinite(entry.fadeIn) ? entry.fadeIn : (manifest.defaultFadeIn ?? 0.4)
+    fadeIn: Number.isFinite(entry.fadeIn) ? entry.fadeIn : (manifest.defaultFadeIn ?? 0.4),
+    // 클립 재생 동안 쓸 손모양 프리셋(poseRig HAND_SHAPES 키: open/point/fist).
+    // 손가락은 절차 role이라 클립과 안 싸움 — 흔들기=편 손 같은 연출용. 선택적.
+    handShape: typeof entry.handShape === 'string' ? entry.handShape : null
   }
 }
 
