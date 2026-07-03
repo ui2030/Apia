@@ -6,9 +6,12 @@ import { FURNITURE_DEFAULT } from './furnitureLayout.js'
 // 각 솔리드 가구를 footprint 원으로 근사한다. 평평한 것(러그·매트, h≈0)과
 // 아주 작은 소품은 제외. 반지름은 (w+d)/4 — 코너 과·미차단의 절충.
 const CHAR_RADIUS = 0.26
-const OBSTACLES = FURNITURE_DEFAULT
+const DEFAULT_OBSTACLES = FURNITURE_DEFAULT
   .filter((f) => f.size && f.size.h > 0.2 && (f.size.w + f.size.d) > 0.7)
   .map((f) => ({ x: f.position.x, z: f.position.z, r: (f.size.w + f.size.d) / 4 }))
+// 스테이지 모드(방 교체) — 절차적 가구가 숨겨지면 그 장애물로 길을 돌면 안
+// 된다(Codex MUST-FIX). setStageNavigation이 BOUNDS/OBSTACLES를 통째로 교체.
+let OBSTACLES = DEFAULT_OBSTACLES
 
 function _insideObstacle(x, z) {
   for (const o of OBSTACLES) {
@@ -58,9 +61,29 @@ const STATE = { IDLE: 'idle', WALK: 'walk', SIT: 'sit', TALK: 'talk' }
 // frame, and near the front the frustum is narrow so x must stay tighter.
 // minZ stays low enough to reach the bed/back furniture; the back of the
 // room is small but fully in frame. Tuned by screenshot.
-const BOUNDS = {
+const DEFAULT_BOUNDS = Object.freeze({
   minX: -1.7, maxX: 1.7,
   minZ: 1.2,  maxZ: 5.5,
+})
+let BOUNDS = DEFAULT_BOUNDS
+
+/**
+ * 스테이지 모드 내비게이션 오버라이드. 스테이지가 절차적 방을 대체하면
+ * 걷기 범위(walkBounds)와 장애물(obstacles: {x,z,r}[])을 스테이지에 맞게
+ * 교체한다. null → 기본(절차적 방) 복원. 부분 지정 가능 — 미지정 필드는
+ * 기본 유지, 단 obstacles 미지정 시 스테이지에선 빈 배열이 안전하므로
+ * 호출자가 명시적으로 [] 를 넘기는 것을 권장.
+ */
+export function setStageNavigation(nav) {
+  if (!nav) {
+    BOUNDS = DEFAULT_BOUNDS
+    OBSTACLES = DEFAULT_OBSTACLES
+    return
+  }
+  BOUNDS = nav.walkBounds
+    ? { ...DEFAULT_BOUNDS, ...nav.walkBounds }
+    : DEFAULT_BOUNDS
+  OBSTACLES = Array.isArray(nav.obstacles) ? nav.obstacles : DEFAULT_OBSTACLES
 }
 
 let state = STATE.IDLE

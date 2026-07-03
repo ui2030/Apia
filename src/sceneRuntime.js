@@ -58,6 +58,7 @@ import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js'
 import { FURNITURE_DEFAULT } from './furnitureLayout.js'
 import { computeLighting, drawSky, createLightingRig } from './lightingRig.js'
 import { createPostFx } from './postFx.js'
+import { loadStage, invalidateStageLoads, disposeStageTree } from './stageRuntime.js'
 
 // Phase F — CC0 Kenney Furniture Kit GLBs (src/assets/room/, License.txt
 // included). `?url` so Vite emits each to dist and hands back a resolvable
@@ -585,8 +586,8 @@ export function createSceneRuntime({ canvasEl }) {
   const { root: furniture, ready: furnitureReady } = buildFurniture(scene, { onPieceLoaded, onLampLoaded })
   // Foreground desk (the lo-fi 데스크 POV framing). Its ready promise is
   // folded into furnitureReady so screenshot checks wait for it too.
-  const fgDeskReady = buildForegroundDesk(scene, { onPieceLoaded, onLampLoaded })
-  const allReady = Promise.allSettled([furnitureReady, fgDeskReady])
+  const fgDesk = buildForegroundDesk(scene, { onPieceLoaded, onLampLoaded })
+  const allReady = Promise.allSettled([furnitureReady, fgDesk.ready])
   // Constrain the directional light's shadow camera to the room footprint
   // so shadow texels stay tight where the character actually walks.
   // 조명 패스: 노을 프리셋은 키가 창 밖(z<0) 낮은 고도에서 방 깊숙이(z≈4.4)
@@ -640,6 +641,32 @@ export function createSceneRuntime({ canvasEl }) {
     // 조명 패스 — 시간대 라이팅 리그. main.js가 tick(렌더 루프)과 setHour
     // (실시간 시계 60s 간격)를 구동한다.
     lighting,
+    // ④ 스테이지(방 교체) — 커뮤니티 스테이지 파일을 절차적 방 대신 로드.
+    stage: (() => {
+      let current = null
+      const setProceduralVisible = (on) => {
+        room.visible = on
+        furniture.visible = on
+        fgDesk.root.visible = on
+      }
+      return {
+        async load(cfg) {
+          // 이전 스테이지/진행 중 로드 정리(경쟁 가드 — stale 도착분 자동 폐기)
+          if (current) { scene.remove(current); disposeStageTree(current); current = null }
+          const obj = await loadStage(scene, cfg)
+          if (!obj) return null // 그 사이 clear()/새 load()가 이김
+          current = obj
+          setProceduralVisible(false)
+          return obj
+        },
+        clear() {
+          invalidateStageLoads()
+          if (current) { scene.remove(current); disposeStageTree(current); current = null }
+          setProceduralVisible(true)
+        },
+        isActive: () => !!current,
+      }
+    })(),
     // Resolves once every furniture piece + foreground desk prop has loaded
     // (or fallen back). E2E screenshot checks await this so they don't catch
     // the room mid pop-in (Codex NICE-TO-HAVE).
@@ -889,7 +916,8 @@ function buildForegroundDesk(scene, { onPieceLoaded, onLampLoaded } = {}) {
         .catch((err) => console.warn(`[scene] fg-desk prop failed (${p.model}):`, err?.message || err))
     )
   }
-  return Promise.allSettled(promises)
+  // 스테이지 모드가 fg 데스크도 숨길 수 있게 root 반환(과거엔 promise만).
+  return { root, ready: Promise.allSettled(promises) }
 }
 
 /**

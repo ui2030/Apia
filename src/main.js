@@ -17,7 +17,7 @@ import {
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
-import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector, setSeatedHipHeight, releaseSit, getWalkSpeed } from './characterController.js'
+import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector, setSeatedHipHeight, releaseSit, getWalkSpeed, setStageNavigation } from './characterController.js'
 import { applyInertialization, recordDisplayedPose, setInertializationEnabled } from './inertialization.js'
 import { setExpressionEmotion, updateExpression, resetExpression } from './expressionRuntime.js'
 import { playTimeline, stopTimeline, updateMouthMMD, updateMouthVRM } from './lipsyncRuntime.js'
@@ -2063,6 +2063,47 @@ window.__tunePostFx = ({ bloom, vignette } = {}) => {
   if (bloom) _sceneRuntime.postFx?.setBloom(bloom)
   if (vignette !== undefined) _sceneRuntime.postFx?.setVignette(vignette)
   return true
+}
+
+// ── ④ 스테이지(쇼츠급 방 교체) ──────────────────────────────────────
+// 사용자가 받은 MMD 스테이지(.pmx)/GLB 방을 절차적 방 대신 로드.
+// cfg: { path, scale?, position?, rotY?, castShadow?, outline?, walkBounds?,
+//        obstacles? } — localStorage 영속(재시작 자동 적용).
+const STAGE_STORE_KEY = 'apiaStage'
+async function applyStage(cfg) {
+  const obj = await _sceneRuntime.stage.load(cfg)
+  if (!obj) return false // 경쟁에서 밀림(그 사이 clear/새 load)
+  // 절차적 가구가 숨겨졌으니 그 장애물로 길을 돌면 안 된다 — 스테이지 명시
+  // obstacles(기본 빈 배열)로 교체(Codex MUST-FIX).
+  setStageNavigation({
+    walkBounds: cfg.walkBounds || null,
+    obstacles: Array.isArray(cfg.obstacles) ? cfg.obstacles : [],
+  })
+  return true
+}
+window.__setStage = async (path, cfg = {}) => {
+  const full = { ...cfg, path }
+  const ok = await applyStage(full).catch((err) => {
+    console.warn('[stage] load failed', err)
+    return false
+  })
+  if (ok) localStorage.setItem(STAGE_STORE_KEY, JSON.stringify(full))
+  return ok
+}
+window.__clearStage = () => {
+  _sceneRuntime.stage.clear()
+  setStageNavigation(null)
+  localStorage.removeItem(STAGE_STORE_KEY)
+  return true
+}
+// 부팅 자동 적용 — 저장된 스테이지가 있으면 로드(실패해도 절차적 방 폴백,
+// 저장은 유지해 파일 복구 시 다시 살아난다).
+{
+  let saved = null
+  try { saved = JSON.parse(localStorage.getItem(STAGE_STORE_KEY) || 'null') } catch {}
+  if (saved?.path) {
+    applyStage(saved).catch((err) => console.warn('[stage] 저장된 스테이지 로드 실패(절차적 방 유지):', err?.message || err))
+  }
 }
 
 function initCameraControls() {
