@@ -86,6 +86,7 @@ import toiletUrl from './assets/room/toilet.glb?url'
 import computerKeyboardUrl from './assets/room/computerKeyboard.glb?url'
 import computerMouseUrl from './assets/room/computerMouse.glb?url'
 import booksUrl from './assets/room/books.glb?url'
+import laptopUrl from './assets/room/laptop.glb?url'
 import lampSquareTableUrl from './assets/room/lampSquareTable.glb?url'
 import kitchenCoffeeMachineUrl from './assets/room/kitchenCoffeeMachine.glb?url'
 
@@ -113,6 +114,7 @@ const GLB_URLS = Object.freeze({
   'computerKeyboard.glb': computerKeyboardUrl,
   'computerMouse.glb': computerMouseUrl,
   'books.glb': booksUrl,
+  'laptop.glb': laptopUrl,
   'lampSquareTable.glb': lampSquareTableUrl,
   'kitchenCoffeeMachine.glb': kitchenCoffeeMachineUrl,
 })
@@ -526,6 +528,9 @@ export function createSceneRuntime({ canvasEl }) {
   // ── 조명 패스 — 시간대 라이팅 리그 ─────────────────────────────────
   // 명명된 라이트 + 창 재질 + 하늘 캔버스를 리그에 넘기고, 부팅 즉시 현재
   // 시각(분 포함 — 정시 스냅이면 최대 1시간 낡음, Codex MUST-FIX)으로 적용.
+  // lampGlowMats: 램프 GLB가 비동기로 도착하면 갓 재질이 여기 push된다 —
+  // 리그가 매 tick 같은 배열을 읽으므로 등록 즉시 시간대 발광이 적용된다.
+  const lampGlowMats = []
   const lighting = createLightingRig({
     ambient,
     key: dir,
@@ -534,6 +539,7 @@ export function createSceneRuntime({ canvasEl }) {
     deskGlow,
     paneMat: roomBuild.paneMat,
     skyCtx: skyCanvas(),
+    lampMats: lampGlowMats,
   })
   {
     const now = new Date()
@@ -574,10 +580,12 @@ export function createSceneRuntime({ canvasEl }) {
   // desk actually stands. Phase F: pieces are CC0 GLB models, loaded async +
   // auto-fit; box primitives remain as a per-piece fallback.
   const onPieceLoaded = (obj) => { if (wallpaperOpaque) applyOpaqueToMaterials(obj, true) }
-  const { root: furniture, ready: furnitureReady } = buildFurniture(scene, { onPieceLoaded })
+  // 램프 갓 재질 수집 → 라이팅 리그의 시간대 발광 대상(밤 블룸 헤일로).
+  const onLampLoaded = (obj) => collectLampShadeMats(obj, lampGlowMats)
+  const { root: furniture, ready: furnitureReady } = buildFurniture(scene, { onPieceLoaded, onLampLoaded })
   // Foreground desk (the lo-fi 데스크 POV framing). Its ready promise is
   // folded into furnitureReady so screenshot checks wait for it too.
-  const fgDeskReady = buildForegroundDesk(scene, { onPieceLoaded })
+  const fgDeskReady = buildForegroundDesk(scene, { onPieceLoaded, onLampLoaded })
   const allReady = Promise.allSettled([furnitureReady, fgDeskReady])
   // Constrain the directional light's shadow camera to the room footprint
   // so shadow texels stay tight where the character actually walks.
@@ -779,7 +787,24 @@ function buildRoom(scene) {
  * @param {THREE.Scene} scene
  * @param {{ onPieceLoaded?: (obj: THREE.Object3D) => void }} [opts]
  */
-function buildFurniture(scene, { onPieceLoaded } = {}) {
+// 램프 갓 재질 추출 — 조각 안에서 가장 밝은(휘도 최대) 재질 = 갓/전구라는
+// 휴리스틱(Kenney 램프: 크림 갓 + 어두운 목재 스탠드 구성 실측). 리그가 이
+// 재질의 emissive를 시간대에 맞춰 구동한다.
+function collectLampShadeMats(obj, out) {
+  let best = null
+  let bestLum = -1
+  obj.traverse((o) => {
+    const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []
+    for (const m of mats) {
+      if (!m?.color || m.emissive === undefined) continue
+      const lum = 0.299 * m.color.r + 0.587 * m.color.g + 0.114 * m.color.b
+      if (lum > bestLum) { bestLum = lum; best = m }
+    }
+  })
+  if (best) out.push(best)
+}
+
+function buildFurniture(scene, { onPieceLoaded, onLampLoaded } = {}) {
   const root = new Group()
   root.name = 'apia-furniture'
   scene.add(root)
@@ -801,7 +826,10 @@ function buildFurniture(scene, { onPieceLoaded } = {}) {
     if (!url) { fallbackBox(f); continue } // no model declared → keep the box
     promises.push(
       loadGLBPiece(loader, url, f)
-        .then((obj) => settle(obj))
+        .then((obj) => {
+          settle(obj)
+          if (obj && f.id === 'floorlamp') onLampLoaded?.(obj) // 시간대 발광 등록
+        })
         .catch((err) => {
           console.warn(`[scene] furniture GLB failed (${f.id}), using box fallback:`, err?.message || err)
           fallbackBox(f)
@@ -819,7 +847,7 @@ function buildFurniture(scene, { onPieceLoaded } = {}) {
  * on top, so the shot reads as "내 책상에 앉아 방을 바라보는" view. Not a room
  * furniture / walk target. Returns a promise that settles when props load.
  */
-function buildForegroundDesk(scene, { onPieceLoaded } = {}) {
+function buildForegroundDesk(scene, { onPieceLoaded, onLampLoaded } = {}) {
   const root = new Group()
   root.name = 'apia-fg-desk'
   scene.add(root)
@@ -851,7 +879,13 @@ function buildForegroundDesk(scene, { onPieceLoaded } = {}) {
     }
     promises.push(
       loadGLBPiece(loader, url, f)
-        .then((obj) => { if (obj) { root.add(obj); onPieceLoaded?.(obj) } })
+        .then((obj) => {
+          if (obj) {
+            root.add(obj)
+            onPieceLoaded?.(obj)
+            if (p.model === 'lampSquareTable.glb') onLampLoaded?.(obj) // 데스크 램프도 밤 발광
+          }
+        })
         .catch((err) => console.warn(`[scene] fg-desk prop failed (${p.model}):`, err?.message || err))
     )
   }

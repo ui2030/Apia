@@ -180,6 +180,15 @@ export function createLightingRig(handles) {
       H.paneMat.emissiveIntensity = s.paneEmissiveIntensity
       H.paneMat.color.setRGB(...s.paneColor)
     }
+    // 램프 갓 발광(소품 밀도 패스) — GLB 로드가 비동기라 lampMats는 나중에
+    // 채워지는 공유 배열. deskGlow 강도를 따라가 밤(0.85)엔 블룸 임계를 넘어
+    // 헤일로가 생기고 낮(0.12)엔 꺼진 갓으로 보인다.
+    if (H.lampMats) {
+      for (const m of H.lampMats) {
+        m.emissive.setRGB(1.0, 0.82, 0.55) // 따뜻한 전구색
+        m.emissiveIntensity = s.deskGlowIntensity * 1.15
+      }
+    }
     // 하늘 리드로 — 상태가 흔들릴 때만 + 500ms 스로틀(캔버스 비용 절약)
     if (skyDirty && H.skyCtx && now - lastSkyDraw > 500) {
       drawSky(H.skyCtx.ctx, H.skyCtx.w, H.skyCtx.h, s)

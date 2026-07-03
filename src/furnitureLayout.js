@@ -164,9 +164,11 @@ export const FURNITURE_DEFAULT = Object.freeze([
   },
   // 책상(의자 앞, 카메라 쪽) — 모니터를 사이에 둬 "화면 너머" 구도. 작은 footprint.
   deco({ id: 'workDesk', label: '책상', position: { x: 0.7, y: 0, z: 4.05 }, size: { w: 0.85, h: 0.74, d: 0.45 }, color: 0x8c6f4e, model: 'table.glb' }),
-  // 모니터(책상 위, 화면이 캐릭터를 향함). 모델 없음 → 박스 폴백(어두운 화면).
-  // size 작아 OBSTACLES 제외(걷기 무관). 캐릭터와 카메라 사이에 위치.
-  deco({ id: 'monitor', label: '모니터', position: { x: 0.7, y: 0.74, z: 4.0 }, size: { w: 0.5, h: 0.32, d: 0.06 }, color: 0x23262b }),
+  // 모니터 → 노트북(소품 밀도 패스): 검은 박스가 방 전경에서 흉물로 읽혀
+  // laptop GLB로 교체. 화면이 의자(뒤쪽 -z, 캐릭터 앉는 방향)를 향하게 회전.
+  // y는 **실측** 책상 윗면(0.33) — auto-fit footprint 클램프로 가구 실제 높이가
+  // 선언(h 0.74)보다 낮아, 선언값에 얹으면 공중부양한다(bbox 프로브 실측 교훈).
+  deco({ id: 'monitor', label: '노트북', position: { x: 0.7, y: 0.33, z: 4.0 }, size: { w: 0.45, h: 0.28, d: 0.4 }, color: 0x23262b, model: 'laptop.glb', modelRotY: Math.PI }),
 
   // ── LEFT wall — living ──────────────────────────────────────────────
   deco({ id: 'bookcase', label: '책장', position: { x: -2.45, y: 0, z: 2.1 }, size: { w: 1.4, h: 1.7, d: 0.4 }, color: 0x9c7b52, model: 'bookcaseClosedWide.glb', modelRotY: Math.PI / 2,
@@ -186,6 +188,13 @@ export const FURNITURE_DEFAULT = Object.freeze([
   deco({ id: 'plant_small', label: '작은 화분', position: { x: -2.5, y: 0.8, z: 3.2 }, size: { w: 0.22, h: 0.32, d: 0.22 }, color: 0x7ea36a, model: 'plantSmall1.glb' }),
   deco({ id: 'sofa', label: '소파', position: { x: -2.2, y: 0, z: 4.6 }, size: { w: 1.8, h: 0.78, d: 0.85 }, color: 0x8fae84, model: 'loungeSofa.glb', modelRotY: Math.PI / 2 }),
   deco({ id: 'coffeetable', label: '커피 테이블', position: { x: -1.2, y: 0, z: 4.7 }, size: { w: 0.8, h: 0.4, d: 0.5 }, color: 0xa9855f, model: 'tableCoffee.glb' }),
+  // ── 생활 소품(소품 밀도 패스) — "사람이 사는 흔적". 전부 데코(걷기/클릭 무관).
+  // y는 선언 높이가 아니라 **실측 가구 윗면**(tmp-bbox-probe): auto-fit footprint
+  // 클램프 때문에 실제 렌더 높이가 선언 size.h보다 낮다(커피테이블 0.28, 책장
+  // 0.40, 수납장 0.68). 책은 살짝 비스듬히(정렬된 방은 모델하우스처럼 죽는다).
+  deco({ id: 'coffeetable_books', label: '읽던 책', position: { x: -1.05, y: 0.28, z: 4.62 }, size: { w: 0.3, h: 0.11, d: 0.24 }, color: 0xb08a5a, model: 'books.glb', modelRotY: 0.5 }),
+  deco({ id: 'bookcase_books', label: '책 무더기', position: { x: -2.45, y: 0.4, z: 2.2 }, size: { w: 0.3, h: 0.14, d: 0.24 }, color: 0x9a7048, model: 'books.glb', modelRotY: Math.PI / 2 - 0.3 }),
+  deco({ id: 'counter_plant', label: '허브 화분', position: { x: 2.5, y: 0.68, z: 6.3 }, size: { w: 0.2, h: 0.26, d: 0.2 }, color: 0x7ea36a, model: 'plantSmall1.glb', modelRotY: 1.1 }),
   deco({ id: 'rug', label: '러그', position: { x: -1.1, y: 0.012, z: 4.7 }, size: { w: 2.2, h: 0.0, d: 2.0 }, color: 0xd0a896, model: 'rugRounded.glb', fitMode: 'footprint' }),
   deco({ id: 'floorlamp', label: '플로어 램프', position: { x: -2.5, y: 0, z: 6.4 }, size: { w: 0.45, h: 1.5, d: 0.45 }, color: 0xd8c7a8, model: 'lampRoundFloor.glb' }),
 
