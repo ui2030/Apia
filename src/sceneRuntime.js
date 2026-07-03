@@ -324,9 +324,9 @@ export const ROOM = Object.freeze({
   depth: 8.0,  // z extent (0 .. +8) — deep so the perspective recedes.
   height: 2.9, // y extent
 
-  wallColor: 0xf0d9b8,   // 따뜻한 크림(약간 진하게 — 희멀건 방지)
+  wallColor: 0xf7ecd9,   // 방 리워크 — 밝고 깨끗한 애니 인테리어 톤(칙칙함 탈피)
   floorColor: 0x7e5436,  // 진한 우드
-  ceilColor: 0xf3e4cb,   // 따뜻한 크림 천장
+  ceilColor: 0xfaf3e6,   // 밝은 크림 천장
   // Phase G — 솔리드 방(불투명). 블룸 합성기가 alpha를 보존 안 해 반투명이
   // 검게 떴고, 사용자 방향이 "방을 비춰 보는" 뷰라 면을 모두 불투명으로.
   // (데스크톱 오버레이 투과는 별도 모드로 분리 가능.)
@@ -704,7 +704,7 @@ function buildRoom(scene) {
   const floor = new Mesh(
     new PlaneGeometry(ROOM.width, ROOM.depth),
     new MeshStandardMaterial({
-      color: 0xc9a37e,
+      color: 0xd8b993, // 방 리워크 — 마루도 한 단계 밝게(밝은 애니 인테리어)
       map: loadRepeatTex(woodFloorTexUrl, 2.2, 3.0),
       roughness: 0.95,
       metalness: 0,

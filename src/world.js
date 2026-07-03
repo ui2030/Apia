@@ -1,4 +1,4 @@
-import { Vector3 } from 'three'
+﻿import { Vector3 } from 'three'
 
 import { FURNITURE_DEFAULT } from './furnitureLayout.js'
 
@@ -42,7 +42,7 @@ const TYPE_DEFAULTS = {
     anchorHeight: 0.82,
     screenOffsetY: 34,
     sitOffset: { x: 0, y: 0.04, z: -0.12 },
-    sitRotY: Math.PI,
+    sitRotY: 0, // 카메라 기준 상대각(0=마주봄) — yaw 규약 교정
     autoBehavior: true,
     clickable: true,
     bubbleText: 'I will sit for a moment.'
@@ -53,7 +53,7 @@ const TYPE_DEFAULTS = {
     anchorHeight: 0.16,
     screenOffsetY: 24,
     sitOffset: null,
-    sitRotY: Math.PI,
+    sitRotY: 0, // 카메라 기준 상대각(0=마주봄) — yaw 규약 교정
     autoBehavior: true,
     clickable: true,
     bubbleText: 'I will head over there.'
@@ -64,7 +64,7 @@ const TYPE_DEFAULTS = {
     anchorHeight: 0.34,
     screenOffsetY: 22,
     sitOffset: null,
-    sitRotY: Math.PI,
+    sitRotY: 0, // 카메라 기준 상대각(0=마주봄) — yaw 규약 교정
     autoBehavior: false,
     clickable: false,
     bubbleText: ''
@@ -204,7 +204,14 @@ function normalizeWorldObject(object = {}, index = 0) {
 // J단계 — 4로 올림: 여러 스마트 오브젝트(물·휴식·독서·화분) + prop/needFill 메타가
 // 추가돼 저장 월드(v3)가 못 받던 것(Codex MUST-FIX).
 // J단계 — 5로 올림: 화장실(door 활동)·컴퓨터 데스크/의자/모니터 추가(Codex MUST-FIX).
-const WORLD_VERSION = 5
+// 방 리워크 — 6으로 올림: 데스크 그룹 정중앙("서로의 모니터 너머 마주보기" 복원)
+// + 가구 비율 수정. 저장 월드(v5)가 옛 좌표(x0.7)를 물면 호출 착석이 시각과
+// 어긋난다(Codex MUST-FIX).
+// 7 — 착석 방향 교정(sitRotY 0=카메라). 주의: FURNITURE_DEFAULT의 interaction
+// 값을 튜닝하면 반드시 버전을 올릴 것 — 버전이 같으면 저장 월드가 이겨서
+// 수정이 조용히 무시된다(이번에 실측 디버깅으로 재확인한 함정).
+// 8 — 침대/기본값 sitRotY 규약 교정(카메라 상대 0).
+const WORLD_VERSION = 8
 
 export function createDefaultWorld() {
   return {

@@ -131,9 +131,8 @@ const LOOK_IDLE_RETURN_RATE = 0.6 // 1/s 지수 감쇠 — 절차적 시선 방�
 // MUST-FIX: _onArrive/idleTurn must NOT touch mesh.rotation.y while this is active.
 let faceCameraUntil = 0
 let faceCameraApproachTarget = null
-// Match the existing CAM_LOOK_ROT below — that's what sit/_onArrive already
-// use as "facing the user". Treating it as the source of truth means we
-// don't have to guess each model's forward axis again here.
+// camFacingYaw(아래)가 "사용자를 보는 yaw"의 단일 출처 — sit/_onArrive/걷기
+// 오버라이드가 전부 이를 쓴다.
 const FACE_CAMERA_PITCH_BIAS = -0.35 // negative `lookTargetY` looks up
 
 // dummy 모델의 머리 메시 참조 캐시. main.js loadDummy()에서 setDummyBlinkTarget으로
@@ -146,7 +145,14 @@ let idleTurn = {
   targetYaw: 0
 }
 
-const CAM_LOOK_ROT = Math.PI
+// "카메라(사용자)를 보는 yaw". 과거 상수 PI는 **반대 방향**이었다 — 호출 착석
+// 실측(yaw 체인 프로브 + 스크린샷)에서 서 있는 카메라 정면 = yaw 0, PI = 창문
+// 쪽(등짐)으로 확정. 주석끼리도 모순돼 있었음(한쪽은 PI=사용자, _onArrive는
+// PI=away). 모델 래퍼 규약이 바뀔 수 있어 주입형으로 — main.js가 로드 시 세팅.
+let camFacingYaw = 0
+export function setCameraFacingYaw(rad) {
+  camFacingYaw = Number.isFinite(rad) ? rad : 0
+}
 // Codex MUST-FIX (step 1 round 1): WALK_SPEED / SIT_DURATION are no longer
 // constants. They derive from the active personality vector so a "shy"
 // character walks slower and stays seated longer than an "active" one.
@@ -456,7 +462,7 @@ function _idle(mesh, t) {
 
   // Codex MUST-FIX (Phase C): facing override beats idleTurn while active.
   const bodyYawTarget = _isFacingCameraActive()
-    ? CAM_LOOK_ROT
+    ? camFacingYaw
     : idleTurn.targetYaw + lookYaw
   mesh.rotation.y += _shortAngle(bodyYawTarget, mesh.rotation.y) * 0.05
 }
@@ -493,7 +499,7 @@ function _walk(mesh, t, dt) {
   // `updateVRMBody`); the residual root bob is just the footfall impact.
   // Honor the facing override (Phase C): turn body toward camera instead of
   // the heading vector when active.
-  const yawTarget = _isFacingCameraActive() ? CAM_LOOK_ROT : Math.atan2(nx, nz)
+  const yawTarget = _isFacingCameraActive() ? camFacingYaw : Math.atan2(nx, nz)
   mesh.rotation.y += _shortAngle(yawTarget, mesh.rotation.y) * 0.18
   // 몸통 bob(상하)·sway(좌우)를 실제 발딛기 케이던스에 커플링한다. 하드코딩
   // 6.2rad/s는 gait(walkStepsPerSec)와 무관해 박자가 어긋나 보였다. 같은 t와
@@ -529,9 +535,11 @@ function _sit(mesh, t) {
   mesh.position.y = baseY + Math.sin(t * 0.9) * 0.003
   mesh.rotation.x = pose.tiltX * 0.5 + lookPitch * 0.6
   mesh.rotation.z = pose.tiltZ * 0.4
+  // sitRotY는 카메라 기준 상대각(0=사용자 마주봄) — 모델 규약이 바뀌어도 가구
+  // 선언은 그대로 유효하다.
   const sitYaw = _isFacingCameraActive()
-    ? CAM_LOOK_ROT
-    : (sitPose?.rotY ?? CAM_LOOK_ROT) + lookYaw * 0.35
+    ? camFacingYaw
+    : camFacingYaw + (sitPose?.rotY ?? 0) + lookYaw * 0.35
   mesh.rotation.y += _shortAngle(sitYaw, mesh.rotation.y) * 0.06
 
   if (emotion === 'sad') {
@@ -547,7 +555,7 @@ function _talk(mesh, t) {
   mesh.position.y = Math.sin(t * 1.6) * (0.01 * motionPower)
   mesh.rotation.x = pose.tiltX + Math.sin(t * 4.5) * 0.015 + lookPitch
   mesh.rotation.z = pose.tiltZ + Math.sin(t * 1.7 + pose.swaySeed) * 0.01
-  const talkYaw = _isFacingCameraActive() ? CAM_LOOK_ROT : lookYaw
+  const talkYaw = _isFacingCameraActive() ? camFacingYaw : camFacingYaw + lookYaw
   mesh.rotation.y += _shortAngle(talkYaw, mesh.rotation.y) * 0.08
 
   if (emotion === 'happy') {
@@ -593,11 +601,11 @@ function _onArrive(mesh) {
       x: target.x + offset.x,
       y: rootY,
       z: target.z + offset.z,
-      rotY: rotY ?? CAM_LOOK_ROT
+      rotY: rotY ?? 0 // 카메라 기준 상대각(0=마주봄) — updateSit에서 camFacingYaw 합성
     }
 
     mesh.position.set(activeSitPose.x, activeSitPose.y, activeSitPose.z)
-    mesh.rotation.y = activeSitPose.rotY
+    mesh.rotation.y = camFacingYaw + activeSitPose.rotY // 상대각 규약(updateSit과 동일 합성)
     setState(STATE.SIT)
     // held 앉기(활동 시퀀서가 통제) → 자동 기상 끔. 아니면 명시 지속시간 또는
     // 성격 기반 기본 지속시간 후 자동 기상(Codex MUST-FIX: 마시기와 충돌 방지).
@@ -614,11 +622,10 @@ function _onArrive(mesh) {
     sitHeld = false
     mesh.position.x = target.x
     mesh.position.z = target.z
-    // Codex MUST-FIX (Phase C): when facing override is active, don't snap
-    // back to CAM_LOOK_ROT (=PI, away from user) on arrival — keep facing
-    // the camera so the idle/sit blend below picks up the override cleanly.
+    // 도착 시 사용자 방향으로 — camFacingYaw(실측 0)로 통일(과거 PI 상수는
+    // 반대라 도착 순간 등을 보였다가 idle 블렌드가 되돌리고 있었음).
     if (!_isFacingCameraActive()) {
-      mesh.rotation.y = CAM_LOOK_ROT
+      mesh.rotation.y = camFacingYaw
     }
     setState(STATE.IDLE)
   }

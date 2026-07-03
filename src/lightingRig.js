@@ -49,9 +49,10 @@ const ANCHORS = [
     pane: { emissiveIntensity: 0.72, color: hexToRgb(0xe8f2ff) },
   },
   { // 낮 12시 — 밝고 뉴트럴, 높은 고도(짧은 그림자), 파란 하늘
+    // 방 리워크: 낮을 한 단계 더 밝고 깨끗하게(밝은 애니 인테리어 무드).
     hour: 12,
-    ambient: { color: hexToRgb(0xfff2e0), intensity: 0.42 },
-    key: { color: hexToRgb(0xfffbe8), intensity: 0.78, pos: [-1.4, 5.4, 0.4] },
+    ambient: { color: hexToRgb(0xfff5ea), intensity: 0.47 },
+    key: { color: hexToRgb(0xfffdf2), intensity: 0.82, pos: [-1.4, 5.4, 0.4] },
     keyTarget: [0, 1.0, 3.0],
     rim: { color: hexToRgb(0xeaf2ff), intensity: 0.12, pos: [1.5, 3.2, -0.6] },
     fill: { intensity: 0.10 },

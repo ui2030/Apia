@@ -61,7 +61,7 @@ const AlphaVignetteShader = {
   uniforms: {
     tDiffuse: { value: null }, // 블룸 적용된 장면
     tBase: { value: null },    // 블룸 전 장면(알파 소스)
-    vignette: { value: 0.32 }, // 0=끔, 1=강함
+    vignette: { value: 0.26 }, // 0=끔, 1=강함(방 리워크 — 밝은 무드로 한 단계 완화)
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
