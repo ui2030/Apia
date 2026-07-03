@@ -21,7 +21,7 @@
 import { AnimationClip, LoopOnce, LoopRepeat, Quaternion, QuaternionKeyframeTrack, VectorKeyframeTrack } from 'three'
 import { getMmdRuntime, getMmdHelper, stabilizeMmdPhysics, normalizeUrlToFetchable } from './modelRuntime.js'
 import { markInertialTransition, findPoseAwareStart } from './inertialization.js'
-import { rolesForBones } from './poseRig.js'
+import { rolesForBones, seedPoseSpringFromBones } from './poseRig.js'
 
 // Step 5+/goal A-1 (granular clipMask): pull the bone names a clip actually
 // keyframes so the procedural layer can mask exactly those roles (and keep
@@ -99,6 +99,13 @@ function scheduleGuardedRelease(model, ctx, { action, fade, isCurrent, onRelease
     try {
       if (ctx.getCurrentModel() !== model) return
       if (!isCurrent()) return
+      // 릴리즈 팝 수정: 소유권 반납 직전, 화면의 실제 본 자세를 스프링에
+      // 시드해 절차 레이어가 그 자세에서 이어받게 한다(seedPoseSpringFromBones
+      // 주석 참조). 반드시 action.stop() **전** — stop()이 바인딩을 바인드
+      // 값으로 되돌려 rest/T자세를 샘플링할 수 있다(Codex MUST-FIX).
+      if (model.poseRig) {
+        seedPoseSpringFromBones(model.poseRig.registry, model.poseRig.spring)
+      }
       action.stop()
       onRelease()
     } catch {}

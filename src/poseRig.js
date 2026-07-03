@@ -469,6 +469,34 @@ export function stepPoseSpring(springState, targets, dt, clipMask = null) {
 
 // ── Apply ───────────────────────────────────────────────────────────
 
+// 클립 릴리즈 팝 수정 — 클립이 role을 소유하는 동안 스프링은 0으로 감쇠하는데
+// 팔의 절차적 자연 자세는 rest가 아니라 hang 보정(z≈∓0.74)이라, 해제 첫
+// 프레임에 applyPose가 rest*0 ≈ T자세를 써 1프레임 ~90° 스냅이 났다(전 클립
+// 공통, rAF 각속도 실측). 해제 순간 화면의 실제 본 자세를 스프링 current로
+// 시드하면 스프링이 "보이던 자세 → 절차 타깃"을 연속으로 잇는다.
+// 전 role 시드가 안전한 이유: 비마스크 role은 직전 프레임에 applyPose가
+// rest*current를 썼으므로 시드가 수치적 no-op — 마스크 셋을 몰라도 된다
+// (legacy 마스크 경로는 _clipRoles가 null). 속도는 0 — 임계감쇠라 오버슈트
+// 없음. euler 표현 모호성(짐벌 근처)은 어떤 등가 euler든 같은 타깃으로
+// 수렴하므로 허용. 호출 시점: action.stop() **전**(stop이 바인딩을 바인드
+// 값으로 되돌릴 수 있음 — Codex MUST-FIX).
+const _seedQuat = new Quaternion()
+const _seedEuler = new Euler(0, 0, 0, 'XYZ')
+
+export function seedPoseSpringFromBones(registry, springState) {
+  if (!registry || !springState) return
+  for (const [role, st] of springState) {
+    const entry = registry.roles.get(role)
+    if (!entry) continue
+    _seedQuat.copy(entry.restQuat).invert().multiply(entry.bone.quaternion)
+    _seedEuler.setFromQuaternion(_seedQuat, 'XYZ')
+    st.current.x = _seedEuler.x
+    st.current.y = _seedEuler.y
+    st.current.z = _seedEuler.z
+    st.velocity.x = st.velocity.y = st.velocity.z = 0
+  }
+}
+
 const _applyEuler = new Euler(0, 0, 0, 'XYZ')
 const _applyQuat = new Quaternion()
 
