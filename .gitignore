@@ -30,6 +30,9 @@ src/assets/motions/vmd/**/*.VMD
 !src/assets/motions/vmd/talk/explain_soft.vmd
 !src/assets/motions/vmd/react/happy.vmd
 !src/assets/motions/vmd/react/shy.vmd
+!src/assets/motions/vmd/react/giggle.vmd
+!src/assets/motions/vmd/react/sigh.vmd
+!src/assets/motions/vmd/idle/curious.vmd
 !src/assets/motions/vmd/idle/arms_crossed.vmd
 !src/assets/motions/vmd/idle/hand_on_hip.vmd
 !src/assets/motions/vmd/idle/hands_clasped.vmd

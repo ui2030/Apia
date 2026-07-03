@@ -18,21 +18,27 @@ VMD 포맷 (리틀엔디안, Codex 사전검토 반영):
 
 사용:
   python scripts/gen-vmd.py            # 모든 클립을 매니페스트 경로로 생성
-  python scripts/gen-vmd.py --dump <file.vmd>       # 파싱 검증(헤더/본프레임 덤프)
+  python scripts/gen-vmd.py --dump <file.vmd>       # 파싱 검증(헤더/본·모프프레임 덤프)
   python scripts/gen-vmd.py --from-json <file.json> # 외부(AI/도구) 키프레임 JSON→VMD
-      # JSON: {"clips":{"idle/foo.vmd":{"左腕":[[frame,[rx,ry,rz]],...]}}} — #2 파이프라인 입구
+      # JSON v1: {"clips":{"idle/foo.vmd":{"左腕":[[frame,[rx,ry,rz]],...]}}}
+      # JSON v2: {"clips":{"idle/foo.vmd":{"bones":{"左腕":[...]},
+      #           "morphs":{"にっこり":[[frame,weight],...]}}}} — 표정 동시 저작
 
-상태/한계 (Codex 검토 반영, 2026-06-14):
-  - 검증됨: 팔 제스처 talk 클립이 테스트 모델(PMX)에서 자연스럽게 재생(라이브 확인).
-  - 머리 한계: main.js clipMask가 팔/몸통만 마스킹하고 머리·목·눈은 절차적
-    시선 레이어가 항상 소유 → 끄덕임/갸웃 같은 머리 모션은 클립으로 못 줌
-    (절차적 임펄스로 가야 함). 그래서 react_nod/surprised는 보류.
-  - 모델불문 한계(미해결): 클립이 팔을 소유하면 절차적 팔처짐 보정이 꺼져
-    클립이 처짐 베이스라인(∓0.74)을 직접 줘야 하는데, 이 값이 모델별 바인드
-    포즈에 의존 → 다른 PMX에서 T자세 위험. 그래서 아래 클립은 **테스트 모델 튜닝
-    잠정값**이고 .gitignore로 커밋 안 함. 올바른 길(차기 증분): clipMask를
-    트랙 기반 granular로 바꿔 클립은 제스처 델타만 갖고 런타임이 모델별 팔처짐을
-    클립 위에 합성 — 그러면 어떤 PMX에도 안전.
+상태 (전신 연기 v2, 2026-07-03 — granular clipMask 이후):
+  - 머리 가능해짐: clipMask가 트랙 기반 granular라 클립이 頭/首를 키프레임하면
+    그 role은 applyPose가 건너뛰고 클립이 소유한다(구 "머리 불가" 제약 해소).
+    단 소유 중엔 절차적 시선 추적·임펄스가 머리에 안 닿으므로 **머리를 키하는
+    클립은 짧은 non-loop 연기에만** 쓴다(루프 talk이 머리를 쥐면 시선이 죽음).
+  - 팔처짐: 클립은 제스처 델타만 갖고 런타임 applyClipArmHangCorrection이
+    모델별 팔처짐을 클립 위에 합성(A-2) — 어떤 PMX에도 안전.
+  - 무게이동: センター/腰 position은 로더가 스트립하므로 회전(下半身 롤)로 표현.
+    클립 재생 중엔 MMD 발 IK가 살아 있어(무클립시엔 OFF) 발이 심긴다. 단
+    applyPose가 helper.update 뒤에 돌므로, 다리 role을 클립이 소유하지 않으면
+    절차 rest 쓰기가 IK 결과를 덮는다 → 下半身을 키하는 클립은 좌우 足/ひざ에
+    **0회전 키를 놓아 소유권만 이전**한다(마스킹 목적, 값은 IK가 결정).
+  - 표정: 모프 트랙을 함께 구우면 재생 중 표정/립싱크 런타임이 그 모프를
+    양보한다(2026-07-03 엔진 수정). 모프명은 모델 사전과 직매칭(별칭 해석 없음)
+    — 없는 이름은 조용히 무시되므로 EMOTION_PRESETS 표준명 위주로 쓴다.
 """
 import math
 import os
@@ -48,8 +54,12 @@ HEAD = "頭"
 NECK = "首"
 UPPER = "上半身"
 UPPER2 = "上半身2"
+LOWER = "下半身"
+L_SHOULDER, R_SHOULDER = "左肩", "右肩"
 L_ARM, R_ARM = "左腕", "右腕"
 L_ELBOW, R_ELBOW = "左ひじ", "右ひじ"
+L_LEG, R_LEG = "左足", "右足"
+L_KNEE, R_KNEE = "左ひざ", "右ひざ"
 
 # MMD 기본 본 보간(준선형, MMD가 기본 키프레임에 쓰는 대각 패턴). 64바이트.
 DEFAULT_INTERP = bytes([
@@ -78,8 +88,10 @@ def sjis_fixed(s, length):
     return b + b"\x00" * (length - len(b))
 
 
-def write_vmd(path, frames):
-    """frames: list of (bone_name, frame_int, (rx,ry,rz)). pos는 0 고정."""
+def write_vmd(path, frames, morph_frames=()):
+    """frames: list of (bone_name, frame_int, (rx,ry,rz)). pos는 0 고정.
+    morph_frames: list of (morph_name, frame_int, weight) — 표정 트랙(v2).
+    섹션 순서(VMD 규격, Codex 확인): 본 → 모프 → camera/light/selfshadow/ik 카운트."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         f.write(b"Vocaloid Motion Data 0002\x00\x00\x00\x00\x00")  # 30B
@@ -92,8 +104,23 @@ def write_vmd(path, frames):
             f.write(struct.pack("<3f", 0.0, 0.0, 0.0))
             f.write(struct.pack("<4f", *q))
             f.write(DEFAULT_INTERP)
-        for _ in range(5):  # morph, camera, light, selfshadow, ik
+        f.write(struct.pack("<I", len(morph_frames)))  # 모프 프레임: 15B명 + frame + weight
+        for name, frame, weight in morph_frames:
+            f.write(sjis_fixed(name, 15))
+            f.write(struct.pack("<I", int(frame)))
+            f.write(struct.pack("<f", float(weight)))
+        for _ in range(4):  # camera, light, selfshadow, ik
             f.write(struct.pack("<I", 0))
+
+
+def normalize_clip(clip):
+    """클립 스키마 정규화(Codex MUST-FIX) → (bones, morphs).
+    v2: {"bones": {...}, "morphs": {...}} / v1(legacy): 평평한 {본: 키들}.
+    v1 판정을 키 이름으로 하면 'bones'라는 본명과 충돌하므로, dict에 bones/morphs
+    키가 하나라도 있으면 v2로 본다(본명은 일본어라 충돌 실현 없음)."""
+    if isinstance(clip, dict) and ("bones" in clip or "morphs" in clip):
+        return clip.get("bones", {}) or {}, clip.get("morphs", {}) or {}
+    return clip, {}
 
 
 def build_frames(clip):
@@ -102,6 +129,15 @@ def build_frames(clip):
     for bone, keys in clip.items():
         for frame, rot in keys:
             out.append((bone, frame, rot))
+    return out
+
+
+def build_morph_frames(morphs):
+    """morphs: { name: [(frame, weight), ...] } → flat (name, frame, weight)."""
+    out = []
+    for name, keys in morphs.items():
+        for frame, weight in keys:
+            out.append((name, int(frame), float(weight)))
     return out
 
 
@@ -264,6 +300,91 @@ CLIPS = {
         L_ELBOW: [(0, (0, -1.75, 0)), (40, (0, -1.78, 0)), (80, (0, -1.75, 0))],
         R_ELBOW: [(0, (0, -0.10, 0)), (80, (0, -0.10, 0))],
     },
+
+    # ── 전신 연기 v2 (2026-07-03) — 머리·목·어깨·표정 모프까지 쓰는 첫 저작 클립.
+    # granular clipMask 덕에 頭/首 키가 유효해짐(위 docstring). 셋 다 non-loop이고
+    # frame 0 = 마지막 frame = 중립이라 진입 fadeIn/종료 release fade가 안 튄다.
+    # 웃음(킥킥): 고개를 살짝 젖혔다 두 번 까딱이며 어깨 들썩, 미소 모프 동기.
+    # 성격 intensity가 진폭을 눌러주므로 shy에서도 과하지 않다.
+    "react/giggle.vmd": {
+        "bones": {
+            HEAD:  [(0, (0, 0, 0)), (8, (-0.06, 0, 0.02)), (16, (0.10, 0, 0.03)),
+                    (24, (0.02, 0, 0.02)), (32, (0.12, 0, 0.04)), (44, (0.03, 0, 0.01)),
+                    (62, (0, 0, 0)), (78, (0, 0, 0))],
+            NECK:  [(0, (0, 0, 0)), (16, (0.04, 0, 0.01)), (32, (0.05, 0, 0.01)),
+                    (62, (0, 0, 0)), (78, (0, 0, 0))],
+            L_SHOULDER: [(0, (0, 0, 0)), (12, (0, 0, 0.08)), (20, (0, 0, 0.03)),
+                         (28, (0, 0, 0.09)), (42, (0, 0, 0.02)), (62, (0, 0, 0))],
+            R_SHOULDER: [(0, (0, 0, 0)), (14, (0, 0, -0.07)), (22, (0, 0, -0.02)),
+                         (30, (0, 0, -0.08)), (44, (0, 0, -0.02)), (62, (0, 0, 0))],
+            UPPER: [(0, (0, 0, 0)), (16, (0.05, 0, 0.01)), (24, (0.02, 0, 0)),
+                    (32, (0.06, 0, -0.01)), (48, (0.01, 0, 0)), (70, (0, 0, 0))],
+            L_ARM: [(0, (0, 0, 0)), (14, (0.06, 0, 0.10)), (40, (0.03, 0, 0.05)), (70, (0, 0, 0))],
+            R_ARM: [(0, (0, 0, 0)), (14, (0.06, 0, -0.08)), (40, (0.03, 0, -0.04)), (70, (0, 0, 0))],
+            L_ELBOW: [(0, (0, 0, 0)), (14, (0, 0.30, 0)), (40, (0, 0.14, 0)), (70, (0, 0, 0))],
+            R_ELBOW: [(0, (0, 0, 0)), (16, (0, -0.24, 0)), (42, (0, -0.12, 0)), (70, (0, 0, 0))],
+        },
+        "morphs": {
+            "にっこり": [(0, 0.0), (10, 0.65), (30, 0.8), (55, 0.4), (78, 0.0)],
+            "笑い":     [(0, 0.0), (12, 0.30), (40, 0.35), (78, 0.0)],
+        },
+    },
+    # 한숨: 들숨(어깨·가슴 들리고 고개 살짝 위) → 뚝 떨어뜨리며 고개 숙임 → 회복.
+    # 낙하 구간(f34→46)이 들숨(f0→20)보다 빨라 "후—" 하는 리듬이 생긴다.
+    "react/sigh.vmd": {
+        "bones": {
+            L_SHOULDER: [(0, (0, 0, 0)), (20, (0, 0, 0.10)), (34, (0, 0, 0.10)),
+                         (44, (0, 0, -0.04)), (70, (0, 0, -0.02)), (96, (0, 0, 0))],
+            R_SHOULDER: [(0, (0, 0, 0)), (20, (0, 0, -0.10)), (34, (0, 0, -0.10)),
+                         (44, (0, 0, 0.04)), (70, (0, 0, 0.02)), (96, (0, 0, 0))],
+            UPPER: [(0, (0, 0, 0)), (20, (-0.05, 0, 0)), (34, (-0.05, 0, 0)),
+                    (46, (0.09, 0, 0)), (72, (0.05, 0, 0)), (96, (0, 0, 0))],
+            UPPER2: [(0, (0, 0, 0)), (20, (-0.02, 0, 0)), (46, (0.04, 0, 0)),
+                     (72, (0.02, 0, 0)), (96, (0, 0, 0))],
+            HEAD:  [(0, (0, 0, 0)), (20, (-0.08, 0, 0)), (34, (-0.06, 0, 0)),
+                    (48, (0.16, 0, 0)), (74, (0.08, 0, 0)), (96, (0, 0, 0))],
+            NECK:  [(0, (0, 0, 0)), (20, (-0.03, 0, 0)), (48, (0.06, 0, 0)),
+                    (74, (0.03, 0, 0)), (96, (0, 0, 0))],
+            L_ARM: [(0, (0, 0, 0)), (20, (-0.03, 0, 0.05)), (46, (0.04, 0, -0.02)), (96, (0, 0, 0))],
+            R_ARM: [(0, (0, 0, 0)), (20, (-0.03, 0, -0.05)), (46, (0.04, 0, 0.02)), (96, (0, 0, 0))],
+        },
+        "morphs": {
+            "困る": [(0, 0.0), (30, 0.25), (48, 0.6), (80, 0.3), (96, 0.0)],
+        },
+    },
+    # 호기심(갸웃): 머리 롤틸트+살짝 돌아봄, 상체 따라 기울고 下半身 롤로 무게이동.
+    # 다리 0회전 키 = 소유권 이전용(값은 발 IK가 결정 — docstring 무게이동 항목).
+    # 손은 검증된 hands_clasped 값으로 앞에 모아 "귀 기울이는" 실루엣.
+    "idle/curious.vmd": {
+        "bones": {
+            HEAD:  [(0, (0, 0, 0)), (25, (0.02, 0.08, 0.14)), (60, (0.03, 0.10, 0.18)),
+                    (95, (0.02, 0.06, 0.10)), (120, (0, 0, 0))],
+            NECK:  [(0, (0, 0, 0)), (25, (0.01, 0.03, 0.06)), (60, (0.01, 0.04, 0.07)),
+                    (95, (0.01, 0.02, 0.04)), (120, (0, 0, 0))],
+            UPPER: [(0, (0, 0, 0)), (30, (0.02, 0, 0.04)), (60, (0.03, 0, 0.05)),
+                    (120, (0, 0, 0))],
+            UPPER2: [(0, (0, 0, 0)), (30, (0.01, 0, 0.02)), (60, (0.01, 0, 0.03)),
+                     (120, (0, 0, 0))],
+            LOWER: [(0, (0, 0, 0)), (30, (0, 0, 0.03)), (60, (0, 0, 0.04)),
+                    (95, (0, 0, 0.02)), (120, (0, 0, 0))],
+            L_LEG:  [(0, (0, 0, 0)), (120, (0, 0, 0))],
+            R_LEG:  [(0, (0, 0, 0)), (120, (0, 0, 0))],
+            L_KNEE: [(0, (0, 0, 0)), (120, (0, 0, 0))],
+            R_KNEE: [(0, (0, 0, 0)), (120, (0, 0, 0))],
+            # 손 앞모음: x 전방성분만으론 부족 — z 들기(하강 상쇄)가 작으면 팔꿈치
+            # 굽힘이 전완을 등 뒤로 보낸다(x0.16/z0.10, x0.27/z0.07 모두 3각도
+            # 스크린샷에서 뒷짐 실루엣으로 실측). 가슴 앞 도달이 검증된 ponder
+            # (0.30,0,0.32)+팔꿈치 -1.28의 80% 스케일을 양팔 대칭으로 사용.
+            L_ARM:   [(0, (0, 0, 0)), (20, (0.24, 0, 0.26)), (100, (0.24, 0, 0.26)), (120, (0, 0, 0))],
+            L_ELBOW: [(0, (0, 0, 0)), (20, (0, -1.02, 0)), (100, (0, -1.02, 0)), (120, (0, 0, 0))],
+            R_ARM:   [(0, (0, 0, 0)), (20, (0.24, 0, -0.26)), (100, (0.24, 0, -0.26)), (120, (0, 0, 0))],
+            R_ELBOW: [(0, (0, 0, 0)), (20, (0, 1.02, 0)), (100, (0, 1.02, 0)), (120, (0, 0, 0))],
+        },
+        "morphs": {
+            "眉上移動": [(0, 0.0), (25, 0.35), (90, 0.3), (120, 0.0)],
+            "にこり":   [(0, 0.0), (30, 0.25), (95, 0.2), (120, 0.0)],
+        },
+    },
 }
 
 
@@ -289,8 +410,22 @@ def dump(path):
         frames = sorted(k[0] for k in keys)
         norms = {k[1] for k in keys}
         print(f"  {name}: {len(keys)} keys, frames {frames}, |q| {sorted(norms)}")
+    # 모프 섹션(본 바로 다음, 프레임당 23B = 15B명 + uint32 + float32)
+    if off + 4 <= len(data):
+        (mcount,) = struct.unpack_from("<I", data, off)
+        off += 4
+        print(f"  [morph] count={mcount}")
+        by_morph = {}
+        for _ in range(mcount):
+            mname = data[off:off + 15].split(b"\x00")[0].decode("shift_jis", "replace")
+            (mframe,) = struct.unpack_from("<I", data, off + 15)
+            (mweight,) = struct.unpack_from("<f", data, off + 19)
+            by_morph.setdefault(mname, []).append((mframe, round(mweight, 3)))
+            off += 23
+        for mname, keys in by_morph.items():
+            print(f"    {mname}: {sorted(keys)}")
     # trailing section counts
-    for label in ("morph", "camera", "light", "selfshadow", "ik"):
+    for label in ("camera", "light", "selfshadow", "ik"):
         if off + 4 <= len(data):
             (c,) = struct.unpack_from("<I", data, off)
             print(f"  [{label}] count={c}")
@@ -306,22 +441,27 @@ def dump(path):
 ELBOW_BONES = {"左ひじ", "右ひじ", "左ヒジ", "右ヒジ", "左肘", "右肘"}
 ARM_BONES = {"左腕", "右腕"}
 
-def validate_clip(rel, clip):
+def validate_clip(rel, bones, morphs=None):
     """변형 함정 경고(직접 겪은 것): 팔꿈치 |회전|이 π/2 부근이면 짐벌/뒤집힘 위험,
-    어깨 큰 들기(|z|>0.7)+팔꿈치 큰 굽힘 조합은 전완이 몸에 꽂힐 수 있음. 하드 실패는
-    아니고 경고만 — 저작자가 눈검증 다각도로 확인하도록."""
+    어깨 큰 들기(|z|>0.7)+팔꿈치 큰 굽힘 조합은 전완이 몸에 꽂힐 수 있음. 모프
+    weight는 [0,1] 밖이면 경고. 하드 실패는 아니고 경고만 — 저작자가 눈검증
+    다각도로 확인하도록. (頭/首 키는 granular clipMask 이후 정상 — 경고 대상 아님.)"""
     warns = []
     arm_lift = {}
-    for bone, keys in clip.items():
+    for bone, keys in bones.items():
         for _f, rot in keys:
             mx = max(abs(float(v)) for v in rot)
             if bone in ELBOW_BONES and 1.45 <= mx <= 1.70:
                 warns.append(f"{bone} 회전 {mx:.2f} (pi/2 부근) - 짐벌/뒤집힘 위험(값 조정 권장)")
             if bone in ARM_BONES:
                 arm_lift[bone] = max(arm_lift.get(bone, 0), abs(float(rot[2])))
-    for bone in ARM_BONES & set(clip):
+    for bone in ARM_BONES & set(bones):
         if arm_lift.get(bone, 0) > 0.7:
             warns.append(f"{bone} 어깨 들기 z>0.7 - 큰 팔꿈치 굽힘과 겹치면 전완이 몸에 꽂힐 수 있음(다각도 검수)")
+    for name, keys in (morphs or {}).items():
+        for _f, w in keys:
+            if not (0.0 <= float(w) <= 1.0):
+                warns.append(f"모프 {name} weight {w} - [0,1] 밖(모델별 과변형 위험)")
     for w in dict.fromkeys(warns):
         print(f"  [warn] {rel}: {w}")
 
@@ -336,18 +476,24 @@ def main():
             data = json.load(f)
         clips = data.get("clips", data) if isinstance(data, dict) else {}
         for rel, clip in clips.items():
-            validate_clip(rel, clip)
+            bones, morphs = normalize_clip(clip)
+            validate_clip(rel, bones, morphs)
             path = os.path.join(VMD_DIR, rel.replace("/", os.sep))
             frames = build_frames({b: [(int(fr), tuple(float(v) for v in rot)) for fr, rot in keys]
-                                   for b, keys in clip.items()})
-            write_vmd(path, frames)
-            print(f"wrote {rel}  ({len(frames)} bone frames) [from json]")
+                                   for b, keys in bones.items()})
+            mframes = build_morph_frames({m: [(int(fr), float(w)) for fr, w in keys]
+                                          for m, keys in morphs.items()})
+            write_vmd(path, frames, mframes)
+            print(f"wrote {rel}  ({len(frames)} bone + {len(mframes)} morph frames) [from json]")
         return
     for rel, clip in CLIPS.items():
+        bones, morphs = normalize_clip(clip)
+        validate_clip(rel, bones, morphs)
         path = os.path.join(VMD_DIR, rel.replace("/", os.sep))
-        frames = build_frames(clip)
-        write_vmd(path, frames)
-        print(f"wrote {rel}  ({len(frames)} bone frames)")
+        frames = build_frames(bones)
+        mframes = build_morph_frames(morphs)
+        write_vmd(path, frames, mframes)
+        print(f"wrote {rel}  ({len(frames)} bone + {len(mframes)} morph frames)")
 
 
 if __name__ == "__main__":

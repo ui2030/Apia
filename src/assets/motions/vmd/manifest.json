@@ -17,6 +17,7 @@
     "idle_skywatch":          { "path": "idle/skywatch.vmd",          "loop": false, "fadeIn": 0.4 },
     "idle_stretch":           { "path": "idle/stretch.vmd",           "loop": false, "fadeIn": 0.4 },
     "idle_sway":              { "path": "idle/sway.vmd",              "loop": false, "fadeIn": 0.4 },
+    "idle_curious":           { "path": "idle/curious.vmd",           "loop": false, "fadeIn": 0.45 },
 
     "talk_soft":              { "path": "talk/soft.vmd",              "loop": true,  "fadeIn": 0.3 },
     "talk_neutral":           { "path": "talk/neutral.vmd",           "loop": true,  "fadeIn": 0.3 },
@@ -34,6 +35,8 @@
     "react_small_surprised":  { "path": "react/small_surprised.vmd",  "loop": false, "fadeIn": 0.2 },
     "react_happy":            { "path": "react/happy.vmd",            "loop": false, "fadeIn": 0.25 },
     "react_shy":              { "path": "react/shy.vmd",              "loop": false, "fadeIn": 0.3 },
+    "react_giggle":           { "path": "react/giggle.vmd",           "loop": false, "fadeIn": 0.25 },
+    "react_sigh":             { "path": "react/sigh.vmd",             "loop": false, "fadeIn": 0.35 },
     "react_neutral":          { "path": "react/neutral.vmd",          "loop": false, "fadeIn": 0.3 }
   }
 }

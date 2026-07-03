@@ -7,11 +7,15 @@ mkdirSync(outDir, { recursive: true })
 
 // All 9 motions (mermay removed from the pack — commit 098d184), multi-frame
 // so we catch the "arm bent backwards" moment.
-const motions = [
+// argv로 모션 이름을 주면 그것만 검사한다(신규 클립 검수용):
+//   node tests/gui/vmd-check.mjs react_giggle idle_curious
+const DEFAULT_MOTIONS = [
   'idle_confident', 'idle_air_scent', 'idle_fix_hair', 'idle_skywatch',
   'idle_stretch', 'idle_sway', 'idle_tidy', 'idle_tracker',
   'idle_impatient'
 ]
+const argMotions = process.argv.slice(2).filter((a) => /^[a-z]+_[a-z0-9_]+$/.test(a))
+const motions = argMotions.length ? argMotions : DEFAULT_MOTIONS
 
 // Clipping often only shows from the side/back, so each sample point is
 // captured from three yaw angles orbiting the character's upper body.
@@ -35,7 +39,8 @@ mainWindow.on('console', (msg) => {
   if (msg.type() === 'error' && !t.includes('unknown char code')) {
     errorLogs.push(`[error] ${t}`)
   }
-  if (t.includes('[VMD diag]') || t.includes('[VMD] stripped')) {
+  if (t.includes('[VMD diag]') || t.includes('[VMD] stripped') || t.includes('clip owns morph') ||
+      t.includes('PropertyBinding')) {
     diagLogs.push(`[${msg.type()}] ${t}`)
   }
 })
@@ -94,11 +99,18 @@ async function restoreCamera() {
 }
 
 async function snapshot(label) {
+  // 수치 판독을 스크린샷 **앞**에서 — 3각도 촬영이 ~1.5s 걸려, 뒤에서 읽으면
+  // 짧은 연기 클립은 이미 끝난 값을 보고한다(전신 연기 v2 QA에서 실측한 함정).
+  const pose = await readPose()
   for (const [suffix, yaw] of ANGLES) {
     await setCameraAngle(yaw)
     await mainWindow.screenshot({ path: path.join(outDir, `${label}_${suffix}.png`) })
   }
   await restoreCamera()
+  return pose
+}
+
+async function readPose() {
   return await mainWindow.evaluate(() => {
     const scene = window.__apiaScene
     if (!scene) return null
@@ -111,11 +123,21 @@ async function snapshot(label) {
       return b ? [b.quaternion.x.toFixed(3), b.quaternion.y.toFixed(3),
                   b.quaternion.z.toFixed(3), b.quaternion.w.toFixed(3)] : null
     }
+    // 활성 모프(>0.05)도 보고 — 표정 트랙이 실제 적용되는지 QA(스크린샷
+    // 거리에선 얼굴이 작아 모프를 눈으로 판정하기 어렵다).
+    const morphs = {}
+    const dict = mesh.morphTargetDictionary || {}
+    const infl = mesh.morphTargetInfluences || []
+    for (const [name, idx] of Object.entries(dict)) {
+      const w = infl[idx]
+      if (w > 0.05) morphs[name] = Number(w.toFixed(2))
+    }
     return {
       lArm: q('左腕'),
       rArm: q('右腕'),
       lElbow: q('左ひじ'),
       rElbow: q('右ひじ'),
+      morphs,
     }
   })
 }
@@ -127,15 +149,23 @@ await new Promise((r) => setTimeout(r, 2000))
 console.log('\n=== rest (no clip) ===')
 console.log('  rest:', JSON.stringify(await snapshot('rest')))
 
+// 샘플 시점(초) — APIA_VMD_SAMPLES="1.0,2.0"로 재정의 가능(짧은 연기 클립의
+// 피크 프레임 검수용). 주의: snapshot 자체가 ~1.5s 걸려 뒤 샘플일수록 명목
+// 시각보다 늦게 찍힌다 — 정밀해야 하는 피크는 첫 샘플에 배치할 것.
+const SAMPLE_TIMES = (process.env.APIA_VMD_SAMPLES || '0.8,2.3')
+  .split(',').map(Number).filter((v) => Number.isFinite(v) && v > 0)
+
 for (const name of motions) {
   console.log(`\n=== ${name} ===`)
   await mainWindow.evaluate((n) => window.__applyMotion({ name: n, intensity: 1 }), name)
-  // Frame 1 — right after trigger (fadeIn ~0.5s)
-  await new Promise((r) => setTimeout(r, 800))
-  console.log('  t=0.8s:', JSON.stringify(await snapshot(`${name}_a`)))
-  // Frame 2 — mid clip
-  await new Promise((r) => setTimeout(r, 1500))
-  console.log('  t=2.3s:', JSON.stringify(await snapshot(`${name}_b`)))
+  let prev = 0
+  for (let i = 0; i < SAMPLE_TIMES.length; i++) {
+    const t = SAMPLE_TIMES[i]
+    await new Promise((r) => setTimeout(r, Math.max(0, (t - prev) * 1000)))
+    prev = t
+    const suffix = String.fromCharCode(97 + i) // a, b, c…
+    console.log(`  t=${t}s:`, JSON.stringify(await snapshot(`${name}_${suffix}`)))
+  }
 }
 
 if (diagLogs.length) {

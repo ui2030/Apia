@@ -586,9 +586,29 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
           // 덮여 죽지 않게; 고품질 연기 VMD 도입의 전제).
           {
             const clipMorphs = new Set()
+            // 로더가 모프 트랙 키를 **인덱스 숫자**로 만들 수 있다
+            // (.morphTargetInfluences[71]). 양보 소비부(표정/립싱크)는 이름
+            // 기반이라 숫자를 그대로 두면 dict 미스로 양보가 조용히 무산 —
+            // 절차 표정이 클립 표정을 매 프레임 0으로 되돌린다(전신 연기 v2
+            // QA에서 실측). 역사전으로 이름으로 정규화한다.
+            let invDict = null
+            const morphNameByIdx = (key) => {
+              if (!invDict) {
+                invDict = new Map()
+                model.obj?.traverse?.((o) => {
+                  if (o.morphTargetDictionary) {
+                    for (const [name, idx] of Object.entries(o.morphTargetDictionary)) {
+                      if (!invDict.has(String(idx))) invDict.set(String(idx), name)
+                    }
+                  }
+                })
+              }
+              return invDict.get(key) || key
+            }
             for (const tr of clip.tracks) {
               const mm = tr.name.match(/\.morphTargetInfluences\[([^\]]+)\]$/)
-              if (mm) clipMorphs.add(mm[1])
+              if (!mm) continue
+              clipMorphs.add(/^\d+$/.test(mm[1]) ? morphNameByIdx(mm[1]) : mm[1])
             }
             model._clipMorphNames = clipMorphs.size ? clipMorphs : null
             if (clipMorphs.size) {

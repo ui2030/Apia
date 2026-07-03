@@ -48,7 +48,8 @@ const MOTION_LIBRARY = {
       'idle_sway_relax',
       'idle_air_scent',
       'idle_sway',
-      'idle_skywatch'
+      'idle_skywatch',
+      'idle_curious'
     ],
     active: [
       'idle_shift_weight',
@@ -75,7 +76,8 @@ const MOTION_LIBRARY = {
       'idle_air_scent',
       'idle_skywatch',
       'idle_sway',
-      'idle_stretch'
+      'idle_stretch',
+      'idle_curious'
     ]
   },
 
@@ -101,19 +103,34 @@ const MOTION_LIBRARY = {
     shy: [
       'react_shy',
       'react_small_surprised',
-      'react_small_nod'
+      'react_small_nod',
+      'react_giggle',
+      'react_sigh'
     ],
     active: [
       'react_surprised',
       'react_happy',
-      'react_big_nod'
+      'react_big_nod',
+      'react_giggle',
+      'react_sigh'
     ],
     calm: [
       'react_nod',
       'react_small_surprised',
-      'react_neutral'
+      'react_neutral',
+      'react_giggle',
+      'react_sigh'
     ]
   }
+}
+
+// 전신 연기 v2 — 감정 태그가 있는 react는 그 감정일 때만 라이브러리 후보로
+// 남는다(한숨이 happy에, 킥킥이 sad에 나오는 오배치 방지). 태그 없는 이름은
+// 기존 그대로(무회귀). 캐릭터 프로필의 감정별 preset(react.happy 등)은 저작
+// 의도를 존중해 필터를 타지 않는다(Codex 사전검토 반영 — 라이브러리만 필터).
+const REACT_EMOTION_TAGS = {
+  react_giggle: new Set(['happy']),
+  react_sigh: new Set(['sad'])
 }
 
 // 클립 전용 어휘 — 절차 폴백이 없는 연기 클립 이름들. pickIdleMotion이
@@ -123,7 +140,8 @@ const CLIP_ONLY_IDLE = new Set([
   'idle_impatient',
   'idle_skywatch',
   'idle_stretch',
-  'idle_sway'
+  'idle_sway',
+  'idle_curious' // 전신 연기 v2 (gen-vmd 자체 생성 — 커밋되지만 필터 규약 유지)
 ])
 
 // J단계 — "듣는 듯한/관여된" idle 제스처(방금 대화 직후 선호). 갸웃·손 모음·
@@ -137,7 +155,8 @@ const ENGAGED_IDLE = new Set([
   'idle_look_around',
   'idle_look_around_soft',
   'idle_lean_in',
-  'idle_wave'
+  'idle_wave',
+  'idle_curious' // 갸웃+손모음 — "듣고 있어요" 실루엣이라 대화 직후에 적합
 ])
 
 // 2단계(디렉터 연동) — idle 제스처 flavor. 디렉터가 읽은 mood(behaviorDirector
@@ -646,7 +665,12 @@ export class MotionManager {
           ? presets.react[emotion]
           : []
 
-      return uniqueMerge(emotionPresets, library)
+      // 감정 태그 필터는 라이브러리 쪽만 — 프로필이 감정별로 명시한 preset은
+      // 저작 의도로 보고 그대로 통과시킨다.
+      const taggedLibrary = library.filter(
+        (n) => !REACT_EMOTION_TAGS[n] || REACT_EMOTION_TAGS[n].has(emotion)
+      )
+      return uniqueMerge(emotionPresets, taggedLibrary)
     }
 
     return uniqueMerge(presets[category], library)
