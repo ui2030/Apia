@@ -46,6 +46,7 @@ import {
   Scene,
   ShadowMaterial,
   SphereGeometry,
+  TextureLoader,
   SRGBColorSpace,
   Vector2,
   Vector3,
@@ -88,6 +89,12 @@ import computerKeyboardUrl from './assets/room/computerKeyboard.glb?url'
 import computerMouseUrl from './assets/room/computerMouse.glb?url'
 import booksUrl from './assets/room/books.glb?url'
 import laptopUrl from './assets/room/laptop.glb?url'
+// 텍스처 패스(쇼츠 격차 '질감' 축) — ambientCG CC0(상용·재배포 허용,
+// src/assets/textures/LICENSE-ambientCG.txt). 1K 컬러맵만 사용(toon 셰이딩
+// 아래에선 노멀/러프니스 기여가 미미).
+import woodFloorTexUrl from './assets/textures/WoodFloor051_Color.jpg?url'
+import wallpaperTexUrl from './assets/textures/Wallpaper002A_Color.jpg?url'
+import fabricTexUrl from './assets/textures/Fabric030_Color.jpg?url'
 import lampSquareTableUrl from './assets/room/lampSquareTable.glb?url'
 import kitchenCoffeeMachineUrl from './assets/room/kitchenCoffeeMachine.glb?url'
 
@@ -191,6 +198,15 @@ function woodTexture() {
   tex.colorSpace = SRGBColorSpace
   tex.repeat.set(5, 5)
   _woodTex = tex
+  return tex
+}
+
+// 반복 타일 텍스처 로더(질감 패스) — SRGB+Repeat 세팅 공통화.
+function loadRepeatTex(url, rx, ry) {
+  const tex = new TextureLoader().load(url)
+  tex.colorSpace = SRGBColorSpace
+  tex.wrapS = tex.wrapT = RepeatWrapping
+  tex.repeat.set(rx, ry)
   return tex
 }
 
@@ -682,10 +698,14 @@ function buildRoom(scene) {
   // Colored floor inside the shadow plane. Slightly inset so the shadow
   // catcher above (y=0.001) renders shadows on top. Phase E: low-opacity
   // so the actual desktop is visible underneath the wood tint.
+  // 질감 패스 — 진짜 쪽모이 마루(ambientCG CC0). 틴트는 기존 앰버 무드를
+  // 유지하되 텍스처가 죽지 않는 밝기로(단색 0x7e5436보다 크게 밝힘 — 텍스처
+  // 자체가 이미 어두운 결을 가짐).
   const floor = new Mesh(
     new PlaneGeometry(ROOM.width, ROOM.depth),
     new MeshStandardMaterial({
-      color: ROOM.floorColor,
+      color: 0xc9a37e,
+      map: loadRepeatTex(woodFloorTexUrl, 2.2, 3.0),
       roughness: 0.95,
       metalness: 0,
       transparent: true,
@@ -698,8 +718,11 @@ function buildRoom(scene) {
   floor.userData.noToon = true // toon이 수평 바닥에서 흰색으로 깨져 일반 셰이딩 유지
   root.add(floor)
 
+  // 질감 패스 — 벽지(ambientCG CC0, 은은한 결). 웜 크림 틴트가 곱해져
+  // 기존 팔레트를 유지하면서 단색 면의 밋밋함만 없앤다.
   const wallMat = new MeshStandardMaterial({
     color: ROOM.wallColor,
+    map: loadRepeatTex(wallpaperTexUrl, 3.0, 1.4),
     roughness: 0.9,
     metalness: 0,
     side: BackSide, // visible from inside the room only
@@ -760,6 +783,48 @@ function buildRoom(scene) {
   const rightF = new Mesh(vFrame, frameMat)
   rightF.position.set(WINDOW.width / 2 + frameThickness / 2, WINDOW.y, WINDOW.z)
   root.add(rightF)
+
+  // ── 질감 패스 — 커튼 + 커튼봉(창 양옆, ambientCG CC0 리넨에 웜 틴트) ──
+  // 정적 plane 2장 — 물리 없는 데코지만 "사람이 꾸민 창"으로 읽힌다.
+  const curtainMat = new MeshStandardMaterial({
+    color: 0xf2e2cc, // 리넨 맵이 어두운 회색이라 밝은 틴트로 보정
+    map: loadRepeatTex(fabricTexUrl, 1.0, 1.6),
+    // 창 역광에서 새까만 판이 되지 않게 미세 자체광(블룸 임계 훨씬 아래).
+    emissive: 0xffd9b0,
+    emissiveIntensity: 0.07,
+    roughness: 1.0,
+    metalness: 0,
+    side: DoubleSide
+  })
+  const curtainGeo = new PlaneGeometry(0.52, 1.95)
+  for (const sx of [-1, 1]) {
+    const curtain = new Mesh(curtainGeo, curtainMat)
+    curtain.position.set(sx * (WINDOW.width / 2 + 0.36), WINDOW.y - 0.06, WINDOW.z + 0.05)
+    curtain.castShadow = true
+    root.add(curtain)
+  }
+  const rod = new Mesh(
+    new BoxGeometry(WINDOW.width + 1.1, 0.045, 0.045),
+    new MeshStandardMaterial({ color: 0x6a4e34, roughness: 0.7, metalness: 0 })
+  )
+  rod.position.set(0, WINDOW.y + WINDOW.height / 2 + 0.16, WINDOW.z + 0.05)
+  root.add(rod)
+
+  // ── 질감 패스 — 걸레받이(벽 하단 몰딩). 벽-바닥 경계가 "공사장 박스"에서
+  // "마감된 방"으로 읽히게 하는 저비용 디테일.
+  const baseboardMat = new MeshStandardMaterial({ color: 0x8a6a4c, roughness: 0.8, metalness: 0 })
+  const bbH = 0.13
+  const bbD = 0.028
+  const bbBack = new Mesh(new BoxGeometry(ROOM.width, bbH, bbD), baseboardMat)
+  bbBack.position.set(0, bbH / 2, bbD / 2 + 0.001)
+  root.add(bbBack)
+  const bbSide = new BoxGeometry(bbD, bbH, ROOM.depth)
+  const bbLeft = new Mesh(bbSide, baseboardMat)
+  bbLeft.position.set(-halfW + bbD / 2 + 0.001, bbH / 2, ROOM.depth / 2)
+  root.add(bbLeft)
+  const bbRight = new Mesh(bbSide, baseboardMat)
+  bbRight.position.set(halfW - bbD / 2 - 0.001, bbH / 2, ROOM.depth / 2)
+  root.add(bbRight)
 
   // Left and right walls. Codex MUST-FIX round 3: side wall rotations are
   // mirrored so the BackSide-culled face ends up pointing outward (the

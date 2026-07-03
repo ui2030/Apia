@@ -1,0 +1,9 @@
+Textures in this folder are from ambientCG (https://ambientcg.com),
+released under Creative Commons CC0 1.0 Universal (public domain).
+Commercial use and redistribution permitted, no attribution required.
+
+- WoodFloor051_Color.jpg  https://ambientcg.com/view?id=WoodFloor051
+- Wallpaper002A_Color.jpg https://ambientcg.com/view?id=Wallpaper002A
+- Fabric030_Color.jpg     https://ambientcg.com/view?id=Fabric030
+
+Downloaded 2026-07-04 (1K JPG color maps).
