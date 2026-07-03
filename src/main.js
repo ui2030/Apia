@@ -2040,10 +2040,23 @@ function animate() {
     propManager.sync()
   }
 
+  // 조명 패스 — 시간대 라이팅 리그 수렴 스텝(지수 lerp, 프레임당 상수 비용).
+  _sceneRuntime.lighting?.tick(delta)
+
   updateBubblePosition()
   updateWorldLabels(camera)
   outlineRender(scene, camera)
 }
+
+// 조명 패스 — 실시간 시계 연동(분 포함). 리그는 타깃만 갱신하고 tick이
+// 부드럽게 수렴하므로 60s 간격이면 충분(정시 경계 팝 없음).
+setInterval(() => {
+  const now = new Date()
+  _sceneRuntime.lighting?.setHour(now.getHours() + now.getMinutes() / 60)
+}, 60000)
+// E2E/수동 검증용 — 시각을 강제하고 적용된 타깃 상태를 돌려준다.
+window.__setLightingHour = (h, immediate = true) =>
+  _sceneRuntime.lighting?.setHour(h, { immediate }) || null
 
 function initCameraControls() {
   const camBtn = document.getElementById('cam-btn')

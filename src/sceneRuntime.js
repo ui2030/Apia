@@ -56,6 +56,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js'
 
 import { FURNITURE_DEFAULT } from './furnitureLayout.js'
+import { computeLighting, drawSky, createLightingRig } from './lightingRig.js'
 
 // Phase F — CC0 Kenney Furniture Kit GLBs (src/assets/room/, License.txt
 // included). `?url` so Vite emits each to dist and hands back a resolvable
@@ -189,24 +190,19 @@ function woodTexture() {
   return tex
 }
 
-let _sunsetTex = null
-function sunsetTexture() {
-  if (_sunsetTex) return _sunsetTex
+// 조명 패스 — 고정 노을 텍스처를 동적 하늘 캔버스로 대체. 라이팅 리그가
+// 시간대에 맞춰 drawSky로 다시 그린다(부팅 시 즉시 현재 시각으로 채움).
+let _skyCanvas = null
+function skyCanvas() {
+  if (_skyCanvas) return _skyCanvas
   const c = document.createElement('canvas')
   c.width = 128; c.height = 128
-  const g = c.getContext('2d')
-  const grad = g.createLinearGradient(0, 0, 0, 128)
-  grad.addColorStop(0, '#9ec7e8')   // 하늘 위
-  grad.addColorStop(0.5, '#ffd9a0') // 노을
-  grad.addColorStop(0.72, '#ff9e6b')
-  grad.addColorStop(1, '#caa07a')   // 먼 지평/건물
-  g.fillStyle = grad; g.fillRect(0, 0, 128, 128)
-  g.fillStyle = 'rgba(255,240,200,0.9)'; g.beginPath(); g.arc(48, 78, 14, 0, Math.PI * 2); g.fill()
-  g.fillStyle = 'rgba(120,140,110,0.55)'; g.fillRect(0, 110, 128, 18) // 풍경 실루엣
+  const ctx = c.getContext('2d')
+  drawSky(ctx, 128, 128, computeLighting(18)) // 초기값(리그 부팅이 곧 덮음)
   const tex = new CanvasTexture(c)
   tex.colorSpace = SRGBColorSpace
-  _sunsetTex = tex
-  return tex
+  _skyCanvas = { ctx, w: 128, h: 128, texture: tex }
+  return _skyCanvas
 }
 
 // ── Foreground desk (lo-fi 데스크 POV) ───────────────────────────────
@@ -461,7 +457,10 @@ export function createSceneRuntime({ canvasEl }) {
   // room interior).
   // Phase G — 따뜻하고 부드러운 lo-fi 저녁 조명. toon 밴드가 또렷이 읽히도록
   // 부드러운 웜 키라이트 + 따뜻한 앰비언트. 거센 햇빛 느낌을 줄인다.
-  scene.add(new AmbientLight(0xffe0c0, 0.5))
+  // 조명 패스 — 모든 라이트는 명명된 핸들(라이팅 리그가 시간대별로 구동).
+  // 초기값은 리그 부팅(setHour immediate)이 즉시 덮어쓴다.
+  const ambient = new AmbientLight(0xffe0c0, 0.5)
+  scene.add(ambient)
 
   const dir = new DirectionalLight(0xffdca0, 0.7)
   dir.position.set(-3, 4, 0.6)        // upper-left, near the back-wall window
@@ -469,6 +468,8 @@ export function createSceneRuntime({ canvasEl }) {
   scene.add(dir.target)
   dir.castShadow = true
   dir.shadow.mapSize.set(1024, 1024)
+  // 그림자 절두체는 아래(가구 빌드 뒤)의 방-footprint 블록이 단일 출처로
+  // 설정한다 — 여기서 중복 설정하면 나중 블록이 덮어써 침묵 회귀(Codex).
   scene.add(dir)
 
   // Shadow-catching floor (kept) — under the visible room floor so the old
@@ -490,6 +491,11 @@ export function createSceneRuntime({ canvasEl }) {
   // washing detail out.
   const rim = new DirectionalLight(0xffb4a0, 0.18)
   rim.position.set(3, 3, 1)
+  // 캐릭터 림(역광 윤곽) — 창측에서 캐릭터 활동 영역을 명시적으로 겨눈다.
+  // 기본 target(원점=뒷벽 구석)에 기대면 걸어다니는 캐릭터에 림이 안 앉는다
+  // (Codex MUST-FIX). 위치는 리그가 시간대별로 움직인다.
+  rim.target.position.set(0, 1.2, 3.2)
+  scene.add(rim.target)
   scene.add(rim)
 
   const fill = new DirectionalLight(0xfff0e0, 0.1)
@@ -506,7 +512,25 @@ export function createSceneRuntime({ canvasEl }) {
   // the metaphorical aquarium glass. Walls are MeshStandardMaterial so
   // ambient/directional/rim lights all read on them; doubleside on the
   // back so a future "peek through" camera angle stays sane.
-  const room = toonifyTree(buildRoom(scene))
+  const roomBuild = buildRoom(scene)
+  const room = toonifyTree(roomBuild.root)
+
+  // ── 조명 패스 — 시간대 라이팅 리그 ─────────────────────────────────
+  // 명명된 라이트 + 창 재질 + 하늘 캔버스를 리그에 넘기고, 부팅 즉시 현재
+  // 시각(분 포함 — 정시 스냅이면 최대 1시간 낡음, Codex MUST-FIX)으로 적용.
+  const lighting = createLightingRig({
+    ambient,
+    key: dir,
+    rim,
+    fill,
+    deskGlow,
+    paneMat: roomBuild.paneMat,
+    skyCtx: skyCanvas(),
+  })
+  {
+    const now = new Date()
+    lighting.setHour(now.getHours() + now.getMinutes() / 60, { immediate: true })
+  }
 
   // Wallpaper-opaque state must be tracked so a GLB furniture piece that
   // finishes loading AFTER the user already toggled wallpaper mode still gets
@@ -549,12 +573,15 @@ export function createSceneRuntime({ canvasEl }) {
   const allReady = Promise.allSettled([furnitureReady, fgDeskReady])
   // Constrain the directional light's shadow camera to the room footprint
   // so shadow texels stay tight where the character actually walks.
-  dir.shadow.camera.left = -ROOM.width / 2
-  dir.shadow.camera.right = ROOM.width / 2
-  dir.shadow.camera.top = ROOM.depth
+  // 조명 패스: 노을 프리셋은 키가 창 밖(z<0) 낮은 고도에서 방 깊숙이(z≈4.4)
+  // 쏘므로 far를 방 대각선+태양 거리만큼 늘린다(12는 절단 — 실측). 가로도
+  // 리그의 keyPos 이동 범위를 여유 있게 덮는다.
+  dir.shadow.camera.left = -(ROOM.width / 2 + 2)
+  dir.shadow.camera.right = ROOM.width / 2 + 2
+  dir.shadow.camera.top = ROOM.depth + 2
   dir.shadow.camera.bottom = -ROOM.depth
-  dir.shadow.camera.near = 0.5
-  dir.shadow.camera.far = 12
+  dir.shadow.camera.near = 0.3
+  dir.shadow.camera.far = 20
   dir.shadow.camera.updateProjectionMatrix()
 
   // Wallpaper mode wants an OPAQUE, screen-filling scene (like Wallpaper
@@ -592,6 +619,9 @@ export function createSceneRuntime({ canvasEl }) {
     ROOM,
     room,
     furniture,
+    // 조명 패스 — 시간대 라이팅 리그. main.js가 tick(렌더 루프)과 setHour
+    // (실시간 시계 60s 간격)를 구동한다.
+    lighting,
     // Resolves once every furniture piece + foreground desk prop has loaded
     // (or fallen back). E2E screenshot checks await this so they don't catch
     // the room mid pop-in (Codex NICE-TO-HAVE).
@@ -648,15 +678,18 @@ function buildRoom(scene) {
   // through the open camera-side face.
   const paneMat = new MeshStandardMaterial({
     color: WINDOW.paneColor,
-    map: sunsetTexture(),         // 창밖 노을 풍경
+    map: skyCanvas().texture,         // 창밖 풍경 — 리그가 시간대별로 다시 그림
     emissive: 0xffffff,
-    emissiveMap: sunsetTexture(), // 스스로 빛나 bloom 글로우 → 따뜻한 초점
+    emissiveMap: skyCanvas().texture, // 스스로 빛나 bloom 글로우 → 따뜻한 초점
     emissiveIntensity: 1.15,
     roughness: 0.4,
     metalness: 0
   })
   const pane = new Mesh(new PlaneGeometry(WINDOW.width, WINDOW.height), paneMat)
   pane.position.set(0, WINDOW.y, WINDOW.z)
+  // 라이팅 리그가 이 재질을 직접 구동한다 — toonify가 재질을 교체 생성하면
+  // 리그가 쥔 참조가 죽으므로 제외(하늘 그림에 toon 밴딩도 부적절).
+  pane.userData.noToon = true
   root.add(pane)
 
   // Simple wooden frame around the pane (4 thin boxes). Reads as a window
@@ -719,7 +752,7 @@ function buildRoom(scene) {
   root.add(ceiling)
 
   scene.add(root)
-  return root
+  return { root, paneMat } // paneMat — 라이팅 리그가 시간대별로 구동(명시 계약)
 }
 
 /**
