@@ -202,11 +202,15 @@ function woodTexture() {
 }
 
 // 반복 타일 텍스처 로더(질감 패스) — SRGB+Repeat 세팅 공통화.
-function loadRepeatTex(url, rx, ry) {
+// maxAniso: 이방성 필터링 최대치(renderer.capabilities.getMaxAnisotropy()). 데스크
+// POV가 바닥/벽을 얕은 각도로 봐서 미설정 시 결이 흐릿·샤임 — 최초 렌더 전에
+// 설정하면 mip 재생성이 자동이라 needsUpdate 불필요.
+function loadRepeatTex(url, rx, ry, maxAniso = 1) {
   const tex = new TextureLoader().load(url)
   tex.colorSpace = SRGBColorSpace
   tex.wrapS = tex.wrapT = RepeatWrapping
   tex.repeat.set(rx, ry)
+  tex.anisotropy = maxAniso || 1
   return tex
 }
 
@@ -539,7 +543,10 @@ export function createSceneRuntime({ canvasEl }) {
   // the metaphorical aquarium glass. Walls are MeshStandardMaterial so
   // ambient/directional/rim lights all read on them; doubleside on the
   // back so a future "peek through" camera angle stays sane.
-  const roomBuild = buildRoom(scene)
+  // 질감 폴리시 — GPU 최대 이방성으로 바닥/벽/커튼 텍스처가 얕은 데스크 POV
+  // 각도에서도 결이 또렷하게(질감 패스 마감). WebGL2는 보통 16까지.
+  const maxAniso = renderer.capabilities.getMaxAnisotropy()
+  const roomBuild = buildRoom(scene, maxAniso)
   const room = toonifyTree(roomBuild.root)
 
   // ── 조명 패스 — 시간대 라이팅 리그 ─────────────────────────────────
@@ -690,7 +697,7 @@ export function createSceneRuntime({ canvasEl }) {
   }
 }
 
-function buildRoom(scene) {
+function buildRoom(scene, maxAniso = 1) {
   const halfW = ROOM.width / 2
   const root = new Group()
   root.name = 'apia-room'
@@ -705,7 +712,7 @@ function buildRoom(scene) {
     new PlaneGeometry(ROOM.width, ROOM.depth),
     new MeshStandardMaterial({
       color: 0xd8b993, // 방 리워크 — 마루도 한 단계 밝게(밝은 애니 인테리어)
-      map: loadRepeatTex(woodFloorTexUrl, 2.2, 3.0),
+      map: loadRepeatTex(woodFloorTexUrl, 2.2, 3.0, maxAniso),
       roughness: 0.95,
       metalness: 0,
       transparent: true,
@@ -722,7 +729,7 @@ function buildRoom(scene) {
   // 기존 팔레트를 유지하면서 단색 면의 밋밋함만 없앤다.
   const wallMat = new MeshStandardMaterial({
     color: ROOM.wallColor,
-    map: loadRepeatTex(wallpaperTexUrl, 3.0, 1.4),
+    map: loadRepeatTex(wallpaperTexUrl, 3.0, 1.4, maxAniso),
     roughness: 0.9,
     metalness: 0,
     side: BackSide, // visible from inside the room only
@@ -788,7 +795,7 @@ function buildRoom(scene) {
   // 정적 plane 2장 — 물리 없는 데코지만 "사람이 꾸민 창"으로 읽힌다.
   const curtainMat = new MeshStandardMaterial({
     color: 0xf2e2cc, // 리넨 맵이 어두운 회색이라 밝은 틴트로 보정
-    map: loadRepeatTex(fabricTexUrl, 1.0, 1.6),
+    map: loadRepeatTex(fabricTexUrl, 1.0, 1.6, maxAniso),
     // 창 역광에서 새까만 판이 되지 않게 미세 자체광(블룸 임계 훨씬 아래).
     emissive: 0xffd9b0,
     emissiveIntensity: 0.07,

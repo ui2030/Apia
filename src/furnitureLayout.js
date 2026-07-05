@@ -197,6 +197,9 @@ export const FURNITURE_DEFAULT = Object.freeze([
     } }),
   deco({ id: 'dresser', label: '서랍장', position: { x: -2.5, y: 0, z: 3.2 }, size: { w: 0.9, h: 0.8, d: 0.5 }, color: 0xa07d55, model: 'sideTableDrawers.glb', modelRotY: Math.PI / 2 }),
   deco({ id: 'plant_small', label: '작은 화분', position: { x: -2.5, y: 0.36, z: 3.2 }, size: { w: 0.22, h: 0.32, d: 0.22 }, color: 0x7ea36a, model: 'plantSmall1.glb' }), // 서랍장 실측 윗면
+  // 밀도 폴리시 — 서랍장 위 테이블 램프(화분 옆, 뒤쪽 z로 비켜 충돌 회피).
+  // 좌벽 거실 코너에 따스한 소품 하나. y는 서랍장 실측 윗면(plant_small과 동일).
+  deco({ id: 'dresser_lamp', label: '테이블 램프', position: { x: -2.5, y: 0.36, z: 2.98 }, size: { w: 0.26, h: 0.34, d: 0.26 }, color: 0xe8d6b0, model: 'lampSquareTable.glb', modelRotY: 0.4 }),
   deco({ id: 'sofa', label: '소파', position: { x: -2.2, y: 0, z: 4.6 }, size: { w: 1.8, h: 0.78, d: 0.85 }, color: 0x8fae84, model: 'loungeSofa.glb', modelRotY: Math.PI / 2 }),
   deco({ id: 'coffeetable', label: '커피 테이블', position: { x: -1.2, y: 0, z: 4.7 }, size: { w: 0.85, h: 0.35, d: 0.55 }, color: 0xa9855f, model: 'tableCoffee.glb' }),
   // ── 생활 소품(소품 밀도 패스) — "사람이 사는 흔적". 전부 데코(걷기/클릭 무관).

@@ -461,9 +461,12 @@ function _idle(mesh, t) {
   }
 
   // Codex MUST-FIX (Phase C): facing override beats idleTurn while active.
+  // 규약 정합(환경 폴리시): 스탠딩 유휴 회전도 walk/sit/onArrive처럼 camFacingYaw
+  // 기준으로. idleTurn.targetYaw는 작은 좌우 오프셋이라 "카메라 방향 중심으로
+  // 갸웃거림"이 된다. camFacingYaw=0인 현재는 무변화지만 규약이 단일해진다.
   const bodyYawTarget = _isFacingCameraActive()
     ? camFacingYaw
-    : idleTurn.targetYaw + lookYaw
+    : camFacingYaw + idleTurn.targetYaw + lookYaw
   mesh.rotation.y += _shortAngle(bodyYawTarget, mesh.rotation.y) * 0.05
 }
 
