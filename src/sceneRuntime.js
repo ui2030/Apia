@@ -34,6 +34,7 @@ import {
   DoubleSide,
   Group,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   MeshToonMaterial,
   NearestFilter,
@@ -199,6 +200,63 @@ function woodTexture() {
   tex.repeat.set(5, 5)
   _woodTex = tex
   return tex
+}
+
+// ── 접지(grounding) 폴리시 — 발밑 소프트 접촉 그림자 ─────────────────
+// 가구가 바닥에 "붙여넣기"한 듯 떠 보이는 가장 큰 싸구려 신호를 제거. 방향광
+// 그림자맵은 방 전체에 퍼져(~1.7cm/texel) 발밑 접지가 약하므로, 각 가구 발밑에
+// 부드러운 방사형 그라디언트 데칼을 한 장 깐다(에셋 0, 순수 절차 생성). 전
+// 가구가 공유하는 텍스처 1장(캐시).
+let _contactShadowTex = null
+function contactShadowTexture() {
+  if (_contactShadowTex) return _contactShadowTex
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const g = c.getContext('2d')
+  const grad = g.createRadialGradient(64, 64, 4, 64, 64, 62)
+  grad.addColorStop(0, 'rgba(0,0,0,0.55)')
+  grad.addColorStop(0.55, 'rgba(0,0,0,0.28)')
+  grad.addColorStop(1, 'rgba(0,0,0,0)')
+  g.fillStyle = grad
+  g.fillRect(0, 0, 128, 128)
+  const tex = new CanvasTexture(c)
+  tex.colorSpace = SRGBColorSpace
+  _contactShadowTex = tex
+  return tex
+}
+
+// 가구 전용 외곽선 — 전역 0.006(캐릭터 잉크선)을 그대로 얹으면 큰 평면이
+// "색칠공부 스티커"로 읽힌다. 가구만 얇고 따뜻하게 눌러 방은 톤으로 물러나고
+// 캐릭터가 초점 잉크선으로 남게 한다(OutlineEffect는 material.userData의
+// outlineParameters로 재질별 재정의를 존중 — r164 확인). 캐릭터 PMX는 자기
+// outlineParameters를 쥐고 있어 무영향.
+const FURNITURE_OUTLINE = Object.freeze({ thickness: 0.003, color: [0.16, 0.11, 0.09], alpha: 0.6 })
+
+// 접촉 그림자 데칼을 가구 pivot 발밑에 붙인다. footprintW/D = 스케일 후 실측
+// footprint(pivot 로컬 = 월드, pivot 스케일 1). pivot과 함께 회전하므로 회전
+// 가구에도 정렬된다. __contactShadow 플래그로 벽지-불투명 토글에서 보호하고,
+// outlineParameters.visible=false로 잉크선을 막는다(Codex MUST-FIX).
+function addContactShadow(pivot, footprintW, footprintD) {
+  const w = Math.max(0.2, footprintW * 1.25)
+  const d = Math.max(0.2, footprintD * 1.25)
+  const mat = new MeshBasicMaterial({
+    map: contactShadowTexture(),
+    transparent: true,
+    opacity: 0.38,
+    color: 0x000000,
+    depthWrite: false,
+    toneMapped: false,
+  })
+  mat.userData.__contactShadow = true // 벽지 불투명 토글 제외
+  mat.userData.outlineParameters = { visible: false } // 잉크선 제외
+  const blob = new Mesh(new PlaneGeometry(w, d), mat)
+  blob.rotation.x = -Math.PI / 2
+  blob.position.y = 0.012 // 바닥(y0) 살짝 위 — depthWrite:false라 z-fight 없음
+  blob.castShadow = false
+  blob.receiveShadow = false
+  blob.renderOrder = -1
+  blob.name = 'contact-shadow'
+  pivot.add(blob)
 }
 
 // 반복 타일 텍스처 로더(질감 패스) — SRGB+Repeat 세팅 공통화.
@@ -584,6 +642,7 @@ export function createSceneRuntime({ canvasEl }) {
       if (!m) return
       for (const mat of (Array.isArray(m) ? m : [m])) {
         if (mat.isShadowMaterial || mat.type === 'ShadowMaterial') continue
+        if (mat.userData.__contactShadow) continue // 접촉 그림자는 투명 유지(불투명화 시 검은 원반)
         if (mat.userData.__origOpacity === undefined) {
           mat.userData.__origOpacity = mat.opacity
           mat.userData.__origTransparent = mat.transparent
@@ -1016,6 +1075,15 @@ function loadGLBPiece(loader, url, f) {
           })
           toonifyTree(model) // 애니 셀 셰이딩으로 통일
 
+          // 가구 전용 얇고 따뜻한 외곽선 — 전역 잉크선(0.006)이 큰 평면을
+          // 스티커처럼 만드는 것 완화. array material도 각각 적용(Codex MUST-FIX).
+          model.traverse((o) => {
+            if (!o.isMesh || !o.material) return
+            for (const mat of (Array.isArray(o.material) ? o.material : [o.material])) {
+              mat.userData.outlineParameters = { ...FURNITURE_OUTLINE }
+            }
+          })
+
           // pivot holds the centered+seated model; rotating/translating the
           // pivot keeps modelRotY a clean spin about the piece's own center.
           const pivot = new Group()
@@ -1050,10 +1118,17 @@ function loadGLBPiece(loader, url, f) {
 
           // 2) center on x,z and seat base at y=0 within the pivot
           const box1 = new Box3().setFromObject(model)
+          const size1 = box1.getSize(new Vector3())
           const center1 = box1.getCenter(new Vector3())
           model.position.x -= center1.x
           model.position.z -= center1.z
           model.position.y -= box1.min.y
+
+          // 접지 — 바닥에 놓인 실물 가구 발밑에만 접촉 그림자. 벽면 위 소품
+          // (화분 등 position.y>0)·평평한 러그/매트(size.h≈0)는 제외.
+          const onFloor = (f.position?.y ?? 0) < 0.05
+          const isFlatDecal = (f.size?.h ?? 0) < 0.05
+          if (onFloor && !isFlatDecal) addContactShadow(pivot, size1.x, size1.z)
 
           // 3) place + face. yOffset lifts wall-mounted/surface props (e.g. a
           // plant sitting on a cabinet) above the floor seat.

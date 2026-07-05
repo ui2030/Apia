@@ -2057,6 +2057,9 @@ setInterval(() => {
 // E2E/수동 검증용 — 시각을 강제하고 적용된 타깃 상태를 돌려준다.
 window.__setLightingHour = (h, immediate = true) =>
   _sceneRuntime.lighting?.setHour(h, { immediate }) || null
+// 벽지 불투명 모드 토글(디버그/검증) — 접촉 그림자 등 투명 소품이 불투명화에서
+// 보호되는지 확인용. 실제 구동은 메인 프로세스 IPC(onWallpaperOpaque)가 담당.
+window.__setWallpaperOpaque = (on) => { try { _sceneRuntime.setWallpaperOpaque?.(on === true) } catch {} return true }
 // 후처리 킬스위치/튜닝 — 알파나 성능이 현장에서 문제면 끌 수 있게.
 window.__setPostFx = (on) => { _sceneRuntime.postFx?.setEnabled(on); return _sceneRuntime.postFx?.isEnabled() ?? null }
 window.__tunePostFx = ({ bloom, vignette } = {}) => {
