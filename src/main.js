@@ -2062,9 +2062,10 @@ window.__setLightingHour = (h, immediate = true) =>
 window.__setWallpaperOpaque = (on) => { try { _sceneRuntime.setWallpaperOpaque?.(on === true) } catch {} return true }
 // 후처리 킬스위치/튜닝 — 알파나 성능이 현장에서 문제면 끌 수 있게.
 window.__setPostFx = (on) => { _sceneRuntime.postFx?.setEnabled(on); return _sceneRuntime.postFx?.isEnabled() ?? null }
-window.__tunePostFx = ({ bloom, vignette } = {}) => {
+window.__tunePostFx = ({ bloom, vignette, ao } = {}) => {
   if (bloom) _sceneRuntime.postFx?.setBloom(bloom)
   if (vignette !== undefined) _sceneRuntime.postFx?.setVignette(vignette)
+  if (ao) _sceneRuntime.postFx?.setAo(ao)
   return true
 }
 

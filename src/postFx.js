@@ -1,7 +1,11 @@
-// src/postFx.js — 후처리 합성기 (쇼츠 격차 #2: 블룸 + 비네트).
+// src/postFx.js — 후처리 합성기 (쇼츠 격차 #2: 블룸 + 비네트 + GTAO).
 //
 // 구조 (Codex 사전검토 반영, three r164 소스 확인):
 //   OutlineScenePass(외곽선 렌더를 컴포저 체인에 편입)
+//   → GTAOPass(구석·접촉부 화면공간 음영 — 가구↔캐릭터 그림체 격차 Tier1 마감.
+//     Default 출력이 readBuffer를 무블렌드 복사한 뒤 AO를 곱하는데, AO 텍스처
+//     알파가 전면 1.0(배경 depth>=1은 discard, 타깃은 흰색 클리어)이라
+//     blendSrcAlpha=DstAlphaFactor 곱셈으로도 알파가 불변 — r164 소스 확인)
 //   → SavePass(블룸 전 원본 보관 — **알파 소스**)
 //   → UnrealBloomPass(readBuffer를 제자리 변형, needsSwap=false)
 //   → AlphaVignettePass(rgb=블룸+비네트, **a=원본** — 알파 불변 보장)
@@ -25,6 +29,7 @@ import {
   WebGLRenderTarget,
 } from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { Pass } from 'three/examples/jsm/postprocessing/Pass.js'
 import { SavePass } from 'three/examples/jsm/postprocessing/SavePass.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
@@ -86,7 +91,8 @@ const AlphaVignetteShader = {
 /**
  * @returns {{ render(scene,camera):void, setSize(w,h,dpr):void,
  *             setEnabled(on):void, isEnabled():boolean,
- *             setBloom({strength,radius,threshold}):void, setVignette(v):void }}
+ *             setBloom({strength,radius,threshold}):void, setVignette(v):void,
+ *             setAo({enabled,intensity,radius,thickness,scale,samples}):void }}
  */
 export function createPostFx({ renderer, scene, camera, outlineEffect }) {
   const size = renderer.getSize(new Vector2())
@@ -103,6 +109,20 @@ export function createPostFx({ renderer, scene, camera, outlineEffect }) {
   composer.setSize(size.x, size.y)
 
   const scenePass = new OutlineScenePass(scene, camera, outlineEffect)
+  // GTAO — 애니 톤 장면이라 보수적으로: 반경은 방(미터 스케일) 구석·가구 밑
+  // 접촉부만 잡을 만큼, 강도는 toon 얼굴이 지저분해지지 않는 선. radius 0.45 /
+  // blendIntensity 0.85 는 스샷 실검수 확정값(초기 0.3/0.7 은 낮에 거의 안
+  // 읽혀 접지 효과가 없었고, 1.0/0.5 max 는 이득이 미미해 과다 어두움 위험만
+  // 커짐 — diorama 낮 프레임에서 AO 작용 픽셀 7.1%→7.9% 로 확인). 캐릭터 제외
+  // 없이 방 전체에 적용 — 같은 음영 언어를 공유해야 격차가 줄어든다(Codex 합의).
+  const gtaoPass = new GTAOPass(scene, camera, size.x * dpr, size.y * dpr, undefined, {
+    radius: 0.45,
+    distanceExponent: 1,
+    thickness: 1,
+    scale: 1.0,
+    samples: 16,
+  })
+  gtaoPass.blendIntensity = 0.85
   const savePass = new SavePass() // 블룸 전 스냅숏(알파 소스)
   const bloomPass = new UnrealBloomPass(new Vector2(size.x, size.y), 0.35, 0.4, 0.85)
   const finalPass = new ShaderPass(AlphaVignetteShader)
@@ -110,6 +130,7 @@ export function createPostFx({ renderer, scene, camera, outlineEffect }) {
   const outputPass = new OutputPass()
 
   composer.addPass(scenePass)
+  composer.addPass(gtaoPass)
   composer.addPass(savePass)
   composer.addPass(bloomPass)
   composer.addPass(finalPass)
@@ -125,6 +146,8 @@ export function createPostFx({ renderer, scene, camera, outlineEffect }) {
       }
       scenePass.scene = sc
       scenePass.camera = cam
+      gtaoPass.scene = sc
+      gtaoPass.camera = cam
       composer.render()
     },
     setSize(w, h, pixelRatio) {
@@ -140,6 +163,18 @@ export function createPostFx({ renderer, scene, camera, outlineEffect }) {
     },
     setVignette(v) {
       if (Number.isFinite(v)) finalPass.uniforms.vignette.value = Math.max(0, Math.min(1, v))
+    },
+    setAo({ enabled, intensity, radius, thickness, scale, samples } = {}) {
+      // 끄기는 pass.enabled — OUTPUT.Off는 출력 없이 needsSwap만 일어나
+      // readBuffer가 깨진다(Codex MUST-FIX).
+      if (enabled !== undefined) gtaoPass.enabled = enabled !== false
+      if (Number.isFinite(intensity)) gtaoPass.blendIntensity = Math.max(0, Math.min(1, intensity))
+      gtaoPass.updateGtaoMaterial({
+        ...(Number.isFinite(radius) ? { radius } : {}),
+        ...(Number.isFinite(thickness) ? { thickness } : {}),
+        ...(Number.isFinite(scale) ? { scale } : {}),
+        ...(Number.isFinite(samples) ? { samples } : {}),
+      })
     },
   }
 }
