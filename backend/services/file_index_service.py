@@ -51,10 +51,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+import numpy as np
+
 from services.embedding_service import (
     EmbeddingService,
-    blob_to_vec,
-    cosine_similarity,
+    cosine_scores,
 )
 from services.store_service import StoreService
 
@@ -418,6 +419,9 @@ class FileIndexService:
 
         folders = await self.list_folders()
         allowed_paths = [Path(f["path"]) for f in folders]
+        # ponytail: full scan + numpy — 파일 청크에는 summary 계층이 없어 LIMIT을
+        # 걸면 오래된 인덱스 파일이 검색 불가가 된다(Codex MUST-FIX). 전 행 스캔 유지.
+        # fetchall 메모리 스파이크는 알려진 한계 — ANN/vec 인덱스는 청크 수십만 시.
         rows = await self._store.fetchall(
             "SELECT id, source_path, source_kind, chunk_index, content, page, embedding "
             "FROM file_chunks WHERE embedding IS NOT NULL"
@@ -655,13 +659,13 @@ class FileIndexService:
         top_k: int,
         floor: float,
     ) -> List[FileRecall]:
-        try:
-            query_vec = blob_to_vec(query_blob)
-        except ValueError:
-            return []
-        expected_dim = self._embedding.dim
+        # query_blob은 retrieve_relevant에서 이미 dim*4로 검증됨.
+        expected_bytes = self._embedding.dim * 4
 
-        scored: List[FileRecall] = []
+        # allowlist 필터 + dim/malformed skip을 먼저 돌려 유효 행만 남기고,
+        # 남은 blob을 한 행렬로 쌓아 코사인을 numpy 한 번에 계산.
+        valid_rows = []
+        blobs: List[bytes] = []
         for row in rows:
             kind = row["source_kind"]
             source_path = row["source_path"]
@@ -669,28 +673,41 @@ class FileIndexService:
                 # allowlist 외 인덱스 row는 제외 (Codex MUST-FIX round 1).
                 if not any(is_path_under(Path(source_path), p) for p in allowed_paths):
                     continue
-            try:
-                vec = blob_to_vec(row["embedding"])
-                if len(vec) != expected_dim:
-                    logger.warning(
-                        "[files] skip chunk id=%s due to dim=%d != expected=%d",
-                        row["id"], len(vec), expected_dim,
-                    )
-                    continue
-                score = cosine_similarity(query_vec, vec)
-            except ValueError as error:
-                logger.warning("[files] skip chunk id=%s due to %s", row["id"], error)
+            blob = row["embedding"]
+            if blob is None:
                 continue
+            if len(blob) != expected_bytes:
+                logger.warning(
+                    "[files] skip chunk id=%s due to blob=%d bytes != expected=%d",
+                    row["id"], len(blob), expected_bytes,
+                )
+                continue
+            valid_rows.append(row)
+            blobs.append(blob)
+
+        scores = cosine_scores(query_blob, blobs)
+        if scores.size == 0:
+            return []
+
+        # floor 필터 후 top_k와 동일: 점수순 top_k를 argpartition으로 뽑고
+        # (전체 정렬 회피), 그중 floor 미만만 떨군다.
+        k = min(top_k, scores.size)
+        top_idx = np.argpartition(scores, -k)[-k:]
+        top_idx = top_idx[np.argsort(scores[top_idx])[::-1]]
+
+        scored: List[FileRecall] = []
+        for i in top_idx:
+            score = float(scores[i])
             if score < floor:
                 continue
+            row = valid_rows[i]
             scored.append(FileRecall(
                 content=row["content"],
                 score=score,
-                source_path=source_path,
-                source_kind=kind,
+                source_path=row["source_path"],
+                source_kind=row["source_kind"],
                 chunk_index=int(row["chunk_index"]),
                 page=(int(row["page"]) if row["page"] is not None else None),
                 chunk_id=int(row["id"]),
             ))
-        scored.sort(key=lambda r: r.score, reverse=True)
-        return scored[:top_k]
+        return scored

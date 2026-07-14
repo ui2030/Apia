@@ -39,14 +39,19 @@ from typing import Any, Awaitable, Callable, List, Optional, Sequence
 
 from services.embedding_service import (
     EmbeddingService,
-    blob_to_vec,
-    cosine_similarity,
+    cosine_scores,
 )
 from services.store_service import StoreService
 
 logger = logging.getLogger(__name__)
 
 SummarizeFn = Callable[[str], Awaitable[str]]
+
+# retrieve 후보 상한. chat_turns는 prune 없이 영구 누적하므로 무제한 fetchall은
+# 사용 기간에 비례해 매 메시지를 느리게 만든다. 최신순으로 잘라도 그보다 오래된
+# 히스토리는 conversation_summaries가 커버하므로 recency bias 허용 (Codex MUST-FIX).
+_SUMMARY_CANDIDATE_LIMIT = 500
+_TURN_CANDIDATE_LIMIT = 2000
 
 
 class MemoryRecall:
@@ -93,6 +98,9 @@ class MemoryService:
         self._summary_every = max(2, summary_every)
         self._exclude_recent = max(0, exclude_recent)
         self._summary_lock = asyncio.Lock()
+        # 후보 상한에 걸려 chat_turns 히스토리가 잘린 횟수. 매 메시지 로그를 피하려고
+        # 첫 절단에만 logger.warning 하고, 이후로는 이 카운터만 올려 stats로 노출.
+        self._retrieval_truncations = 0
         # `last_error` 메모리 동작 중 실제로 잡힌 마지막 실패. UI의 stats 패널이
         # 그대로 표시할 문자열. provider unavailable / embed fail / summary fail
         # 모두 여기 통과.
@@ -181,7 +189,8 @@ class MemoryService:
         summary_rows = await self._store.fetchall(
             "SELECT id, summary, created_at, embedding, start_turn_id, end_turn_id "
             "FROM conversation_summaries WHERE embedding IS NOT NULL "
-            "ORDER BY id DESC"
+            "ORDER BY id DESC LIMIT ?",
+            (_SUMMARY_CANDIDATE_LIMIT,),
         )
 
         # 최근 exclude_recent개 chat_turn id 범위는 retrieve에서 제외.
@@ -189,9 +198,18 @@ class MemoryService:
         turn_rows = await self._store.fetchall(
             "SELECT id, role, content, created_at, embedding "
             "FROM chat_turns WHERE embedding IS NOT NULL AND id <= ? "
-            "ORDER BY id DESC",
-            (recent_threshold_id,),
+            "ORDER BY id DESC LIMIT ?",
+            (recent_threshold_id, _TURN_CANDIDATE_LIMIT),
         )
+        if len(turn_rows) >= _TURN_CANDIDATE_LIMIT:
+            # 상한에 걸림 = 이보다 오래된 turn은 이번 검색 대상에서 빠짐(summary가 커버).
+            self._retrieval_truncations += 1
+            if self._retrieval_truncations == 1:
+                logger.warning(
+                    "[memory] chat_turns candidate cap hit (%d); older turns rely on "
+                    "summaries. Suppressing further per-message warnings.",
+                    _TURN_CANDIDATE_LIMIT,
+                )
 
         ranked: List[MemoryRecall] = await asyncio.to_thread(
             self._rank_rows, query_blob, summary_rows, turn_rows, k, floor
@@ -256,6 +274,7 @@ class MemoryService:
                 "last_summary_at": None,
                 "embeddings_missing": 0,
                 "summary_every": self._summary_every,
+                "retrieval_truncations": self._retrieval_truncations,
                 "last_error": None,
             }
         turn_row = await self._store.fetchone(
@@ -277,6 +296,7 @@ class MemoryService:
             ),
             "embeddings_missing": int(missing_row["n"]) if missing_row else 0,
             "summary_every": self._summary_every,
+            "retrieval_truncations": self._retrieval_truncations,
             "last_error": self._last_error,
         }
 
@@ -345,34 +365,31 @@ class MemoryService:
         top_k: int,
         floor: float,
     ) -> List[MemoryRecall]:
-        try:
-            query_vec = blob_to_vec(query_blob)
-        except ValueError as error:
-            logger.warning("[memory] query blob malformed: %s", error)
-            return []
-        expected_dim = self._embedding.dim
+        # query_blob은 retrieve_relevant에서 이미 dim*4로 검증됨.
+        expected_bytes = self._embedding.dim * 4
 
         def score_rows(rows, kind: str) -> List[MemoryRecall]:
-            out: List[MemoryRecall] = []
+            # dim mismatch / malformed(4바이트 비정렬) blob은 벡터화 전에 걸러
+            # skip + WARN (기존 per-row 동작 유지). 남은 blob을 한 행렬로 쌓아
+            # 코사인을 numpy 한 번에 계산.
+            valid_rows = []
+            blobs: List[bytes] = []
             for row in rows:
                 blob = row["embedding"]
                 if blob is None:
                     continue
-                try:
-                    vec = blob_to_vec(blob)
-                    if len(vec) != expected_dim:
-                        logger.warning(
-                            "[memory] skip %s id=%s due to dim=%d != expected=%d",
-                            kind, row["id"], len(vec), expected_dim,
-                        )
-                        continue
-                    score = cosine_similarity(query_vec, vec)
-                except ValueError as error:
+                if len(blob) != expected_bytes:
                     logger.warning(
-                        "[memory] skip %s id=%s due to %s",
-                        kind, row["id"], error,
+                        "[memory] skip %s id=%s due to blob=%d bytes != expected=%d",
+                        kind, row["id"], len(blob), expected_bytes,
                     )
                     continue
+                valid_rows.append(row)
+                blobs.append(blob)
+            scores = cosine_scores(query_blob, blobs)
+            out: List[MemoryRecall] = []
+            for row, raw_score in zip(valid_rows, scores):
+                score = float(raw_score)
                 if score < floor:
                     continue
                 if kind == "summary":

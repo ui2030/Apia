@@ -148,6 +148,27 @@ def blob_to_vec(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{count}f", blob))
 
 
+def cosine_scores(query_blob: bytes, blobs: Sequence[bytes]):
+    """Vectorized cosine for L2-normalized float32 embedding blobs.
+
+    Vectors are normalized at encode time, so cosine == dot product. Every blob
+    in `blobs` must be the same byte length as `query_blob` — callers filter
+    dim-mismatched / malformed rows out first (keeping the skip+WARN semantics),
+    so this stays a single matrix-vector multiply instead of a python loop.
+
+    Returns a numpy float32 array of scores aligned with `blobs`; empty input →
+    empty array. numpy is imported lazily to keep this module's import cost off
+    the process-start path (see `_vec_to_blob`); it's a hard dep via requirements.
+    """
+    import numpy as np
+
+    q = np.frombuffer(query_blob, dtype=np.float32)
+    if not blobs:
+        return np.empty(0, dtype=np.float32)
+    mat = np.frombuffer(b"".join(blobs), dtype=np.float32).reshape(len(blobs), q.shape[0])
+    return mat @ q
+
+
 def cosine_similarity(a: Iterable[float], b: Iterable[float]) -> float:
     """Both vectors are L2-normalized at encode time, so the dot product *is*
     cosine similarity. Kept as a named function so call sites read clearly

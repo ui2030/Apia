@@ -15,15 +15,22 @@ import { getMmdRuntime, normalizeUrlToFetchable } from './modelRuntime.js'
 
 let _seq = 0 // 로드 경쟁 가드(Codex MUST-FIX): 늦게 도착한 stale 로드/클리어 무시
 
+// main.js disposeObject3D와 동일 규약(Codex MUST-FIX): 고정 키 목록은 matcap 등
+// 커스텀 텍스처 슬롯을 놓친다 → Object.keys 순회 + de-dupe Set + uniforms 텍스처.
+// (main.js는 entry라 여기서 import하면 순환 → 동일 로직을 그대로 구현.)
 function disposeTree(root) {
+  const seenGeo = new Set(), seenMat = new Set(), seenTex = new Set()
+  const disposeTexture = (v) => {
+    if (v && v.isTexture && !seenTex.has(v)) { seenTex.add(v); v.dispose() }
+  }
   root.traverse((o) => {
-    if (o.geometry) o.geometry.dispose?.()
-    const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []
+    if (o.geometry && !seenGeo.has(o.geometry)) { seenGeo.add(o.geometry); o.geometry.dispose?.() }
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])
     for (const m of mats) {
-      for (const key of ['map', 'emissiveMap', 'gradientMap', 'normalMap', 'aoMap',
-        'roughnessMap', 'metalnessMap', 'alphaMap', 'bumpMap', 'specularMap', 'envMap', 'lightMap']) {
-        m[key]?.dispose?.()
-      }
+      if (!m || seenMat.has(m)) continue
+      seenMat.add(m)
+      for (const k of Object.keys(m)) disposeTexture(m[k])
+      if (m.uniforms) for (const u of Object.keys(m.uniforms)) disposeTexture(m.uniforms[u]?.value)
       m.dispose?.()
     }
   })

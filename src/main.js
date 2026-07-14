@@ -695,6 +695,8 @@ function handlePresenceEventFeed(name) {
   else if (name === 'suspend') { pauseSuspended = true; startPowerPause() }
   else if (name === 'unlock-screen') { pauseLocked = false; maybeEndPowerPause() }
   else if (name === 'resume') { pauseSuspended = false; maybeEndPowerPause() }
+  // 렌더 정지/재개는 유예 없이 즉시 — 두 플래그 파생값으로 판단(해제 순서 무관).
+  syncRenderPause()
 }
 
 window.api?.onPresenceIdle?.(({ idleSec } = {}) => handlePresenceIdleFeed(idleSec))
@@ -1957,8 +1959,30 @@ function lipsyncMMD(delta) {
   updateMouthMMD(currentModel, delta, lipsync.active, lipsync.phase)
 }
 
+// Codex MUST-FIX(perf): 세션 잠금/절전 중엔 렌더+6패스 포스트프로세싱을 멈춘다.
+// paused는 pauseLocked||pauseSuspended 파생값(해제 순서가 꼬여도 조기 재개 방지).
+// 스킵-but-rAF유지가 아니라 rAF 자체를 끊어야 렌더러가 깨어나지 않아 전력이 준다.
+let _rafId = null
+let _renderPaused = false
+
+function startRenderLoop() {
+  if (_rafId != null) return // 중복 rAF 등록 가드(재개가 두 번 불려도 루프 1개)
+  clock.getDelta() // 잠든 시간 델타 삼킴 — MMD 물리가 거대 timestep을 받지 않게
+  _rafId = requestAnimationFrame(animate)
+}
+
+function stopRenderLoop() {
+  if (_rafId != null) { cancelAnimationFrame(_rafId); _rafId = null }
+}
+
+function syncRenderPause() {
+  const paused = pauseLocked || pauseSuspended
+  if (paused && !_renderPaused) { _renderPaused = true; stopRenderLoop() }
+  else if (!paused && _renderPaused) { _renderPaused = false; startRenderLoop() }
+}
+
 function animate() {
-  requestAnimationFrame(animate)
+  _rafId = requestAnimationFrame(animate)
 
   const delta = clock.getDelta()
   const t = clock.getElapsedTime()
@@ -2171,7 +2195,7 @@ async function tryLoadActiveCharacterFromRegistry() {
   }
 }
 
-animate()
+startRenderLoop()
 loadDummy()
 initCameraControls()
 
@@ -2371,13 +2395,73 @@ initChat({
 // canonical group every model type adds to the scene).
 const _raycaster = new Raycaster()
 const _rayMouse = new Vector2()
+// Codex MUST-FIX(perf): click-through poll이 rAF마다 전신 스켈레톤을 재귀
+// 레이캐스트했다(마우스가 캐릭터 근처가 아니어도). O(1) 스크린 프리체크 +
+// full raycast 스로틀로 대부분의 프레임에서 intersectObject를 건너뛴다.
+const _rayBox = new Box3()          // 스크래치(모델 교체 때만 setFromObject)
+const _rayBoundSize = new Vector3()
+const _rayBoundOffset = new Vector3() // 바운드 중심 − 루트 worldPos(루트/지오메트리 오프셋)
+const _rayRootWorld = new Vector3()
+const _rayCenter = new Vector3()
+const _rayNdcCenter = new Vector3()
+const _rayNdcEdge = new Vector3()
+const _rayCamRight = new Vector3()
+let _rayBoundModel = null           // 캐시가 속한 모델 identity
+let _rayBoundRadius = 0             // 보수적(1.5배) 컬링 반경(world units)
+let _rayLastResult = false
+let _rayLastX = -1, _rayLastY = -1
+let _rayLastTime = 0
+const _rayLastCenter = new Vector3()
+
+// 모델 로드/교체 시점의 실제 지오메트리 바운드로 컬링 구를 캐시한다. 루트 위치가
+// 아니라 지오메트리 바운드 중심을 쓰되(루트는 발밑 등 오프셋 가능), 애니/포즈
+// 변형 대비 반경을 1.5배로 넉넉히 잡는다.
+function refreshRayBoundCache() {
+  _rayBoundModel = currentModel
+  _rayBox.setFromObject(currentModel.root)
+  if (_rayBox.isEmpty()) { _rayBoundRadius = 0; return }
+  _rayBox.getCenter(_rayCenter)
+  currentModel.root.getWorldPosition(_rayRootWorld)
+  _rayBoundOffset.copy(_rayCenter).sub(_rayRootWorld)
+  _rayBox.getSize(_rayBoundSize)
+  _rayBoundRadius = _rayBoundSize.length() * 0.5 * 1.5
+}
+
 function characterRaycast(clientX, clientY) {
   if (!currentModel?.root || !camera) return false
-  _rayMouse.x = (clientX / window.innerWidth) * 2 - 1
-  _rayMouse.y = -(clientY / window.innerHeight) * 2 + 1
+
+  if (_rayBoundModel !== currentModel) refreshRayBoundCache()
+  if (_rayBoundRadius <= 0) return false
+
+  // 컬링 구 중심을 현재 루트 worldPos로 이동(오프셋 유지) 후 화면에 투영.
+  currentModel.root.getWorldPosition(_rayRootWorld)
+  _rayCenter.copy(_rayRootWorld).add(_rayBoundOffset)
+  _rayNdcCenter.copy(_rayCenter).project(camera)
+  if (_rayNdcCenter.z > 1) return false // 카메라 뒤
+  // 반경을 NDC로: 중심에서 카메라 right로 반경만큼 민 점의 NDC 거리.
+  _rayCamRight.setFromMatrixColumn(camera.matrixWorld, 0)
+  _rayNdcEdge.copy(_rayCenter).addScaledVector(_rayCamRight, _rayBoundRadius).project(camera)
+  const rNdc = Math.hypot(_rayNdcEdge.x - _rayNdcCenter.x, _rayNdcEdge.y - _rayNdcCenter.y)
+  const cx = (clientX / window.innerWidth) * 2 - 1
+  const cy = -(clientY / window.innerHeight) * 2 + 1
+  if (Math.hypot(cx - _rayNdcCenter.x, cy - _rayNdcCenter.y) > rNdc) return false // 바운드 밖
+
+  // 프리체크 통과 시에도 full raycast는 스로틀 — 마우스도 안 변했고 바운드도
+  // 실질적으로 안 움직였으면(캐릭터가 커서 밑으로 걸어오는 경우는 중심 이동으로
+  // 감지) 직전 결과 재사용. 그 외/~100ms마다 재계산.
+  const now = performance.now()
+  const centerMoved = _rayLastCenter.distanceToSquared(_rayCenter) > 1e-4
+  const mouseMoved = clientX !== _rayLastX || clientY !== _rayLastY
+  if (!mouseMoved && !centerMoved && (now - _rayLastTime) < 100) return _rayLastResult
+
+  _rayMouse.x = cx
+  _rayMouse.y = cy
   _raycaster.setFromCamera(_rayMouse, camera)
-  const hits = _raycaster.intersectObject(currentModel.root, true)
-  return hits.length > 0
+  _rayLastResult = _raycaster.intersectObject(currentModel.root, true).length > 0
+  _rayLastX = clientX; _rayLastY = clientY
+  _rayLastTime = now
+  _rayLastCenter.copy(_rayCenter)
+  return _rayLastResult
 }
 
 function updateCharacterClickability(settings) {

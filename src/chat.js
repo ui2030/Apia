@@ -163,6 +163,18 @@ function startClickThroughManager() {
   function gestureHolding() { return gestureActive }
 
   function poll() {
+    // 창이 가려지면 :hover도 raycast도 무의미 — 본체 스킵(rAF는 유지, 복귀 시 재개).
+    // 단 캡처 중이었다면 먼저 마우스 통과를 복원해야 클릭이 데스크톱으로 샌다.
+    if (document.hidden) {
+      if (capturing) {
+        clearTimeout(restoreTimer)
+        restoreTimer = null
+        capturing = false
+        window.api?.setIgnoreMouse(true)
+      }
+      requestAnimationFrame(poll)
+      return
+    }
     const hovered = gestureHolding() || document.querySelector(
       '#chat-toggle:hover, #settings-btn:hover, ' +
       '#chat-panel.visible:hover, .world-object:hover'

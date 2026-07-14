@@ -152,6 +152,15 @@ export function releaseActiveClips(model, ctx, { fade = 0.45 } = {}) {
         if (slot.flag === '_vmdClipActive') {
           model._clipMorphNames = null // 표정/입 소유권 반납
           stashMmdMixer(model)
+        } else {
+          // Codex MUST-FIX(perf): 명시적 해제 경로도 finish/재생 경로처럼
+          // 클립을 mixer 캐시에서 내린다 — 안 내리면 release로 끝난 VRMA/FBX
+          // 클립이 캐시에 잔류.
+          const clip = action.getClip?.()
+          if (clip) {
+            if (model._activeMixerClip === clip) model._activeMixerClip = null
+            try { model.mixer?.uncacheClip(clip) } catch {}
+          }
         }
       },
     }) || any
@@ -235,6 +244,11 @@ export async function playVRMAnimation(url, { loop = false, fadeIn = 0.3 } = {},
           // 새 action 들어가기 전에 이전 finish 리스너 정리. stopAllAction 자체는
           // 리스너를 떼지 않으므로 손수 해줘야 누적되지 않는다.
           clearVRMFadeHandlers(model)
+          // Codex MUST-FIX(perf): 재생마다 새 clip을 clipAction만 하면 mixer 내부
+          // 캐시(_actions/_actionsByClip/_bindings…)가 증식한다. VMD 경로처럼 이전
+          // 클립을 uncache한다. VRMA/FBX는 같은 model.mixer를 쓰고 stopAllAction이
+          // 즉시 멈추므로(크로스페이드 없음) 이전 클립은 바로 내려도 안전.
+          const _prevMixerClip = model._activeMixerClip ?? null
           model.mixer.stopAllAction()
           // Step 6: a fresh VRMA clip takes ownership back from any
           // previously-running FBX clip — the procedural fallback can
@@ -244,6 +258,10 @@ export async function playVRMAnimation(url, { loop = false, fadeIn = 0.3 } = {},
           model._activeFbxAction = null
           const action = model.mixer.clipAction(clip)
           model._activeVrmaAction = action
+          model._activeMixerClip = clip
+          if (_prevMixerClip && _prevMixerClip !== clip) {
+            try { model.mixer.uncacheClip(_prevMixerClip) } catch {}
+          }
           action.setLoop(loop ? LoopRepeat : LoopOnce, Infinity)
           if (fadeIn > 0) action.fadeIn(fadeIn)
 
@@ -267,6 +285,9 @@ export async function playVRMAnimation(url, { loop = false, fadeIn = 0.3 } = {},
                 onRelease: () => {
                   model._vrmaClipActive = false
                   model._activeVrmaAction = null
+                  // 완료된 non-loop 클립도 캐시에서 내린다(finish 경로 누수 차단).
+                  if (model._activeMixerClip === clip) model._activeMixerClip = null
+                  try { model.mixer?.uncacheClip(clip) } catch {}
                 },
               })
             }
@@ -470,8 +491,15 @@ export async function playFBXAnimation(url, { loop = false, fadeIn = 0.3 } = {},
           }
 
           clearVRMFadeHandlers(model)
+          // Codex MUST-FIX(perf): 이전 mixer 클립 uncache(캐시 증식 방지) — VRMA와
+          // 같은 model.mixer·같은 스로틀 패턴.
+          const _prevMixerClip = model._activeMixerClip ?? null
           model.mixer.stopAllAction()
           const action = model.mixer.clipAction(clip)
+          model._activeMixerClip = clip
+          if (_prevMixerClip && _prevMixerClip !== clip) {
+            try { model.mixer.uncacheClip(_prevMixerClip) } catch {}
+          }
           action.setLoop(loop ? LoopRepeat : LoopOnce, Infinity)
           if (fadeIn > 0) action.fadeIn(fadeIn)
 
@@ -499,6 +527,9 @@ export async function playFBXAnimation(url, { loop = false, fadeIn = 0.3 } = {},
                 onRelease: () => {
                   model._fbxClipActive = false
                   model._activeFbxAction = null
+                  // 완료된 non-loop 클립도 캐시에서 내린다(finish 경로 누수 차단).
+                  if (model._activeMixerClip === clip) model._activeMixerClip = null
+                  try { model.mixer?.uncacheClip(clip) } catch {}
                 },
               })
             }
