@@ -15,7 +15,7 @@
 //     it; reopen via tray click / Ctrl+Alt+A is instant.
 
 import { analyzeWav } from './lipsyncRuntime.js'
-import { toUserMessage, isActiveFrame } from './chatShared.js'
+import { toUserMessage, isActiveFrame, createSpeechQueue } from './chatShared.js'
 
 const state = {
   history: [],
@@ -244,8 +244,18 @@ function stopSpeakingNow() {
   }
 }
 
-async function speakWithLipsync(text) {
-  if (!window.api?.tts || !state.ttsEnabled) return
+// chat.js speakText와 같은 계약 — 진행 중 재생을 끊고 큐에 태운다. 이 창은
+// lipsync-start/stop을 IPC로 보내므로, 겹치면 메인 창의 _preLipsyncState까지
+// 'talk'로 덮여 캐릭터가 talk 상태에 갇힌다.
+const _speechQueue = createSpeechQueue()
+
+function speakWithLipsync(text) {
+  if (!window.api?.tts || !state.ttsEnabled) return Promise.resolve()
+  stopSpeakingNow()
+  return _speechQueue(() => _speakOnce(text))
+}
+
+async function _speakOnce(text) {
   let audio = null
   let audioUrl = null
   let started = false
@@ -285,6 +295,9 @@ async function speakWithLipsync(text) {
       // 공유 abort 경로: stopSpeakingNow()가 재생을 즉시 끊을 수 있게 finish를 건다.
       state.abortSpeak = finish
       audio.play().then(() => {
+        // 이미 abort된 발화면 lipsync-start를 보내지 않는다 — 보내면 메인 창이
+        // setState('talk')로 들어간 뒤 짝이 되는 stop을 못 받아 talk에 갇힌다.
+        if (finished) return
         window.api.notifyCharacter?.({
           action: 'lipsync-start',
           value: visemeTimeline

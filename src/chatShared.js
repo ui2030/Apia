@@ -25,3 +25,26 @@ export function toUserMessage(raw) {
 export function isActiveFrame(frame, activeRequestId) {
   return !!frame && activeRequestId != null && frame.requestId === activeRequestId
 }
+
+// 발화 직렬화. 두 채팅 표면의 speak 함수는 activeAudio /
+// abortSpeak / speechReturnState를 각각 단일 슬롯으로 들고 있어서, 발화 두 개가
+// 겹치면 오디오가 동시에 울리고 복귀 상태가 'talk'로 덮여 망가진다. 채팅은
+// 턴제라 안 드러나지만 자율 발화(리액션)는 반드시 겹친다.
+//
+// speak(task)는 앞 발화가 **완전히 끝난 뒤**(오디오 종료 + 상태 복원까지)에
+// task를 시작시킨다. 이 큐가 책임지는 것은 순서뿐이다 — 지금 들리는 소리를
+// 끊는 것(barge-in)은 호출측의 stopSpeakingNow(abortSpeak)가 진입부에서 하고,
+// 그 덕에 큐가 긴 발화를 기다리지 않고 곧바로 다음으로 넘어간다.
+//
+// ponytail: 낡은 대기 항목을 버리는 정책(최신 1개만 유지)은 넣지 않았다.
+// "실행 중"과 "대기 중"을 구분하는 상태가 더 필요한데, 현재 호출자(채팅 1개,
+// 창 1개)는 발화를 연달아 쌓지 않는다. 자율 리액션 드라이버가 붙어 큐가 실제로
+// 밀리면 그때 추가한다.
+export function createSpeechQueue() {
+  let chain = Promise.resolve()
+  return function speak(task) {
+    const run = chain.then(task)
+    chain = run.catch(() => {}) // 한 발화의 실패가 다음 발화를 막지 않게
+    return run
+  }
+}

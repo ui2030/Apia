@@ -3,7 +3,7 @@ import { setState, getState } from './characterController.js'
 import { setEmotion, requestFaceCamera } from './characterController.js'
 import { analyzeWav, playTimeline, stopTimeline } from './lipsyncRuntime.js'
 import { createTouchClassifier } from './touchInteraction.js'
-import { toUserMessage, isActiveFrame } from './chatShared.js'
+import { toUserMessage, isActiveFrame, createSpeechQueue } from './chatShared.js'
 
 // Step 3: character raycaster injected by main.js. null = wallpaper mode
 // active (or just no character loaded) — click-through manager skips the
@@ -427,10 +427,19 @@ function finishSpeakingMotion({ didEnterTalk = false } = {}) {
   }
 }
 
-async function speakText(text, talkMotion = null) {
-  if (!window.api) return
-  if (!state.ttsEnabled) return
+// 발화 진입점. 진행 중 재생을 끊고(barge-in) 큐에 태워 앞 발화의 상태 복원이
+// 끝난 뒤에 다음이 시작하게 한다 — 중첩 재생·speechReturnState 오염 차단.
+// 모든 호출자가 여기를 지나므로 자율 리액션 드라이버도 자동으로 보호된다.
+const _speechQueue = createSpeechQueue()
 
+function speakText(text, talkMotion = null) {
+  if (!window.api) return Promise.resolve()
+  if (!state.ttsEnabled) return Promise.resolve()
+  stopSpeakingNow()
+  return _speechQueue(() => _speakOnce(text, talkMotion))
+}
+
+async function _speakOnce(text, talkMotion = null) {
   let didEnterTalk = false
 
   try {
@@ -508,6 +517,10 @@ async function speakText(text, talkMotion = null) {
         // 타임라인은 재생이 실제로 시작된 뒤에 건다 — currentTime 보정으로
         // play() 지연을 흡수
         audio.play().then(() => {
+          // finished면 이미 abort된 발화다 — finalizeAudio가 stopTimeline까지
+          // 끝낸 뒤 play()가 뒤늦게 resolve되면 소리 없는 입뻐끔이 남는다.
+          // 큐 도입으로 barge-in이 상시 경로가 되면서 실제로 걸리는 창이다.
+          if (finished) return
           if (visemeTimeline) playTimeline(visemeTimeline, audio.currentTime || 0)
         }).catch(() => {
           finalizeAudio()
