@@ -494,11 +494,15 @@ async function importFromZip({ zipPath, displayName, customName = '', summary = 
 }
 
 async function pickImportSource(browserWindow) {
+  // Windows/Linux는 openFile+openDirectory 동시 지정 시 폴더 선택기만 떠서
+  // zip/모델 파일을 고를 수 없게 된다(Electron 제약). 파일 선택기로 고정하고
+  // 폴더 import는 드래그앤드롭 경로가 담당한다.
   const result = await dialog.showOpenDialog(browserWindow, {
     title: 'Import character source',
-    properties: ['openFile', 'openDirectory'],
+    properties: ['openFile'],
     filters: [
-      { name: 'Character Sources', extensions: ['zip', 'vrm', 'pmx', 'pmd'] }
+      { name: 'Character Sources', extensions: ['zip', 'vrm', 'pmx', 'pmd'] },
+      { name: 'All Files', extensions: ['*'] }
     ]
   })
 
