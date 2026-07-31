@@ -58,12 +58,52 @@ def stub_pyttsx3(svc: TTSService, data: bytes = b"RIFF-wav"):
 
 # ── 기본 엔진 라우팅 ────────────────────────────────────────────────────
 
-def test_edge_success_returns_mpeg_with_default_voice():
+def stub_mp3_decode(monkeypatch, wav: bytes = b"RIFF-from-mp3"):
+    """libsndfile mp3 디코드가 되는 환경을 흉내낸다(_mp3_to_wav 성공 경로)."""
+    seen = []
+
+    def _decode(data, mime):
+        seen.append({"data": data, "mime": mime})
+        return "samples", 24000
+
+    monkeypatch.setattr(clone, "decode_audio", _decode)
+    monkeypatch.setattr(clone, "encode_wav", lambda samples, sr: wav)
+    return seen
+
+
+def test_edge_success_returns_wav_when_mp3_decodable(monkeypatch):
+    """립싱크 계약: edge가 mp3를 줘도 렌더러에는 wav로 나가야 한다 —
+    lipsyncRuntime.isWavBuffer가 mp3를 거부해 비짐이 사인파로 떨어지기 때문."""
     svc = make_service()
     edge_calls = stub_edge(svc)
+    decoded = stub_mp3_decode(monkeypatch)
+    audio, mime, fallback = asyncio.run(svc.synthesize("안녕", None))
+    assert (audio, mime, fallback) == (b"RIFF-from-mp3", "audio/wav", False)
+    assert audio.startswith(b"RIFF")  # 렌더러 isWavBuffer 통과 조건
+    assert decoded[0] == {"data": b"mp3-bytes", "mime": "audio/mpeg"}
+    assert edge_calls[0]["voice"] == DEFAULT_EDGE_VOICE
+    assert svc._mp3_decode_ok is True
+
+
+def test_edge_keeps_mp3_when_decode_unavailable(monkeypatch):
+    """libsndfile에 mp3 디코드가 없으면 발화는 살리고 립싱크만 폴백한다.
+    실패는 정적 특성이라 캐시되어 다음 발화에서 재시도하지 않는다."""
+    svc = make_service()
+    stub_edge(svc)
+    attempts = []
+
+    def _boom(data, mime):
+        attempts.append(mime)
+        raise RuntimeError("no mp3 support in libsndfile")
+
+    monkeypatch.setattr(clone, "decode_audio", _boom)
+
     audio, mime, fallback = asyncio.run(svc.synthesize("안녕", None))
     assert (audio, mime, fallback) == (b"mp3-bytes", "audio/mpeg", False)
-    assert edge_calls[0]["voice"] == DEFAULT_EDGE_VOICE
+    assert svc._mp3_decode_ok is False
+
+    asyncio.run(svc.synthesize("또 안녕", None))
+    assert attempts == ["audio/mpeg"]  # 두 번째 발화는 시도조차 안 함
 
 
 def test_edge_voice_id_resolves_short_name():
@@ -178,7 +218,10 @@ def test_custom_voice_converts(monkeypatch, tmp_path):
     dir_id, _, convert_calls = _custom_env(monkeypatch, tmp_path)
     audio, mime, fallback = asyncio.run(svc.synthesize("안녕", f"custom:{dir_id}"))
     assert (audio, mime, fallback) == (b"converted-wav", "audio/wav", False)
-    assert convert_calls[0]["mime"] == "audio/mpeg"  # edge 원음이 입력
+    # 변환 입력은 synthesize_base 출력 그대로 — 이 테스트는 mp3 디코드가 없는
+    # 환경(스텁 바이트가 디코드 불가)이라 mp3가 넘어간다. 디코드 가능한 환경에선
+    # wav가 넘어가고, seed-vc 어댑터는 둘 다 받는다(decode_audio가 흡수).
+    assert convert_calls[0]["mime"] == "audio/mpeg"
     assert convert_calls[0]["ref"].endswith("reference.wav")
 
 

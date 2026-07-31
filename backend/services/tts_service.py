@@ -5,10 +5,15 @@ edge-tts는 Microsoft Edge의 신경망 음성을 무료·키 없이 쓰는 라�
 네트워크가 필요하므로 합성 실패 시 같은 요청 안에서 pyttsx3로 폴백한다 —
 오프라인에서도 입은 움직여야 한다(완성 기준 ⑤는 품질, ①~④는 생존).
 
-synthesize()는 (bytes, mime)을 반환한다. edge는 mp3("audio/mpeg"),
-pyttsx3/silent는 wav("audio/wav"). mime은 라우터가 Content-Type으로 흘리고,
-electron IPC → 렌더러 Blob type까지 그대로 전달된다. 렌더러의 비짐 분석
-(lipsyncRuntime.analyzeWav)은 decodeAudioData 위라 mp3도 그대로 디코드된다.
+synthesize()는 (bytes, mime)을 반환한다. mime은 라우터가 Content-Type으로
+흘리고, electron IPC → 렌더러 Blob type까지 그대로 전달된다.
+
+**모든 경로가 wav("audio/wav")로 나간다.** edge-tts는 mp3를 주지만 렌더러가
+mp3를 디코드하지 못한다 — lipsyncRuntime.isWavBuffer가 mp3를 거부하기 때문
+(decodeAudioData에 mp3를 넘기면 일부 Windows에서 렌더러가 네이티브 크래시).
+거부되면 비짐 타임라인이 null이 되어 립싱크가 사인파 입뻐끔 폴백으로 떨어진다.
+그래서 여기서 wav로 디코드해 내보낸다(_mp3_to_wav). libsndfile에 mp3 디코드가
+없는 환경에서는 mp3 그대로 나가고 립싱크만 폴백한다 — 발화는 항상 산다.
 """
 
 import asyncio
@@ -29,6 +34,10 @@ CLONE_TIMEOUT_SEC = 20  # 음색 변환 상한 — 초과 시 기본 음성 폴�
 
 
 class TTSService:
+    # None=미확인, True/False=libsndfile mp3 디코드 가능 여부(정적 특성이라 캐시).
+    # 클래스 속성으로 둬서 __new__로 만든 인스턴스(테스트)도 기본값을 갖는다.
+    _mp3_decode_ok = None
+
     def __init__(self):
         self.engine_type = "none"
         self._engine_lock = threading.Lock()
@@ -162,7 +171,8 @@ class TTSService:
                     self._synthesize_edge(text, self._resolve_edge_voice(voice_id)),
                     timeout=EDGE_TIMEOUT_SEC,
                 )
-                return data, "audio/mpeg"
+                # 렌더러가 비짐을 뽑으려면 wav여야 한다(모듈 docstring 참조).
+                return await asyncio.to_thread(self._mp3_to_wav, data)
             except Exception as error:
                 # 오프라인/서비스 오류 — 같은 요청 안에서 pyttsx3로 폴백.
                 print(f"[TTS] edge synthesis failed, falling back: {error}")
@@ -181,6 +191,26 @@ class TTSService:
                 print(f"[TTS] pyttsx3 synthesis failed, silent fallback: {error}")
 
         return self._silent_wav(0.5), "audio/wav"
+
+    def _mp3_to_wav(self, data: bytes) -> tuple[bytes, str]:
+        """edge mp3 → wav. 디코더는 voice_clone_service와 공유(soundfile 고정).
+
+        블로킹이라 호출측이 to_thread로 감싼다. mp3 디코드가 불가능한
+        libsndfile이면 mp3를 그대로 돌려주고 다음부터는 시도하지 않는다.
+        """
+        if self._mp3_decode_ok is False:
+            return data, "audio/mpeg"
+        try:
+            from services import voice_clone_service as clone
+
+            samples, sr = clone.decode_audio(data, "audio/mpeg")
+            wav = clone.encode_wav(samples, sr)
+            self._mp3_decode_ok = True
+            return wav, "audio/wav"
+        except Exception as error:
+            self._mp3_decode_ok = False
+            print(f"[TTS] mp3->wav decode unavailable, lipsync falls back: {error}")
+            return data, "audio/mpeg"
 
     async def _synthesize_edge(self, text: str, voice: str) -> bytes:
         import edge_tts
