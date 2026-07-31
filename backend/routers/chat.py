@@ -14,10 +14,12 @@ routers/chat.py
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import List, Set
+from typing import List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
 
 from ai_config import CONTEXT_MAX_CHARS
 from schemas import ChatCitation, ChatRequest, ChatResponse
@@ -48,8 +50,12 @@ def _web_results_to_items(results: List[WebResult]) -> List[ContextItem]:
     return items
 
 
-@router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest, request: Request):
+async def _gather_context(req: ChatRequest, request: Request) -> Tuple[Any, Any, Optional[dict], list]:
+    """retrieve memory/files/web in parallel and assemble context_blocks.
+
+    Returns (memory_service, web_service, context_blocks, web_results). Shared
+    by the non-streaming and streaming endpoints so retrieval logic lives once.
+    """
     memory = getattr(request.app.state, "memory", None)
     files = getattr(request.app.state, "files", None)
     web = getattr(request.app.state, "web", None)
@@ -95,14 +101,14 @@ async def chat(req: ChatRequest, request: Request):
             + context_blocks["웹"]
         )
 
-    reply, emotion = await claude.chat(
-        req.message,
-        req.history,
-        ai_mode=req.ai_mode,
-        memory_turns=req.memory_turns,
-        context_blocks=context_blocks or None,
-    )
+    return memory, web, (context_blocks or None), web_results
 
+
+async def _finalize_reply(
+    req: ChatRequest, reply: str, web_results: list, memory: Any, web: Any
+) -> List[ChatCitation]:
+    """Resolve citations + persist the exchange. Shared by both endpoints — the
+    only difference upstream is how `reply` was produced (blocking vs. stream)."""
     citations_out: List[ChatCitation] = []
     markers = WebSearchService.parse_markers(reply) if web_results else []
 
@@ -166,7 +172,81 @@ async def chat(req: ChatRequest, request: Request):
         _BACKGROUND_TASKS.add(task)
         task.add_done_callback(_release_and_log)
 
+    return citations_out
+
+
+@router.post("", response_model=ChatResponse)
+async def chat(req: ChatRequest, request: Request):
+    memory, web, context_blocks, web_results = await _gather_context(req, request)
+
+    reply, emotion = await claude.chat(
+        req.message,
+        req.history,
+        ai_mode=req.ai_mode,
+        memory_turns=req.memory_turns,
+        context_blocks=context_blocks,
+    )
+
+    citations_out = await _finalize_reply(req, reply, web_results, memory, web)
     return ChatResponse(reply=reply, emotion=emotion, citations=citations_out)
+
+
+def _sse(obj: dict) -> str:
+    return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+
+
+# Streaming variant. SSE frames (one JSON object per `data:` line):
+#   {"type":"delta","text":"..."}                     — 0..N token deltas
+#   {"type":"final","reply":str,"emotion":str,        — exactly 1, terminal
+#                   "citations":[ChatCitation,...]}
+#   {"type":"error","message":str}                    — on unexpected failure
+# The final frame carries the authoritative reply (emotion marker stripped) +
+# all ChatResponse metadata; the client replaces the live bubble with it.
+_EMOTION_HOLDBACK = 24  # ponytail: assumes [EMOTION:...] is trailing — hold back
+                        # enough tail chars to never stream a partial/whole marker.
+
+
+@router.post("/stream")
+async def chat_stream(req: ChatRequest, request: Request):
+    memory, web, context_blocks, web_results = await _gather_context(req, request)
+
+    async def event_gen():
+        buf = ""
+        emitted = 0
+        try:
+            async for delta in claude.chat_stream(
+                req.message,
+                req.history,
+                ai_mode=req.ai_mode,
+                memory_turns=req.memory_turns,
+                context_blocks=context_blocks,
+            ):
+                if not delta:
+                    continue
+                buf += delta
+                safe = len(buf) - _EMOTION_HOLDBACK
+                if safe > emitted:
+                    yield _sse({"type": "delta", "text": buf[emitted:safe]})
+                    emitted = safe
+
+            reply, emotion = claude.parse_emotion(buf)
+            # Flush any cleaned tail we held back so the live bubble is complete
+            # even before the final swap.
+            if len(reply) > emitted:
+                yield _sse({"type": "delta", "text": reply[emitted:]})
+
+            citations = await _finalize_reply(req, reply, web_results, memory, web)
+            yield _sse({
+                "type": "final",
+                "reply": reply,
+                "emotion": emotion,
+                "citations": [c.model_dump() for c in citations],
+            })
+        except Exception as error:  # noqa: BLE001
+            logger.exception("[chat/stream] failed")
+            yield _sse({"type": "error", "message": str(error)})
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 async def _summarize_only(memory) -> None:

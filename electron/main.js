@@ -330,6 +330,119 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
   }
 })
 
+// ── SSE 채팅 스트리밍 relay ───────────────────────────────────────────────
+//
+// /chat/stream(SSE)을 main에서 받아 요청한 창(event.sender)으로 델타/완료/에러
+// 프레임을 중계한다. 창당 활성 스트림 1개만 유지: 새 요청이나 창 파괴 시 이전
+// AbortController를 끊어 늦은 델타가 새 버블에 붙지 않게 한다(렌더러도 requestId
+// 로 이중 방어). 에러 문자열은 raw로 넘기고, 사용자용 한국어화는 두 렌더러가
+// 공유하는 chatShared.toUserMessage가 담당(단일 출처).
+const activeChatStreams = new Map() // webContents.id → AbortController
+
+async function* parseSSEFrames(body) {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const chunk = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        const dataLine = chunk.split('\n').find((l) => l.startsWith('data:'))
+        if (!dataLine) continue
+        const json = dataLine.slice(5).trim()
+        if (!json) continue
+        try { yield JSON.parse(json) } catch {}
+      }
+    }
+  } finally {
+    try { reader.releaseLock() } catch {}
+  }
+}
+
+ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) => {
+  const sender = event.sender
+  const wcId = sender.id
+
+  // Abort any in-flight stream for this window before starting a new one.
+  const prev = activeChatStreams.get(wcId)
+  if (prev) { try { prev.abort() } catch {} }
+
+  const controller = new AbortController()
+  activeChatStreams.set(wcId, controller)
+  const requestId = `${wcId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const onGone = () => { try { controller.abort() } catch {} }
+  sender.once('destroyed', onGone)
+
+  const isCurrent = () => activeChatStreams.get(wcId) === controller && !sender.isDestroyed()
+
+  const settings = loadSettings()
+  const resolvedUseWeb = typeof useWeb === 'boolean' ? useWeb : settings.useWebDefault === true
+  const chatTimeout = settings.aiMode === 'local' ? 180000 : 30000
+
+  // Fire the SSE read detached from the invoke return so the renderer gets its
+  // requestId immediately and can start filtering frames.
+  ;(async () => {
+    let timer = null
+    let timedOut = false
+    try {
+      await backend.ensureAvailableForRequest()
+      timer = setTimeout(() => { timedOut = true; try { controller.abort() } catch {} }, chatTimeout)
+      const response = await fetch(`${getBackendUrl()}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          history,
+          ai_mode: settings.aiMode,
+          memory_turns: settings.memoryTurns,
+          use_web: resolvedUseWeb
+        }),
+        signal: controller.signal
+      })
+      if (!response.ok || !response.body) {
+        const details = await readErrorResponse(response).catch(() => '')
+        throw new Error(`[${response.status}] ${details || response.statusText}`)
+      }
+      for await (const frame of parseSSEFrames(response.body)) {
+        if (!isCurrent()) break
+        if (frame.type === 'delta') {
+          sender.send('chat-stream-delta', { requestId, text: frame.text || '' })
+        } else if (frame.type === 'final') {
+          sender.send('chat-stream-done', {
+            requestId,
+            reply: frame.reply,
+            emotion: frame.emotion,
+            citations: Array.isArray(frame.citations) ? frame.citations : []
+          })
+        } else if (frame.type === 'error') {
+          sender.send('chat-stream-error', { requestId, error: frame.message || 'stream error' })
+        }
+      }
+    } catch (error) {
+      const aborted = error?.name === 'AbortError'
+      // A timeout abort still deserves a user-facing error; a new-request /
+      // window-close abort must stay silent (it's superseded / gone).
+      if (isCurrent() && (!aborted || timedOut)) {
+        const message = timedOut
+          ? `Request timed out after ${chatTimeout}ms`
+          : (error?.message || String(error))
+        try { sender.send('chat-stream-error', { requestId, error: message }) } catch {}
+      }
+    } finally {
+      if (timer) clearTimeout(timer)
+      try { sender.removeListener('destroyed', onGone) } catch {}
+      if (activeChatStreams.get(wcId) === controller) activeChatStreams.delete(wcId)
+    }
+  })()
+
+  return { requestId }
+})
+
 // J단계 — LLM 행동 디렉터. 채팅과 분리된 경량 호출. 짧은 타임아웃, 실패는 전부
 // null로 흡수(렌더러 runner가 백오프). 백엔드 미가용이면 ensureAvailableForRequest가
 // 던지고 catch → null → 규칙기반 유지.

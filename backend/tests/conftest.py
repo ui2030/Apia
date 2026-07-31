@@ -43,8 +43,29 @@ os.environ["DATA_DIR"] = str(_TEST_DATA_DIR)
 
 def _install_fake_claude_module() -> MagicMock:
     """Replace `services.claude_service.ClaudeService` before chat.py imports it."""
+    import re as _re
+
     fake_claude = MagicMock(name="ClaudeService_instance")
     fake_claude.chat = AsyncMock(return_value=("Hello! [EMOTION:happy]", "happy"))
+
+    # Streaming (SSE) support: chat_stream is an async generator yielding raw
+    # deltas (marker still attached); parse_emotion splits reply/emotion on the
+    # accumulated text — mirrors the real ClaudeService contract.
+    async def _fake_chat_stream(*_args, **_kwargs):
+        for piece in ["Hello", "! ", "[EMOTION:happy]"]:
+            yield piece
+
+    fake_claude.chat_stream = _fake_chat_stream
+
+    def _fake_parse_emotion(text):
+        emotion = "neutral"
+        match = _re.search(r"\[EMOTION:(\w+)\]", text)
+        if match:
+            emotion = match.group(1)
+            text = _re.sub(r"\s*\[EMOTION:\w+\]", "", text).strip()
+        return text, emotion
+
+    fake_claude.parse_emotion = MagicMock(side_effect=_fake_parse_emotion)
     # summarize는 step 2부터 MemoryService가 호출. lifespan에서 None이 아닌
     # callable이어야 enabled가 살아있으므로 AsyncMock으로 둔다.
     fake_claude.summarize = AsyncMock(return_value="요약된 텍스트")

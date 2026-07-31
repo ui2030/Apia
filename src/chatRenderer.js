@@ -15,6 +15,7 @@
 //     it; reopen via tray click / Ctrl+Alt+A is instant.
 
 import { analyzeWav } from './lipsyncRuntime.js'
+import { toUserMessage, isActiveFrame } from './chatShared.js'
 
 const state = {
   history: [],
@@ -22,7 +23,15 @@ const state = {
   ttsEnabled: true,
   memoryTurns: 10,
   useWebDefault: false,
-  isSending: false
+  isSending: false,
+  // SSE 스트리밍 진행 상태(요청당 1개). requestId로 늦은 델타를 거른다.
+  activeRequestId: null,
+  streamRow: null,
+  streamText: '',
+  pendingUserText: '',
+  // TTS 백그라운드 재생 중단용 공유 경로(task 2).
+  activeAudio: null,
+  abortSpeak: null
 }
 
 function init() {
@@ -34,6 +43,25 @@ function init() {
   window.api.onSettingsApplied?.((settings) => applyRuntimeSettings(settings))
   loadVoices()
   bindUI()
+  // 스트림 이벤트 구독(요청당이 아니라 1회). 늦은 프레임은 requestId로 무시.
+  window.api.onChatStreamDelta?.((payload) => onStreamDelta(payload))
+  window.api.onChatStreamDone?.((payload) => onStreamDone(payload))
+  window.api.onChatStreamError?.((payload) => onStreamError(payload))
+  startBackendPolling()
+}
+
+// 벽지모드 채팅창 백엔드 상태 실표시 — 헤더 status-dot에 색/툴팁 바인딩(task 3).
+function startBackendPolling() {
+  const dot = document.querySelector('.status-dot')
+  if (!dot) return
+  const tick = async () => {
+    let ok = false
+    try { ok = !!(await window.api?.checkBackend?.())?.ok } catch {}
+    dot.style.background = ok ? '#4ade80' : '#ef4444'
+    dot.title = ok ? '백엔드 온라인' : '백엔드 오프라인'
+  }
+  tick()
+  setInterval(tick, 5000)
 }
 
 async function hydrateSettings() {
@@ -90,6 +118,7 @@ function bindUI() {
   // Close = hide. Window stays alive in memory so reopen is instant; main
   // process listens for `chat:hide` to swap the visibility flag.
   closeBtn?.addEventListener('click', () => {
+    stopSpeakingNow() // 창을 닫으면 진행 중 TTS도 멈춘다(task 2)
     window.api?.chatHide?.()
   })
 }
@@ -103,58 +132,115 @@ function setComposerBusy(busy) {
 
 async function sendMessage(text) {
   if (!text?.trim() || state.isSending) return
+  // 새 전송은 이전 TTS 재생을 즉시 끊는다(task 2 공유 abort).
+  stopSpeakingNow()
   state.isSending = true
   setComposerBusy(true)
   appendMessage('user', text)
   const input = document.getElementById('chat-input')
   if (input) input.value = ''
-  const loading = appendMessage('ai', '● ● ●', true)
+  const loadingRow = appendMessage('ai', '● ● ●', true)
 
-  let reply = '백엔드 연결 실패. 잠시 후 다시 시도해주세요.'
-  let emotion = 'neutral'
-  let citations = []
+  state.streamRow = loadingRow
+  state.streamText = ''
+  state.activeRequestId = null
+  state.pendingUserText = text
+
+  if (!window.api?.chatStreamStart) {
+    finalizeStream('백엔드가 연결되지 않아 오프라인 모드예요. 백엔드를 실행해주세요! 🔧', 'neutral', [], false)
+    return
+  }
 
   try {
-    if (window.api) {
-      const historyLimit = Math.max(1, Math.min(50, state.memoryTurns)) * 2
-      const toggle = document.getElementById('chat-web-toggle')
-      const useWeb = toggle ? toggle.checked : state.useWebDefault
-      const r = await window.api.sendMessage(
-        text, state.history.slice(-historyLimit), { useWeb }
-      )
-      if (r?.reply) { reply = r.reply; emotion = r.emotion || 'neutral' }
-      if (Array.isArray(r?.citations)) citations = r.citations
-      if (r?.error) reply = '오류: ' + r.error
+    const historyLimit = Math.max(1, Math.min(50, state.memoryTurns)) * 2
+    const toggle = document.getElementById('chat-web-toggle')
+    const useWeb = toggle ? toggle.checked : state.useWebDefault
+    const r = await window.api.chatStreamStart(
+      text, state.history.slice(-historyLimit), { useWeb }
+    )
+    state.activeRequestId = r?.requestId || null
+    if (!state.activeRequestId) {
+      finalizeStream(toUserMessage('backend unavailable'), 'neutral', [], false)
     }
   } catch (error) {
-    reply = '오류가 발생했어요: ' + (error?.message || error)
-  } finally {
-    loading?.remove()
-    appendMessage('ai', reply, false, citations)
-    state.history.push(
-      { role: 'user', content: text },
-      { role: 'assistant', content: reply }
-    )
-    const localHistoryLimit = Math.max(1, Math.min(50, state.memoryTurns)) * 2
-    if (state.history.length > localHistoryLimit) {
-      state.history = state.history.slice(-localHistoryLimit)
-    }
+    finalizeStream(toUserMessage(error?.message || error), 'neutral', [], false)
+  }
+}
 
-    // Side effects on the wallpaper character — emotion + face-camera +
-    // bubble. Action allowlist enforced on the main-process IPC handler.
+function onStreamDelta(payload) {
+  if (!isActiveFrame(payload, state.activeRequestId) || !state.streamRow) return
+  if (state.streamText === '') {
+    const bubble = state.streamRow.querySelector('.msg-bubble')
+    if (bubble) { bubble.classList.remove('typing'); bubble.textContent = '' }
+  }
+  state.streamText += payload.text || ''
+  const bubble = state.streamRow.querySelector('.msg-bubble')
+  if (bubble) bubble.textContent = state.streamText
+  const messages = document.getElementById('messages')
+  if (messages) messages.scrollTop = messages.scrollHeight
+}
+
+function onStreamDone(payload) {
+  if (!isActiveFrame(payload, state.activeRequestId)) return
+  const reply = payload.reply || state.streamText || '...'
+  const emotion = payload.emotion || 'neutral'
+  const citations = Array.isArray(payload.citations) ? payload.citations : []
+  finalizeStream(reply, emotion, citations, true)
+}
+
+function onStreamError(payload) {
+  if (!isActiveFrame(payload, state.activeRequestId)) return
+  finalizeStream(toUserMessage(payload.error), 'neutral', [], false)
+}
+
+// 라이브 버블을 최종 내용으로 확정하고 컴포저를 즉시 푼다. speak는 tts가 있고
+// success일 때만 백그라운드로(재생 완료를 기다리지 않는다 — task 2).
+function finalizeStream(reply, emotion, citations, speak) {
+  const row = state.streamRow
+  if (row) {
+    const bubble = row.querySelector('.msg-bubble')
+    if (bubble) { bubble.classList.remove('typing'); bubble.style.opacity = ''; bubble.textContent = reply }
+    if (Array.isArray(citations) && citations.length > 0) {
+      row.appendChild(renderCitationChips(citations))
+    }
+    const messages = document.getElementById('messages')
+    if (messages) messages.scrollTop = messages.scrollHeight
+  }
+
+  state.history.push(
+    { role: 'user', content: state.pendingUserText },
+    { role: 'assistant', content: reply }
+  )
+  const localHistoryLimit = Math.max(1, Math.min(50, state.memoryTurns)) * 2
+  if (state.history.length > localHistoryLimit) {
+    state.history = state.history.slice(-localHistoryLimit)
+  }
+
+  state.activeRequestId = null
+  state.streamRow = null
+  state.streamText = ''
+  state.isSending = false
+  setComposerBusy(false)
+
+  if (speak) {
+    // Side effects on the wallpaper character — emotion + face-camera + bubble.
     window.api?.notifyCharacter?.({ action: 'emotion', value: emotion })
     window.api?.notifyCharacter?.({
       action: 'bubble',
       text: reply.slice(0, 50) + (reply.length > 50 ? '...' : '')
     })
-    window.api?.notifyCharacter?.({
-      action: 'face-camera',
-      durationMs: 12000
-    })
+    window.api?.notifyCharacter?.({ action: 'face-camera', durationMs: 12000 })
+    // fire-and-forget: composer already unlocked, TTS plays in background.
+    speakWithLipsync(reply)
+  }
+}
 
-    await speakWithLipsync(reply)
-    state.isSending = false
-    setComposerBusy(false)
+// 진행 중 오디오/립싱크를 즉시 중단(공유 abort 경로). 새 전송·창 닫힘에서 호출.
+function stopSpeakingNow() {
+  if (state.abortSpeak) {
+    const fn = state.abortSpeak
+    state.abortSpeak = null
+    try { fn() } catch {}
   }
 }
 
@@ -176,6 +262,7 @@ async function speakWithLipsync(text) {
     for (let i = 0; i < bytes.length; i += 1) buf[i] = bytes.charCodeAt(i)
     audioUrl = URL.createObjectURL(new Blob([buf], { type: r.mime || 'audio/wav' }))
     audio = new Audio(audioUrl)
+    state.activeAudio = audio
 
     // H단계 — 이 창이 오디오를 재생하고 캐릭터(메인 창)는 IPC로만 입을
     // 움직인다. 비짐 타임라인을 여기서 분석해 lipsync-start에 실어 보내되,
@@ -189,10 +276,14 @@ async function speakWithLipsync(text) {
       const finish = () => {
         if (finished) return
         finished = true
+        state.abortSpeak = null
+        try { audio.pause() } catch {}
         resolve()
       }
       audio.onended = finish
       audio.onerror = finish
+      // 공유 abort 경로: stopSpeakingNow()가 재생을 즉시 끊을 수 있게 finish를 건다.
+      state.abortSpeak = finish
       audio.play().then(() => {
         window.api.notifyCharacter?.({
           action: 'lipsync-start',
@@ -214,6 +305,8 @@ async function speakWithLipsync(text) {
       window.api?.notifyCharacter?.({ action: 'lipsync-stop' })
     }
     if (audioUrl) URL.revokeObjectURL(audioUrl)
+    if (state.activeAudio === audio) state.activeAudio = null
+    if (state.abortSpeak) state.abortSpeak = null
   }
 }
 
@@ -228,7 +321,7 @@ function appendMessage(role, text, isLoading = false, citations = null) {
   label.textContent = role === 'ai' ? 'Apia' : '나'
   const bubble = document.createElement('div')
   bubble.className = 'msg-bubble'
-  if (isLoading) bubble.style.opacity = '0.5'
+  if (isLoading) bubble.classList.add('typing') // 대기 인디케이터 애니메이션(task 5)
   bubble.textContent = text
   row.appendChild(label)
   row.appendChild(bubble)

@@ -75,6 +75,13 @@
       background: rgba(255,255,255,0.08); color: var(--text);
       border-radius: 12px 4px 12px 12px;
     }
+    /* 대기 인디케이터 — 첫 델타 오기 전 ●●● 를 부드럽게 점멸(task 5) */
+    .msg-bubble.typing {
+      opacity: 0.5;
+      animation: typing-pulse 1.2s ease-in-out infinite;
+      letter-spacing: 2px;
+    }
+    @keyframes typing-pulse { 0%,100%{opacity:0.35} 50%{opacity:0.85} }
     .msg-citations {
       display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0 4px; max-width: 85%;
     }

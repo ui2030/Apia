@@ -12,6 +12,7 @@ tests, not contract tests.
 """
 from __future__ import annotations
 
+import json
 from io import BytesIO
 
 from schemas import (
@@ -351,6 +352,40 @@ def test_chat_use_web_happy_path_fills_citations(client, fake_claude, monkeypatc
     assert by_marker[1]["source_path"] == "https://example.com/a"
     assert by_marker[2]["source_path"] == "https://example.com/b"
     assert by_marker[1]["source_kind"] == "web"
+
+
+def _read_sse_frames(response):
+    frames = []
+    for line in response.iter_lines():
+        if not line:
+            continue
+        text = line if isinstance(line, str) else line.decode("utf-8")
+        if text.startswith("data:"):
+            frames.append(json.loads(text[5:].strip()))
+    return frames
+
+
+def test_chat_stream_frame_contract(client):
+    """SSE contract: 1+ delta frames then exactly one terminal `final` frame
+    carrying reply/emotion/citations. The emotion marker must be stripped from
+    the final reply (parse_emotion runs on the accumulated stream)."""
+    with client.stream("POST", "/chat/stream", json={"message": "hi", "history": []}) as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        frames = _read_sse_frames(r)
+
+    types = [f["type"] for f in frames]
+    assert "delta" in types
+    assert types[-1] == "final"
+    assert types.count("final") == 1
+
+    final = frames[-1]
+    assert set(final.keys()) >= {"type", "reply", "emotion", "citations"}
+    assert isinstance(final["citations"], list)
+    assert "[EMOTION" not in final["reply"]
+    # Deltas reassembled should not leak the marker either (holdback works).
+    streamed = "".join(f["text"] for f in frames if f["type"] == "delta")
+    assert "[EMOTION" not in streamed
 
 
 def test_files_reindex_rejects_unregistered_folder_with_400(client):

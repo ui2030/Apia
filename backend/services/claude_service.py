@@ -7,7 +7,7 @@ import asyncio
 import importlib.util
 import json
 import re
-from typing import Any, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, List, Optional, Tuple
 
 from ai_config import (
     AI_MODE,
@@ -420,6 +420,135 @@ class ClaudeService:
             reply = self._build_unavailable_reply(requested_mode)
 
         return self._parse_emotion(reply)
+
+    def parse_emotion(self, text: str) -> Tuple[str, str]:
+        """Public alias for `_parse_emotion`. The streaming path accumulates raw
+        deltas (which still carry the trailing `[EMOTION:...]` marker) and needs
+        to split reply/emotion once the stream ends — same rule as `chat()`."""
+        return self._parse_emotion(text)
+
+    async def chat_stream(
+        self,
+        message: str,
+        history: List[Any],
+        ai_mode: Optional[str] = None,
+        memory_turns: Optional[int] = None,
+        memory_context: Optional[str] = None,
+        context_blocks: Optional[dict] = None,
+    ) -> AsyncIterator[str]:
+        """Yield reply text deltas (raw — the `[EMOTION:...]` marker is left in
+        the stream; the caller strips it via `parse_emotion` on the full text).
+
+        provider-native token streaming for `claude`/`groq`. `hf_api` and
+        `local` have no incremental token stream wired here, so they fall back
+        to yielding the whole reply as a single final chunk (ponytail: the
+        StreamingResponse contract still holds — one delta then the final
+        frame — the user just doesn't see mid-generation typing for those two).
+        """
+        requested_mode = self._normalize_mode(ai_mode)
+        active_mode = await self.ensure_mode(ai_mode)
+        blocks = self._coerce_context_blocks(context_blocks, memory_context)
+
+        if active_mode == "claude":
+            async for piece in self._chat_claude_stream(message, history, memory_turns, blocks):
+                yield piece
+        elif active_mode == "groq":
+            async for piece in self._chat_groq_stream(message, history, memory_turns, blocks):
+                yield piece
+        elif active_mode == "hf_api":
+            # ponytail: no token stream — one-shot the full reply as a single chunk.
+            yield await self._chat_hf_api(message, history, memory_turns, blocks)
+        elif active_mode == "local":
+            # ponytail: local generate() is blocking, no token stream — one-shot.
+            yield await self._chat_local(message, history, memory_turns, blocks)
+        else:
+            yield self._build_unavailable_reply(requested_mode)
+
+    async def _stream_sync_iter(
+        self, make_iter: Callable[[], Any], extract: Callable[[Any], str]
+    ) -> AsyncIterator[str]:
+        """Bridge a *blocking* provider SDK stream (sync iterator) to an async
+        generator without stalling the event loop. Iteration runs on a worker
+        thread; extracted text pieces flow back through an asyncio.Queue."""
+        loop = asyncio.get_event_loop()
+        queue: "asyncio.Queue" = asyncio.Queue()
+        sentinel = object()
+
+        def _worker() -> None:
+            try:
+                for event in make_iter():
+                    piece = extract(event)
+                    if piece:
+                        loop.call_soon_threadsafe(queue.put_nowait, piece)
+            except Exception as error:  # noqa: BLE001
+                loop.call_soon_threadsafe(queue.put_nowait, error)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+        worker = loop.run_in_executor(None, _worker)
+        while True:
+            item = await queue.get()
+            if item is sentinel:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
+        await worker
+
+    async def _chat_claude_stream(
+        self, message, history, memory_turns, context_blocks
+    ) -> AsyncIterator[str]:
+        def _make():
+            messages = self._build_messages(history, memory_turns)
+            messages.append({"role": "user", "content": message})
+            return self._claude.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=MAX_NEW_TOKENS,
+                system=self._build_system_prompt(context_blocks),
+                messages=messages,
+                stream=True,
+            )
+
+        def _extract(event) -> str:
+            if getattr(event, "type", None) == "content_block_delta":
+                delta = getattr(event, "delta", None)
+                return getattr(delta, "text", "") or ""
+            return ""
+
+        try:
+            async for piece in self._stream_sync_iter(_make, _extract):
+                yield piece
+        except Exception as error:  # noqa: BLE001
+            yield f"Claude API error: {str(error)[:80]} [EMOTION:sad]"
+
+    async def _chat_groq_stream(
+        self, message, history, memory_turns, context_blocks
+    ) -> AsyncIterator[str]:
+        system_prompt = self._build_system_prompt(context_blocks)
+
+        def _make():
+            messages = [{"role": "system", "content": system_prompt}]
+            messages.extend(self._build_messages(history, memory_turns))
+            messages.append({"role": "user", "content": message})
+            return self._groq.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=messages,
+                max_tokens=MAX_NEW_TOKENS,
+                temperature=TEMPERATURE,
+                stream=True,
+            )
+
+        def _extract(chunk) -> str:
+            try:
+                return chunk.choices[0].delta.content or ""
+            except Exception:  # noqa: BLE001
+                return ""
+
+        try:
+            async for piece in self._stream_sync_iter(_make, _extract):
+                yield piece
+        except Exception as error:  # noqa: BLE001
+            yield f"Groq API error: {str(error)[:80]} [EMOTION:sad]"
 
     async def summarize(self, text: str, ai_mode: Optional[str] = None) -> str:
         """장기 기억용 요약 전용 호출.

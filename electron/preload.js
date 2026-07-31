@@ -7,6 +7,28 @@ contextBridge.exposeInMainWorld('api', {
   sendMessage: (msg, hist, opts) => ipcRenderer.invoke('send-message', {
     message: msg, history: hist, useWeb: opts?.useWeb
   }),
+
+  // SSE 채팅 스트리밍. streamStart는 요청 ID를 반환하고, 델타/완료/에러는
+  // 별도 채널로 밀린다. onX 구독자는 해제 함수를 반환(리스너 누수 방지) —
+  // cursor 피드와 같은 계약. 렌더러는 requestId로 늦게 온 델타를 걸러낸다.
+  chatStreamStart: (msg, hist, opts) => ipcRenderer.invoke('chat:streamStart', {
+    message: msg, history: hist, useWeb: opts?.useWeb
+  }),
+  onChatStreamDelta: (cb) => {
+    const listener = (_e, payload) => cb(payload)
+    ipcRenderer.on('chat-stream-delta', listener)
+    return () => ipcRenderer.removeListener('chat-stream-delta', listener)
+  },
+  onChatStreamDone: (cb) => {
+    const listener = (_e, payload) => cb(payload)
+    ipcRenderer.on('chat-stream-done', listener)
+    return () => ipcRenderer.removeListener('chat-stream-done', listener)
+  },
+  onChatStreamError: (cb) => {
+    const listener = (_e, payload) => cb(payload)
+    ipcRenderer.on('chat-stream-error', listener)
+    return () => ipcRenderer.removeListener('chat-stream-error', listener)
+  },
   tts: (text, voice_id) => ipcRenderer.invoke('tts', { text, voice_id }),
   // J단계 — LLM 행동 디렉터(채팅과 분리). raw JSON 문자열 또는 null.
   directorDecide: (context) => ipcRenderer.invoke('director:decide', context),
