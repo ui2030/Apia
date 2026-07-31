@@ -340,9 +340,21 @@ export function onMouseMove(x, y) {
   setLookTarget(nx, ny, { source: 'canvas' })
 }
 
-export function setLookTarget(nx, ny, { source = 'canvas' } = {}) {
-  if (source === 'global') globalCursorFeed = true
-  else if (globalCursorFeed) return
+// M2 — 관전 드라이버가 "화면의 이 지점을 봐라"라고 주입하는 동안 커서 피드가
+// 즉시 덮어쓰는 문제. 우선순위 표 대신 **시간창 잠금** 하나로 푼다: source가
+// 'spectate'면 holdMs 동안 canvas/global 입력을 무시한다. 잠금이 풀리면 커서가
+// 아무 일 없었다는 듯 시선을 되찾는다(리액션 뒤 자연 복귀).
+let lookHoldUntil = 0
+
+export function setLookTarget(nx, ny, { source = 'canvas', holdMs = 0 } = {}) {
+  const tNow = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  if (source === 'spectate') {
+    lookHoldUntil = tNow + Math.max(0, holdMs)
+  } else {
+    if (tNow < lookHoldUntil) return // 관전 응시 잠금 중
+    if (source === 'global') globalCursorFeed = true
+    else if (globalCursorFeed) return
+  }
   lookTargetX = Math.max(-1, Math.min(1, nx))
   // 상하 반전 수정: 입력 ny는 화면 위가 음수(top=-1, bottom=+1)인데 본 pitch에
   // 그대로 먹이면 "마우스 위 → 시선 아래"가 됐다. 여기서 부호를 한 번 뒤집어

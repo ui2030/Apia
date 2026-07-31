@@ -19,10 +19,11 @@ import {
 import { createSceneRuntime } from './sceneRuntime.js'
 import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector, setSeatedHipHeight, releaseSit, getWalkSpeed, setStageNavigation } from './characterController.js'
 import { applyInertialization, recordDisplayedPose, setInertializationEnabled } from './inertialization.js'
+import { parseSpectate, createCommentGate, isSpectateSkip, spectateRawOf } from './spectateDriver.js'
 import { setExpressionEmotion, updateExpression, resetExpression } from './expressionRuntime.js'
 import { playTimeline, stopTimeline, updateMouthMMD, updateMouthVRM } from './lipsyncRuntime.js'
 import { initWorld, updateWorldLabels } from './world.js'
-import { initChat, setCharacterRaycaster, setChatOpen } from './chat.js'
+import { initChat, setCharacterRaycaster, setChatOpen, speakAmbient } from './chat.js'
 import { MotionManager } from './motionManager.js'
 import { createDirectorRunner, applyDirective, buildDirectorContext } from './behaviorDirector.js'
 import { createActivityRunner } from './activityRunner.js'
@@ -290,6 +291,17 @@ if (typeof window !== 'undefined') {
   // inertialization on/off 비교 측정을 한다(__setInertialization).
   window.__setLookTarget = (x, y) => setLookTarget(x, y, { source: 'global' })
   window.__lookTarget = () => getLookTarget()
+  // M2 E2E — 관전 한 사이클 강제 실행(러너 주기 우회). 캡처→게이트→연출까지
+  // 실제 경로를 그대로 탄다.
+  // M2 E2E — 발화 경로만 단독으로 태우는 프로브(캡처/게이트 없이).
+  window.__speakAmbientProbe = (t) => speakAmbient(t).then(() => 'resolved')
+  window.__spectateForce = async () => {
+    const result = await window.api?.spectateTick?.(spectateGate.context())
+    const observation = parseSpectate(spectateRawOf(result), Date.now())
+    const verdict = observation ? spectateGate.consider(observation) : null
+    if (verdict?.speak) applySpectateVerdict(verdict)
+    return { status: result?.status, diff: result?.diff, verdict }
+  }
   window.__setInertialization = (on) => setInertializationEnabled(on)
   // G단계 E2E — expression-check가 감정→모프 연동을 단언한다.
   window.__applyEmotion = (e) => applyEmotion(e)
@@ -535,6 +547,90 @@ function runBehaviorDirector() {
   })
   // fire-and-forget — 실패는 runner가 흡수, directive는 다음 틱에 반영.
   Promise.resolve(behaviorDirector.maybeRun(ctx)).catch(() => {})
+}
+
+// ── M2 관전 모드 ────────────────────────────────────────────────────────────
+//
+// 디렉터와 같은 러너를 빠른 주기로 하나 더 돌린다. 캡처와 VLM 호출은 main이
+// 하고(이미지가 IPC를 건너지 않게) 여기선 "말할까 말까"와 캐릭터 연출만 한다.
+//
+// 침묵이 기본이다: 러너가 25초마다 기회를 주지만 절약 게이트(화면 무변화) →
+// 흥미도 → 중복 → 최소 간격 네 겹을 다 통과해야 입을 연다.
+const spectateGate = createCommentGate()
+
+const spectateRunner = createDirectorRunner({
+  call: typeof window !== 'undefined' && window.api?.spectateTick
+    ? () => {
+        // "생각 중" 신호 — VLM 왕복이 수 초라 그 사이 아무 반응이 없으면 죽은
+        // 것처럼 보인다. 새 임펄스를 만들지 않고 기존 두리번거림을 재사용한다.
+        if (currentModel?.poseRig?.impulse) {
+          triggerImpulse(currentModel.poseRig.impulse, 'lookaround', clock.getElapsedTime(), 0.55)
+        }
+        return window.api.spectateTick(spectateGate.context())
+      }
+    : null,
+  parse: (raw, now) => parseSpectate(spectateRawOf(raw), now),
+  isSkipResult: isSpectateSkip,
+  minIntervalMs: 25000,
+  jitterMs: 15000,
+  timeoutMs: 12000
+})
+
+// 러너는 관측을 캐시하므로(current()), 새 객체가 나왔을 때만 반응한다.
+let lastSpectateSeen = null
+
+// 전용(exclusive) 전체화면 안내 — 창 캡처가 계속 빈 프레임이면 main이 세션당
+// 한 번만 보낸다. Electron엔 타 프로세스의 전용 전체화면을 확인하는 API가 없어
+// "검은 프레임 연속"을 신호로 쓴다(추측성 bounds 비교는 하지 않는다).
+// 프라이버시 표시 — 캡처가 도는 동안 메인 오버레이에 상시 배지. 코너 창은
+// 벽지 모드에서만 존재하므로 표시를 거기에만 두면 일반 모드에서 무표시 캡처가
+// 된다(Codex 사후검토 MUST-FIX). 두 표면 모두에 띄운다.
+function renderCaptureBadge(st) {
+  document.body.classList.toggle('capturing', st?.active === true)
+  const label = document.getElementById('capture-badge-label')
+  if (label) {
+    label.textContent = st?.sourceName
+      ? '화면 보는 중 · ' + String(st.sourceName).slice(0, 24)
+      : '화면 보는 중'
+  }
+}
+window.api?.onSpectateState?.(renderCaptureBadge)
+// 창을 새로 띄웠을 때 현재 상태를 한 번 당겨온다(브로드캐스트를 놓쳤을 수 있음).
+window.api?.spectateState?.().then(renderCaptureBadge).catch(() => {})
+
+window.api?.onSpectateFullscreenHint?.(() => {
+  showBubble('화면이 안 보여요. 게임을 전체화면 대신 창모드(테두리 없는 창)로 바꿔주세요.', 9000)
+})
+
+function runSpectate() {
+  if (!window.api?.spectateTick) return
+  Promise.resolve(spectateRunner.maybeRun()).then((observation) => {
+    if (!observation || observation === lastSpectateSeen) return
+    lastSpectateSeen = observation
+
+    const verdict = spectateGate.consider(observation)
+    if (!verdict.speak) {
+      console.log('[spectate] silent:', verdict.reason, '| interest', observation.interest)
+      return
+    }
+    applySpectateVerdict(verdict)
+  }).catch(() => {})
+}
+
+// 관측이 침묵 게이트를 통과했을 때의 연출. runSpectate와 E2E 훅이 공유한다.
+function applySpectateVerdict(verdict) {
+  console.log('[spectate] comment:', verdict.comment, '| emotion', verdict.emotion)
+
+  // 주목 지점 응시 — holdMs 동안은 커서가 움직여도 시선을 뺏기지 않는다.
+  if (verdict.focus) {
+    setLookTarget(verdict.focus.x, verdict.focus.y, { source: 'spectate', holdMs: 3500 })
+  }
+  if (verdict.emotion) {
+    setEmotion(verdict.emotion)
+    applyEmotion(verdict.emotion)
+  }
+  // ambient — 사용자와 대화 중이면 그 발화를 끊지 않고 알아서 밀린다.
+  speakAmbient(verdict.comment, motionManager.pickTalkMotion?.({ emotion: verdict.emotion }))
 }
 
 // J단계 거주형 비서 — 손 소품(컵·유리잔·책) 매니저. 렌더 루프가 updateCharacter
@@ -883,6 +979,11 @@ function scheduleAutoBehavior() {
 
     // 호출 응답이 유휴(대화 끝나고 일정 시간)면 종료하고 자율 생활 재개.
     endCallResponseIfIdle()
+
+    // 관전 — **자율 행동 가드 밖**이다. 사용자가 화면을 보는 동안 캐릭터는 앉아
+    // 있거나(state 'sit') 활동 중일 수 있는데, 그때야말로 옆에서 같이 보는
+    // 상황이다. 자체 주기(25초)로 self-throttle하므로 매 틱 불러도 비용이 없다.
+    runSpectate()
 
     // 활동(커피 등)이 진행 중이면 새 자율 행동을 시작하지 않는다 — pose 단계에선
     // state가 idle이라 가드 없이는 활동 위에 다른 행동이 겹친다(Codex MUST-FIX).

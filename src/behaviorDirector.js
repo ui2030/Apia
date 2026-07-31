@@ -161,8 +161,14 @@ function backoffMs(streak, base, max) {
 // 느린 주기 LLM 호출 runner. single-flight + 최소간격(성공) + 지수 백오프(실패) +
 // 타임아웃. `call(context)`는 주입(테스트 mock 가능). 모든 실패는 흡수 →
 // 기존 directive 유지/만료. now/rng 주입으로 결정론 테스트.
+// parse/isSkipResult 주입 이유(M2 관전 모드): 관전 tick은 "화면이 안 변해서
+// 볼 것도 말할 것도 없음"이라는 **정상 무발화 결과**를 낸다. 이걸 parse 실패로
+// 취급하면 백오프가 걸려 관전이 점점 느려지다 멈춘다. 그래서 skip은 실패가
+// 아니라 성공한 tick으로 쳐서 정상 간격만 갱신한다.
 export function createDirectorRunner({
   call,
+  parse = parseDirective,
+  isSkipResult = () => false,
   now = () => Date.now(),
   minIntervalMs = 240000, // ~4분
   jitterMs = 90000,       // 0~1.5분 지터(동시 만료/몰림 방지)
@@ -182,7 +188,13 @@ export function createDirectorRunner({
     inFlight = true
     try {
       const raw = await withTimeout(call(context), timeoutMs)
-      const parsed = parseDirective(raw, now())
+      if (isSkipResult(raw)) {
+        // 정상 무발화 tick — 백오프 금지, 다음 정상 주기만 예약.
+        failStreak = 0
+        nextAllowedAt = now() + minIntervalMs + Math.floor(rng() * jitterMs)
+        return current(now())
+      }
+      const parsed = parse(raw, now())
       if (parsed) {
         directive = parsed
         failStreak = 0
