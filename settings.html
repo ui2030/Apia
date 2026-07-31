@@ -594,6 +594,42 @@
        모든 toggle/select는 backend.env 키로 저장되고 저장 시 자동
        백엔드 재시작 흐름(485cc18)에 합류한다.
        ───────────────────────────────────────────────────────────── -->
+  <div class="section" id="spectate-section">
+    <div class="section-title">관전 모드</div>
+    <div class="helper-text" style="margin-bottom:8px;">
+      고른 창 하나를 가끔 들여다보고 짧게 반응해요. <b>창 하나만</b> 봅니다 —
+      전체 화면이나 다른 창은 캡처하지 않아요. 보는 동안에는 화면 구석에 빨간 표시가
+      계속 떠 있고, <b>Ctrl+Alt+S</b>로 언제든 즉시 멈출 수 있어요. 멈춤은 앱을 다시
+      켜도 유지되고, 직접 재개하기 전까지 화면을 보지 않습니다.
+      그림은 저장하지 않고 판단에만 쓰고 바로 버려요.
+    </div>
+
+    <div class="row">
+      <div style="flex:1; min-width:0;">
+        <div class="row-label">볼 창</div>
+        <div class="row-sub" id="spectate-status">선택 안 함 — 관전이 꺼져 있어요</div>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin:6px 0 10px;">
+      <select id="spectate-window" style="flex:1; min-width:0;">
+        <option value="">— 창을 고르세요 —</option>
+      </select>
+      <button type="button" id="spectate-refresh" class="btn btn-ghost" style="white-space:nowrap;">목록 새로고침</button>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">일시정지</div>
+        <div class="row-sub">Ctrl+Alt+S와 같은 스위치입니다</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="spectate-paused-toggle">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+  </div>
+
   <div class="section" id="data-section">
     <div class="section-title">정보 활용</div>
     <div class="helper-text" style="margin-bottom:8px;">
@@ -724,6 +760,57 @@ async function init() {
   }
 
   settings = await window.api.getSettings()
+
+    // ── 관전 모드 ───────────────────────────────────────────────────────────
+    // 창 목록은 열 때마다 새로 받는다(창은 계속 뜨고 닫힌다). 선택한 창 id는
+    // 저장하지 않는다 — 재시작 후 같은 id가 다른 창을 가리킬 수 있어서, 매번
+    // 고르게 하는 편이 엉뚱한 창을 찍는 것보다 안전하다.
+    const spectateSelect = document.getElementById('spectate-window')
+    const spectateStatus = document.getElementById('spectate-status')
+    const spectatePausedToggle = document.getElementById('spectate-paused-toggle')
+
+    function renderSpectateStatus(st) {
+      if (!spectateStatus) return
+      if (!st || (!st.active && !st.sourceName)) {
+        spectateStatus.textContent = '선택 안 함 — 관전이 꺼져 있어요'
+      } else if (st.paused) {
+        spectateStatus.textContent = '일시정지됨 — 화면을 보지 않는 중'
+      } else if (st.active) {
+        spectateStatus.textContent = '보는 중: ' + st.sourceName
+      } else {
+        spectateStatus.textContent = '선택 안 함 — 관전이 꺼져 있어요'
+      }
+      if (spectatePausedToggle) spectatePausedToggle.checked = st?.paused === true
+    }
+
+    async function refreshSpectateWindows() {
+      if (!spectateSelect || !window.api?.spectateListWindows) return
+      const keep = spectateSelect.value
+      const list = await window.api.spectateListWindows()
+      spectateSelect.innerHTML = '<option value="">— 창을 고르세요 —</option>'
+      for (const w of list) {
+        const opt = document.createElement('option')
+        opt.value = w.id
+        opt.textContent = w.name.length > 60 ? w.name.slice(0, 60) + '…' : w.name
+        spectateSelect.appendChild(opt)
+      }
+      if (keep && list.some((w) => w.id === keep)) spectateSelect.value = keep
+    }
+
+    document.getElementById('spectate-refresh')?.addEventListener('click', refreshSpectateWindows)
+    spectateSelect?.addEventListener('change', async () => {
+      const opt = spectateSelect.selectedOptions[0]
+      const st = await window.api?.spectateSetSource?.(spectateSelect.value || null, opt?.textContent || '')
+      renderSpectateStatus(st)
+    })
+    spectatePausedToggle?.addEventListener('change', async () => {
+      const st = await window.api?.spectatePause?.(spectatePausedToggle.checked)
+      renderSpectateStatus(st)
+    })
+    window.api?.onSpectateState?.(renderSpectateStatus)
+    window.api?.spectateState?.().then(renderSpectateStatus).catch(() => {})
+    refreshSpectateWindows().catch(() => {})
+
   models = settings.models || []
 
   await loadCharacterRegistryIfAvailable()

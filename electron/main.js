@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, screen, shell, Tray } = require('electron')
+const { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, screen, shell, Tray } = require('electron')
 app.commandLine.appendSwitch('allow-file-access-from-files')
 
 const path = require('path')
@@ -458,6 +458,123 @@ ipcMain.handle('director:decide', async (e, context) => {
     return (r && typeof r.raw === 'string') ? r.raw : null
   } catch {
     return null
+  }
+})
+
+// ── M2 관전 모드 ────────────────────────────────────────────────────────────
+//
+// 프라이버시 계약(신뢰 경계 — 여기서 게으르면 안 된다):
+//   1. **창 단위만.** screenCapture는 types:['screen']을 절대 요청하지 않으므로
+//      전체 화면/다른 모니터는 목록에도 안 오르고 캡처도 안 된다.
+//   2. 이미지는 어디에도 저장하지 않는다 — 캡처 → 백엔드 POST → 폐기.
+//   3. 일시정지는 디스크에 남아 재시작해도 유지되고, 정지 중엔 캡처 호출 자체를
+//      하지 않는다(찍고 버리는 게 아니라 안 찍는다).
+//   4. 캡처가 도는 동안 코너 창에 상시 표시가 켜진다.
+const { listWindows: listCaptureWindows, createCaptureGate } = require('./services/screenCapture')
+
+const spectate = {
+  gate: createCaptureGate({ desktopCapturer }),
+  sourceId: null,
+  sourceName: '',
+  fullscreenWarned: false
+}
+
+function spectateIsPaused() {
+  return loadSettings().spectatePaused === true
+}
+
+// 캡처 표시 + 렌더러 상태 동기화. 창이 없으면 조용히 넘어간다.
+function broadcastSpectateState() {
+  const payload = {
+    active: !!spectate.sourceId && !spectateIsPaused(),
+    paused: spectateIsPaused(),
+    sourceName: spectate.sourceName || ''
+  }
+  for (const w of [windows.getMain(), cornerWindow]) {
+    if (w && !w.isDestroyed()) {
+      try { w.webContents.send('spectate:state', payload) } catch {}
+    }
+  }
+  return payload
+}
+
+function setSpectatePaused(paused) {
+  const s = loadSettings()
+  saveSettings({ ...s, spectatePaused: !!paused })
+  spectate.gate.reset() // 재개 시 첫 프레임은 무조건 새 프레임으로 취급
+  return broadcastSpectateState()
+}
+
+ipcMain.handle('spectate:listWindows', async () => {
+  try {
+    return await listCaptureWindows(desktopCapturer)
+  } catch (error) {
+    logWarn('[SPECTATE_LIST_FAIL]', error?.message || error)
+    return []
+  }
+})
+
+ipcMain.handle('spectate:setSource', (e, { id, name } = {}) => {
+  spectate.sourceId = typeof id === 'string' && id ? id : null
+  spectate.sourceName = typeof name === 'string' ? name.slice(0, 120) : ''
+  spectate.gate.reset()
+  spectate.fullscreenWarned = false
+  return broadcastSpectateState()
+})
+
+ipcMain.handle('spectate:pause', (e, paused) => setSpectatePaused(paused))
+ipcMain.handle('spectate:state', () => broadcastSpectateState())
+
+// 한 tick: 캡처 → 절약 게이트 → (통과 시에만) VLM. typed result라 렌더러가
+// "말 안 함"과 "실패"를 구분할 수 있다 — 이 구분이 없으면 러너가 정상 무발화를
+// 실패로 세서 백오프에 걸린다(Codex 사전검토 MUST-FIX).
+ipcMain.handle('spectate:tick', async (e, context) => {
+  if (spectateIsPaused()) return { status: 'paused' }
+  if (!spectate.sourceId) return { status: 'no-source' }
+
+  let shot
+  try {
+    shot = await spectate.gate.capture(spectate.sourceId)
+  } catch (error) {
+    logWarn('[SPECTATE_CAPTURE_FAIL]', error?.message || error)
+    return { status: 'error', error: 'capture failed' }
+  }
+
+  if (shot.status === 'dead-frame') {
+    // 창은 잡히는데 내용이 없다 = 전용 전체화면일 가능성이 높다. Electron엔 타
+    // 프로세스의 전용 전체화면을 확인할 API가 없어서 이 신호로 대신하고, 배너는
+    // 세션당 1회만 띄운다(연속 3회 이상일 때 — 로딩 중 검은 화면 오탐 회피).
+    if (shot.deadStreak >= 3 && !spectate.fullscreenWarned) {
+      spectate.fullscreenWarned = true
+      const main = windows.getMain()
+      if (main && !main.isDestroyed()) {
+        try { main.webContents.send('spectate:fullscreen-hint') } catch {}
+      }
+    }
+    return { status: 'dead-frame', deadStreak: shot.deadStreak }
+  }
+  if (shot.status !== 'ok') return shot // no-source | no-change
+
+  const settings = loadSettings()
+  // 로컬 LLM 강제 비활성 — 관전은 사용자가 게임/영상을 돌리는 중에 도는 기능이라
+  // 7B 로컬 모델이 VRAM을 같이 먹으면 둘 다 죽는다. 사용자 설정은 건드리지 않고
+  // 이 호출만 auto로 우회한다(되돌리기 곤란한 설정 변경 금지).
+  const aiMode = settings.aiMode === 'local' ? 'auto' : settings.aiMode
+
+  try {
+    await backend.ensureAvailableForRequest()
+    const r = await requestBackendJson('/spectate', {
+      method: 'POST',
+      timeout: 15000,
+      body: { image_b64: shot.dataUrl, context: context || {}, ai_mode: aiMode }
+    })
+    if (!r || typeof r.raw !== 'string') return { status: 'no-vision' }
+    // diff는 로그용 — 첫 프레임의 Infinity는 JSON에서 null이 되므로 -1로 눕힌다.
+    const diff = Number.isFinite(shot.diff) ? shot.diff : -1
+    return { status: 'ok', raw: r.raw, diff, localBypassed: settings.aiMode === 'local' }
+  } catch (error) {
+    logWarn('[SPECTATE_VLM_FAIL]', error?.message || error)
+    return { status: 'error', error: 'vlm call failed' }
   }
 })
 
@@ -1479,6 +1596,19 @@ function setupTrayAndShortcuts() {
     if (!globalShortcut.isRegistered('CommandOrControl+Alt+A')) {
       const ok = globalShortcut.register('CommandOrControl+Alt+A', () => toggleChatWindow())
       if (!ok) logWarn('[GLOBAL_SHORTCUT_REGISTER_BUSY]', 'Ctrl+Alt+A already in use by another app')
+    }
+  } catch (error) {
+    logWarn('[GLOBAL_SHORTCUT_REGISTER_WARN]', error?.message || error)
+  }
+  // Ctrl+Alt+S = 관전 일시정지/재개. 전역 핫키인 이유: 화면을 보고 있는 기능이라
+  // 창을 찾아 클릭할 시간 없이 즉시 멈출 수 있어야 한다(프라이버시).
+  try {
+    if (!globalShortcut.isRegistered('CommandOrControl+Alt+S')) {
+      const ok = globalShortcut.register('CommandOrControl+Alt+S', () => {
+        const state = setSpectatePaused(!spectateIsPaused())
+        logInfo('[SPECTATE_TOGGLE]', state.paused ? 'paused' : 'resumed')
+      })
+      if (!ok) logWarn('[GLOBAL_SHORTCUT_REGISTER_BUSY]', 'Ctrl+Alt+S already in use by another app')
     }
   } catch (error) {
     logWarn('[GLOBAL_SHORTCUT_REGISTER_WARN]', error?.message || error)

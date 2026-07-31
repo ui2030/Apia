@@ -89,6 +89,26 @@ contextBridge.exposeInMainWorld('api', {
   // window forward emotion/face-camera/bubble/lipsync actions to the
   // wallpaper main window. Main process applies an action allowlist before
   // forwarding; this surface is just the renderer-side sugar.
+  // M2 관전 모드. tick은 typed result({status:'paused'|'no-source'|'no-change'|
+  // 'dead-frame'|'no-vision'|'ok'|'error'})를 돌려준다 — 렌더러 러너가 "말 안 함"과
+  // "실패"를 구분해야 정상 무발화가 백오프를 태우지 않는다. 캡처 이미지는 IPC를
+  // 건너지 않는다(main이 캡처→VLM까지 하고 raw만 돌려줌).
+  spectateListWindows: () => ipcRenderer.invoke('spectate:listWindows'),
+  spectateSetSource: (id, name) => ipcRenderer.invoke('spectate:setSource', { id, name }),
+  spectateTick: (context) => ipcRenderer.invoke('spectate:tick', context),
+  spectatePause: (paused) => ipcRenderer.invoke('spectate:pause', paused),
+  spectateState: () => ipcRenderer.invoke('spectate:state'),
+  onSpectateState: (cb) => {
+    const listener = (_e, payload) => cb(payload)
+    ipcRenderer.on('spectate:state', listener)
+    return () => ipcRenderer.removeListener('spectate:state', listener)
+  },
+  onSpectateFullscreenHint: (cb) => {
+    const listener = () => cb()
+    ipcRenderer.on('spectate:fullscreen-hint', listener)
+    return () => ipcRenderer.removeListener('spectate:fullscreen-hint', listener)
+  },
+
   notifyCharacter: (payload) => ipcRenderer.invoke('character:notify', payload),
   onCharacterAction: (cb) => ipcRenderer.on('character:action', (_e, payload) => cb(payload)),
   chatHide: () => ipcRenderer.invoke('chat:hide'),

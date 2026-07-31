@@ -51,7 +51,9 @@ const SettingsSchema = z.object({
   // Phase F — when true, the main BrowserWindow attaches as a Windows
   // wallpaper layer (behind desktop icons). Optional/forward-compat: a
   // settings.json from a pre-Phase-F build will hydrate to the default.
-  useWallpaperMode: z.boolean().optional()
+  useWallpaperMode: z.boolean().optional(),
+  // M2 — 관전 일시정지 지속. 구버전 settings.json은 기본값으로 하이드레이트.
+  spectatePaused: z.boolean().optional()
 }).passthrough() // tolerate forward-compatible extra keys, but enforce known ones
 
 // ── World (apia-world.json) ──────────────────────────────────────────────

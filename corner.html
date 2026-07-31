@@ -50,9 +50,29 @@
     }
     .corner-btn:hover { background: var(--purple); }
     .corner-btn:active { transform: scale(0.92); }
+    /* M2 프라이버시 표시 — 캡처 중이면 **항상** 보인다(.revealed와 무관).
+       화면을 보고 있다는 사실을 사용자가 모르는 순간이 없어야 한다. */
+    #capture-dot {
+      position: fixed; left: 22px; bottom: 62px;
+      display: none; align-items: center; gap: 6px;
+      font-size: 11px; color: rgba(255,255,255,0.85);
+      background: rgba(20,18,28,0.72);
+      border: 1px solid rgba(255,120,120,0.5);
+      border-radius: 999px; padding: 3px 9px 3px 6px;
+      pointer-events: none; white-space: nowrap;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    }
+    body.capturing #capture-dot { display: flex; }
+    #capture-dot i {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #ff6b6b; display: block;
+      animation: capture-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes capture-pulse { 0%,100%{opacity:0.45} 50%{opacity:1} }
   </style>
 </head>
 <body>
+  <div id="capture-dot"><i></i><span id="capture-label">화면 보는 중</span></div>
   <div id="dock">
     <button class="corner-btn" id="chat-btn" title="채팅">
       <svg width="17" height="17" viewBox="0 0 16 16" fill="none">
@@ -72,6 +92,15 @@
     document.getElementById('settings-btn').addEventListener('click', () => api?.openSettings?.())
     api?.onReveal?.((on) => {
       document.body.classList.toggle('revealed', on === true)
+    })
+    api?.onSpectateState?.((st) => {
+      document.body.classList.toggle('capturing', st?.active === true)
+      const label = document.getElementById('capture-label')
+      if (label) {
+        label.textContent = st?.sourceName
+          ? '화면 보는 중 · ' + String(st.sourceName).slice(0, 24)
+          : '화면 보는 중'
+      }
     })
   </script>
 </body>

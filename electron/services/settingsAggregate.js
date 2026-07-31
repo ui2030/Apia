@@ -44,7 +44,13 @@ const SETTINGS_DEFAULTS = Object.freeze({
   // experience; if `wallpaperMode.isAvailable()` returns false at boot
   // (non-Windows, native load failure), Electron silently falls back to
   // the old transparent-overlay path.
-  useWallpaperMode: true
+  useWallpaperMode: true,
+  // M2 관전 모드 — 일시정지 상태만 디스크에 남긴다. 핫키로 멈춘 관전은 재시작
+  // 후에도 멈춘 채로 있어야 한다(사용자가 명시적으로 재개하기 전엔 화면을 안 본다).
+  // 캡처 대상 창 id는 **일부러 저장하지 않는다**: 창 id는 재시작 후 다른 창을
+  // 가리킬 수 있어서, 복원했다가 엉뚱한 창을 찍는 것보다 매번 고르게 하는 편이
+  // 프라이버시에 안전하다(Codex 사전검토).
+  spectatePaused: false
 })
 
 const BACKEND_ENV_EXAMPLE_FILENAME = 'backend.env.example'

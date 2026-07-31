@@ -24,6 +24,25 @@
       width:280px; height:420px; pointer-events:none;
     }
 
+    /* M2 프라이버시 표시 — 관전이 도는 동안 **항상** 보인다. 코너 창은 벽지
+       모드에서만 생기므로 표시를 거기에만 두면 일반 오버레이 모드에서 아무
+       표시 없이 캡처된다(Codex 사후검토 MUST-FIX). 메인 창은 항상 있다. */
+    #capture-badge {
+      position: fixed; left: 16px; top: 14px; z-index: 40;
+      display: none; align-items: center; gap: 6px;
+      font-size: 11px; color: rgba(255,255,255,0.9);
+      background: rgba(20,18,28,0.75);
+      border: 1px solid rgba(255,120,120,0.55);
+      border-radius: 999px; padding: 4px 10px 4px 7px;
+      pointer-events: none; white-space: nowrap;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    }
+    body.capturing #capture-badge { display: flex; }
+    #capture-badge i {
+      width: 7px; height: 7px; border-radius: 50%; display: block;
+      background: #ff6b6b; animation: capture-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes capture-pulse { 0%,100%{opacity:0.45} 50%{opacity:1} }
     #speech-bubble {
       position:fixed; right:160px; bottom:340px;
       max-width:230px; background:var(--bg-panel);
@@ -190,6 +209,7 @@
   <div id="backend-status" class="offline">백엔드 연결 중...</div>
   <div id="world-layer"></div>
   <canvas id="vrm-canvas"></canvas>
+  <div id="capture-badge"><i></i><span id="capture-badge-label">화면 보는 중</span></div>
   <div id="speech-bubble"></div>
 
   <button id="chat-toggle" title="채팅">

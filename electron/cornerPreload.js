@@ -6,5 +6,8 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('cornerApi', {
   openSettings: () => ipcRenderer.invoke('open-settings'),
   chatToggle: () => ipcRenderer.invoke('chat:toggle'),
-  onReveal: (cb) => ipcRenderer.on('corner:reveal', (_e, on) => cb(on))
+  onReveal: (cb) => ipcRenderer.on('corner:reveal', (_e, on) => cb(on)),
+  // M2 — 화면을 캡처하는 중임을 항상 보이게 하는 표시(프라이버시). 읽기 전용
+  // 구독 하나뿐이라 이 창의 표면적은 그대로다(캡처 제어는 노출하지 않는다).
+  onSpectateState: (cb) => ipcRenderer.on('spectate:state', (_e, p) => cb(p))
 })
