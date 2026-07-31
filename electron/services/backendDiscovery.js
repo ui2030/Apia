@@ -244,6 +244,16 @@ function getBackendLaunchCandidates({
   }
 
   appendPythonLaunchCandidates(candidates, packagedBackendDir, packagedBackendMain, 'packaged', fileExists)
+
+  // Workspace venv first: it carries the pinned deps (python-multipart,
+  // transformers, ...) that a drifting system python routinely lacks.
+  const venvPython = process.platform === 'win32'
+    ? path.join(backendDir, '.venv', 'Scripts', 'python.exe')
+    : path.join(backendDir, '.venv', 'bin', 'python')
+  if (fileExists(venvPython) && fileExists(backendMain)) {
+    candidates.push({ label: 'venv:workspace', command: venvPython, args: ['main.py'], cwd: backendDir })
+  }
+
   appendPythonLaunchCandidates(candidates, backendDir, backendMain, 'workspace', fileExists)
 
   return candidates
