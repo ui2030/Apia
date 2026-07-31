@@ -211,7 +211,10 @@ function normalizeWorldObject(object = {}, index = 0) {
 // 값을 튜닝하면 반드시 버전을 올릴 것 — 버전이 같으면 저장 월드가 이겨서
 // 수정이 조용히 무시된다(이번에 실측 디버깅으로 재확인한 함정).
 // 8 — 침대/기본값 sitRotY 규약 교정(카메라 상대 0).
-const WORLD_VERSION = 8
+// 9 — 소파를 실사용 좌석으로 승격(interaction+lounge activity), workDesk=table.glb.
+//     저장 월드(v8)는 옛 sofa(hidden 장식)·workDesk(박스)를 물어 변경이 조용히
+//     무시되므로 버전 범프 필수.
+const WORLD_VERSION = 9
 
 export function createDefaultWorld() {
   return {
@@ -506,13 +509,15 @@ export class WorldManager {
       onArrive: () => {
         if (source === 'auto') {
           safeCall(this.showBubble, `Made it to ${label}.`, 2200)
-        } else if (object.type === 'chair') {
+        } else if (object.sitOffset) {
           safeCall(this.showBubble, `Settling into ${label}.`, 2600)
         }
       }
     }
 
-    if (object.type === 'chair' && object.sitOffset) {
+    // 착석 디스패치는 type 무관 — object.sitOffset이 있으면 앉는다(chair뿐 아니라
+    // 소파 등 어떤 좌석 가구든). 활동(activity) 없는 순수 좌석의 클릭 착석 경로.
+    if (object.sitOffset) {
       payload.sitOffset = object.sitOffset
       payload.sitRotY = object.sitRotY
       payload.seatHeight = object.seatHeight

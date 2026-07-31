@@ -20,10 +20,13 @@ function _insideObstacle(x, z) {
   return false
 }
 
-// 다음 위치를 모든 장애물 밖으로 밀어낸다(접선으로 미끄러짐).
-function _resolveCollision(x, z) {
+// 다음 위치를 모든 장애물 밖으로 밀어낸다(접선으로 미끄러짐). skipNear가 있으면
+// 그 지점 근처(≤0.4) 장애물은 제외 — 앉으러 가는 목표 가구 자신의 장애물이
+// 자기 좌석을 밀어내 stuck-arrive를 유발하던 것을 최종 접근 구간에서 예외 처리.
+function _resolveCollision(x, z, skipNear = null) {
   let px = x, pz = z
   for (const o of OBSTACLES) {
+    if (skipNear && Math.hypot(o.x - skipNear.x, o.z - skipNear.z) < 0.4) continue
     const dx = px - o.x, dz = pz - o.z
     const d = Math.hypot(dx, dz)
     const ring = o.r + CHAR_RADIUS
@@ -283,12 +286,19 @@ export function walkTo({ x, z, sitOffset = null, sitRotY = 0, seatHeight = null,
 
   activeSitPose = null
 
-  let clampedX = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, x))
-  let clampedZ = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, z))
-
-  // 가구 안이 목적지면 그 앞 접근점으로(통과 방지). 앉기(offset)는 가구 자체에
-  // 앉는 것이라 접근점 보정을 건너뛴다 — 의자/침대 위에 정확히 놓여야 함.
-  if (!sitOffset) {
+  // 명시적 착석 타깃(sitOffset)은 벽 앞 가구라 walkBounds 밖일 수 있다(예: 좌벽
+  // 소파 x-2.2 < minX-1.7). 그 경우 bounds 클램프를 건너뛰어 좌석까지 정확히 간다
+  // — 배회(wander)는 sitOffset이 없어 여전히 클램프됨(화면 밖 방지). 좌석 최종
+  // 위치가 카메라 프레임 안임은 가구 선언에서 확인(furnitureLayout sofa 주석).
+  let clampedX, clampedZ
+  if (sitOffset) {
+    clampedX = x
+    clampedZ = z
+  } else {
+    clampedX = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, x))
+    clampedZ = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, z))
+    // 가구 안이 목적지면 그 앞 접근점으로(통과 방지). 앉기(offset)는 가구 자체에
+    // 앉는 것이라 접근점 보정을 건너뛴다 — 의자/침대 위에 정확히 놓여야 함.
     const fromX = mesh3D ? mesh3D.position.x : clampedX
     const fromZ = mesh3D ? mesh3D.position.z : clampedZ
     const ap = _approachTarget(clampedX, clampedZ, fromX, fromZ)
@@ -485,9 +495,20 @@ function _walk(mesh, t, dt) {
   const nz = dz / dist
 
   // 다음 위치를 가구 밖으로 밀어낸 뒤 벽 경계로 클램프 → 사물 통과 방지.
-  const resolved = _resolveCollision(mesh.position.x + nx * spd, mesh.position.z + nz * spd)
-  mesh.position.x = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, resolved.x))
-  mesh.position.z = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, resolved.z))
+  // 착석 이동(moveConfig.offset)은 ① 목표 가구 자신의 장애물을 제외하고(자기 좌석
+  // 접근을 밀어내지 않게) ② bounds 클램프도 건너뛴다(walkBounds 밖 벽면 좌석까지).
+  const sitting = !!(moveConfig && moveConfig.offset)
+  const resolved = _resolveCollision(
+    mesh.position.x + nx * spd, mesh.position.z + nz * spd,
+    sitting ? target : null,
+  )
+  if (sitting) {
+    mesh.position.x = resolved.x
+    mesh.position.z = resolved.z
+  } else {
+    mesh.position.x = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, resolved.x))
+    mesh.position.z = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, resolved.z))
+  }
 
   // 막힘 감지 — 충돌로 목적지에 못 다가가면 영원히 걷지 않게 도착 처리.
   const newDist = Math.hypot(target.x - mesh.position.x, target.z - mesh.position.z)

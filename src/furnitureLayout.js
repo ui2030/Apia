@@ -170,12 +170,14 @@ export const FURNITURE_DEFAULT = Object.freeze([
   // 책상(의자 앞, 카메라 쪽) — 모니터를 사이에 둬 "화면 너머" 구도. **정중앙**.
   // footprint를 키워 auto-fit 클램프가 높이를 뭉개지 않게(무릎 책상 수정) —
   // 렌더 높이는 실측 재확인 후 노트북 y와 동기.
-  // 책상은 GLB 폐기 → 박스(table.glb는 식탁 비율이라 클램프로 0.4m 밖에 안 나옴
-  // — 실측). 박스는 선언 치수(0.72 높이) 그대로 렌더되고 매끈한 단색 면이 밝은
-  // 애니 인테리어 톤에도 맞는다.
-  // 높이 0.68 + 노트북 낮은 프로파일 — 앉은 캐릭터의 **눈이 노트북 뚜껑 위로**
-  // 보여야 마주보기가 산다(0.72+0.28 조합은 얼굴을 가렸음 — 스크린샷 검수).
-  deco({ id: 'workDesk', label: '책상', position: { x: 0, y: 0, z: 4.0 }, size: { w: 1.05, h: 0.68, d: 0.55 }, color: 0xc9a678 }),
+  // 책상 = table.glb(폴백 박스 폐기). 실측 native bbox W0.841 H0.327 D0.447 →
+  // 높이-핏(size.h0.68) 시 footprint가 size.w/d를 넘어 클램프가 0.40m 난쟁이로
+  // 만든다(옛 주석의 함정 재확인). 그렇다고 size.w/d를 키우면 그 가구가
+  // DEFAULT_OBSTACLES 반경(=(w+d)/4)을 부풀려 z3.25 deskChair 좌석을 삼켜버린다
+  // (충돌은 선언 size로 계산). 그래서 size(=장애물)는 그대로 두고 scaleMul로
+  // 클램프 후 스케일만 키운다: 클램프 s=0.55/0.447=1.230(H0.402) → ×1.69 ≈ H0.68.
+  // 노트북 y0.68이 책상 윗면에 정확히 놓인다. size.w/d를 바꾸면 이 배수도 재계산.
+  deco({ id: 'workDesk', label: '책상', position: { x: 0, y: 0, z: 4.0 }, size: { w: 1.05, h: 0.68, d: 0.55 }, color: 0xc9a678, model: 'table.glb', scaleMul: 1.69 }),
   // 노트북 — 화면이 의자(뒤쪽 -z, 캐릭터 앉는 방향)를 향하고 등판이 사용자를
   // 향한다("서로의 화면 너머" 연출). y = 박스 책상 윗면(정확히 0.68).
   deco({ id: 'monitor', label: '노트북', position: { x: 0, y: 0.68, z: 3.95 }, size: { w: 0.42, h: 0.22, d: 0.36 }, color: 0x23262b, model: 'laptop.glb', modelRotY: Math.PI }), // 실측: PI=등판이 사용자쪽·화면이 그녀쪽(0은 반대 — 스샷 확정)
@@ -200,7 +202,42 @@ export const FURNITURE_DEFAULT = Object.freeze([
   // 밀도 폴리시 — 서랍장 위 테이블 램프(화분 옆, 뒤쪽 z로 비켜 충돌 회피).
   // 좌벽 거실 코너에 따스한 소품 하나. y는 서랍장 실측 윗면(plant_small과 동일).
   deco({ id: 'dresser_lamp', label: '테이블 램프', position: { x: -2.5, y: 0.36, z: 2.98 }, size: { w: 0.26, h: 0.34, d: 0.26 }, color: 0xe8d6b0, model: 'lampSquareTable.glb', modelRotY: 0.4 }),
-  deco({ id: 'sofa', label: '소파', position: { x: -2.2, y: 0, z: 4.6 }, size: { w: 1.8, h: 0.78, d: 0.85 }, color: 0x8fae84, model: 'loungeSofa.glb', modelRotY: Math.PI / 2 }),
+  // 소파 = 실사용 좌석(옛 hidden 장식 → 클릭/자율 착석 가능). GUI room-check 실측:
+  // modelRotY PI/2(벽 따라 눕힘)에서 native 긴 변(W0.98)이 size.d0.85에 걸려
+  // 클램프 → 실제 렌더 높이 0.40m(선언 0.78이 아님). 이 자산의 벽면 배치는 이게
+  // 최선이라 그대로 둔다(size.d를 키우면 화분 z5.4와 겹치고 장애물 반경도 부풀음).
+  // 좌벽 x-2.2는 walkBounds(minX-1.7) 밖 → walkTo의 sitOffset 경로가 bounds 클램프를
+  // 예외 처리해 좌석까지 간다(characterController). 좌석 최종 x=-2.2+0.15=-2.05, z=4.6.
+  // 카메라 프레임 확인: cam z8.7·vfov50·aspect16:9 → z4.6에서 수평 반폭 ≈ ±3.4m라
+  // x-2.05는 여유 있게 프레임 안. 세로도 기존 chair 착석(z4.45)과 동급이라 안전.
+  {
+    id: 'sofa',
+    type: 'point',
+    label: '소파',
+    position: { x: -2.2, y: 0, z: 4.6 },
+    size: { w: 1.8, h: 0.78, d: 0.85 },
+    color: 0x8fae84,
+    model: 'loungeSofa.glb',
+    fitMode: 'height',
+    modelRotY: Math.PI / 2,
+    bubbleText: '소파에 좀 앉아 있을게요.',
+    autoBehavior: false, // 랜덤 배회 픽 제외 — 클릭/욕구 AI(activity)로만 발동
+    clickable: true,
+    interaction: {
+      sitOffset: { x: 0.15, y: 0.04, z: 0 }, // 방 안쪽(+x)으로 살짝 → 좌면 위, 벽에서 뜀
+      sitRotY: 0, // 카메라 기준 상대각(0=사용자 마주봄) — 다른 좌석과 동일 규약
+      seatHeight: 0.26, // ponytail: 렌더 총높이 0.40의 좌면 쿠션 추정(~0.65×). GUI 미세조정 여지
+    },
+    activity: {
+      id: 'lounge',
+      label: '소파에서 쉬기',
+      focus: 'self',
+      needFill: { comfort: 0.6, tiredness: 0.4 },
+      steps: [
+        { kind: 'sit', targetId: 'sofa', durationMs: 14000, bubble: '소파는 편하네…' },
+      ],
+    },
+  },
   deco({ id: 'coffeetable', label: '커피 테이블', position: { x: -1.2, y: 0, z: 4.7 }, size: { w: 0.85, h: 0.35, d: 0.55 }, color: 0xa9855f, model: 'tableCoffee.glb' }),
   // ── 생활 소품(소품 밀도 패스) — "사람이 사는 흔적". 전부 데코(걷기/클릭 무관).
   // y는 선언 높이가 아니라 **실측 가구 윗면**(tmp-bbox-probe): auto-fit footprint
