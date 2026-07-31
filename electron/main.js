@@ -1578,7 +1578,7 @@ function toggleChatWindow() {
 // against the main window.
 const CHARACTER_ACTION_ALLOWLIST = new Set([
   'emotion', 'bubble', 'face-camera', 'lipsync-start', 'lipsync-stop',
-  'show-main-chat', 'call'
+  'show-main-chat', 'call', 'look-at'
 ])
 
 ipcMain.handle('character:notify', (event, payload) => {
@@ -1596,6 +1596,14 @@ ipcMain.handle('character:notify', (event, payload) => {
     if (!Array.isArray(frames) || frames.length < 1 || frames.length > 6000) {
       logWarn('[CHARACTER_NOTIFY_REJECTED]', 'lipsync-start payload cap')
       return { ok: false, reason: 'invalid lipsync payload' }
+    }
+  }
+  // look-at: 정규화 화면좌표 {x,y}(-1..1). 유한수만 통과시킨다 — 렌더러의
+  // setLookTarget이 clamp까지 하지만 NaN은 clamp를 통과해 시선을 죽인다.
+  if (payload.action === 'look-at') {
+    if (!Number.isFinite(payload.value?.x) || !Number.isFinite(payload.value?.y)) {
+      logWarn('[CHARACTER_NOTIFY_REJECTED]', 'look-at needs finite {x,y}')
+      return { ok: false, reason: 'invalid look-at payload' }
     }
   }
   const main = windows.getMain()

@@ -289,6 +289,7 @@ if (typeof window !== 'undefined') {
   // F단계 E2E — smoothness-check가 시선 반응을 단언하고(__setLookTarget),
   // inertialization on/off 비교 측정을 한다(__setInertialization).
   window.__setLookTarget = (x, y) => setLookTarget(x, y, { source: 'global' })
+  window.__lookTarget = () => getLookTarget()
   window.__setInertialization = (on) => setInertializationEnabled(on)
   // G단계 E2E — expression-check가 감정→모프 연동을 단언한다.
   window.__applyEmotion = (e) => applyEmotion(e)
@@ -2489,7 +2490,10 @@ window.api?.onCharacterAction?.((payload) => {
   // 지시된 캐릭터 액션(감정·말풍선·카메라 응시·립싱크)은 사용자/백엔드가 시킨
   // 것이라 진행 중인 자율 활동보다 우선한다. 특히 face-camera는 walkTo를 부르므로
   // 활동을 먼저 끊지 않으면 러너가 wedge된다(Codex MUST-FIX).
-  interruptActivity()
+  //
+  // look-at은 예외 — 시선만 돌리는 눈요기 액션이고 연속으로 들어올 수 있어서,
+  // 끼워 넣을 때마다 활동을 끊으면 activityRunner가 영영 진도를 못 나간다.
+  if (payload.action !== 'look-at') interruptActivity()
   switch (payload.action) {
     case 'emotion': {
       const emotion = payload.value || 'neutral'
@@ -2502,6 +2506,15 @@ window.api?.onCharacterAction?.((payload) => {
     case 'bubble':
       if (typeof payload.text === 'string') showBubble(payload.text, 4000)
       break
+    case 'look-at': {
+      // 정규화 화면좌표(-1..1)를 시선 타깃으로. source:'global'은 전역 커서 피드와
+      // 같은 채널이라 캔버스 mousemove보다 우선한다(characterController 계약).
+      // main 프로세스가 이미 유한수를 검증했지만, 여기도 막는다 — 이 핸들러는
+      // 앞으로 붙을 관전 드라이버의 주입점이라 신뢰 경계를 두 번 친다.
+      const { x, y } = payload.value || {}
+      if (Number.isFinite(x) && Number.isFinite(y)) setLookTarget(x, y, { source: 'global' })
+      break
+    }
     case 'face-camera':
       // 호출 응답(priority)으로 이미 컴퓨터 앞에 앉아있으면 approach=false —
       // approach:true는 walkTo를 불러 앉은 자세에서 끌려나온다(Codex MUST-FIX).
