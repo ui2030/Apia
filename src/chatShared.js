@@ -36,15 +36,60 @@ export function isActiveFrame(frame, activeRequestId) {
 // 끊는 것(barge-in)은 호출측의 stopSpeakingNow(abortSpeak)가 진입부에서 하고,
 // 그 덕에 큐가 긴 발화를 기다리지 않고 곧바로 다음으로 넘어간다.
 //
-// ponytail: 낡은 대기 항목을 버리는 정책(최신 1개만 유지)은 넣지 않았다.
-// "실행 중"과 "대기 중"을 구분하는 상태가 더 필요한데, 현재 호출자(채팅 1개,
-// 창 1개)는 발화를 연달아 쌓지 않는다. 자율 리액션 드라이버가 붙어 큐가 실제로
-// 밀리면 그때 추가한다.
+// priority — 'user'(사용자에게 답하는 말)는 반드시 나가고 순서대로 큐잉된다.
+// 'ambient'(관전 코멘트 같은 혼잣말)는 **대기 슬롯을 하나만 차지한다**: 자기가
+// 기다리는 동안 더 새 ambient가 들어오면 낡은 쪽이 자기 차례에 스스로 빠진다.
+// 관전은 25초마다 코멘트를 낼 수 있어서, 큐가 밀리면 이미 지나간 화면 얘기를
+// 뒤늦게 떠드는 꼴이 되기 때문(M2 검수 확정 리스크).
 export function createSpeechQueue() {
   let chain = Promise.resolve()
-  return function speak(task) {
-    const run = chain.then(task)
-    chain = run.catch(() => {}) // 한 발화의 실패가 다음 발화를 막지 않게
+  let pendingAmbient = null
+
+  return function speak(task, { priority = 'user' } = {}) {
+    if (priority !== 'ambient') {
+      // 사용자에게 답할 차례가 생기면 **대기 중이던 혼잣말은 버린다.** 큐는
+      // FIFO라 이걸 안 지우면 "사용자 발화 → 낡은 관전 코멘트 → 새 사용자 답변"
+      // 순으로 나가서, 말 걸었는데 딴소리가 먼저 나온다(Codex 사후검토 MUST-FIX).
+      pendingAmbient = null
+      const run = chain.then(task)
+      chain = run.catch(() => {}) // 한 발화의 실패가 다음 발화를 막지 않게
+      return run
+    }
+    const slot = {}
+    pendingAmbient = slot // 앞서 대기 중이던 ambient는 이 순간 낡은 것이 된다
+    const run = chain.then(() => {
+      if (pendingAmbient !== slot) return undefined // 더 새 ambient에 밀렸음
+      pendingAmbient = null
+      return task()
+    })
+    chain = run.catch(() => {})
     return run
   }
+}
+
+// [SFX:x] — 말로 읽으면 밋밋해지는 비언어 발성(웃음·한숨…)을 별도 클립으로
+// 빼기 위한 태그. 감정 태그가 백엔드에서 벗겨지는 것과 달리 이건 렌더러에서
+// 처리한다 — 관전 코멘트는 SSE를 안 타므로 백엔드 계약을 건드릴 이유가 없다.
+// 알 수 없는 종류는 태그만 지우고 무시한다(모르는 소리를 내지 않는다).
+export const SFX_KINDS = Object.freeze({
+  laugh: '후후',
+  sigh: '하아…',
+  wow: '우와',
+  hmm: '음…',
+  huh: '에?'
+})
+
+const SFX_RE = /\[SFX:\s*([a-zA-Z]+)\s*\]/g
+
+/** '[SFX:laugh] 우와 대박!' → { text: '우와 대박!', sfx: 'laugh' }.
+ *  태그는 항상 제거된다(TTS가 대괄호를 읽으면 안 됨). 첫 번째 유효 태그만 쓴다. */
+export function parseSfx(raw) {
+  const s = String(raw == null ? '' : raw)
+  let sfx = null
+  const text = s.replace(SFX_RE, (_m, kind) => {
+    const k = String(kind).toLowerCase()
+    if (!sfx && Object.prototype.hasOwnProperty.call(SFX_KINDS, k)) sfx = k
+    return ''
+  }).replace(/\s{2,}/g, ' ').trim()
+  return { text, sfx }
 }

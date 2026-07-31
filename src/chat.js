@@ -3,7 +3,7 @@ import { setState, getState } from './characterController.js'
 import { setEmotion, requestFaceCamera } from './characterController.js'
 import { analyzeWav, playTimeline, stopTimeline } from './lipsyncRuntime.js'
 import { createTouchClassifier } from './touchInteraction.js'
-import { toUserMessage, isActiveFrame, createSpeechQueue } from './chatShared.js'
+import { toUserMessage, isActiveFrame, createSpeechQueue, parseSfx, SFX_KINDS } from './chatShared.js'
 
 // Step 3: character raycaster injected by main.js. null = wallpaper mode
 // active (or just no character loaded) — click-through manager skips the
@@ -34,7 +34,10 @@ const state = {
   pendingTalkMotion: null,
   // TTS 백그라운드 재생 중단용 공유 경로(task 2).
   activeAudio: null,
-  abortSpeak: null
+  abortSpeak: null,
+  // 지금 재생 중인 발화의 우선순위('user' | 'ambient' | null). 관전 코멘트가
+  // 사용자 답변을 끊지 않게 하는 판단에 쓴다.
+  speakingPriority: null
 }
 
 export function initChat({
@@ -432,17 +435,67 @@ function finishSpeakingMotion({ didEnterTalk = false } = {}) {
 // 모든 호출자가 여기를 지나므로 자율 리액션 드라이버도 자동으로 보호된다.
 const _speechQueue = createSpeechQueue()
 
-function speakText(text, talkMotion = null) {
+// priority — 'user'는 사용자에게 답하는 말이라 무엇이든 끊고 반드시 나간다.
+// 'ambient'는 관전 코멘트 같은 혼잣말이라 **사용자 발화를 절대 끊지 않고**,
+// 앞선 혼잣말만 갈아치운다. 큐가 밀리면 낡은 혼잣말은 스스로 빠진다.
+function speakText(text, talkMotion = null, { priority = 'user', sfx = null } = {}) {
   if (!window.api) return Promise.resolve()
   if (!state.ttsEnabled) return Promise.resolve()
-  stopSpeakingNow()
-  return _speechQueue(() => _speakOnce(text, talkMotion))
+  if (priority === 'user' || state.speakingPriority === 'ambient') stopSpeakingNow()
+  return _speechQueue(() => _speakOnce(text, talkMotion, priority, sfx), { priority })
 }
 
-async function _speakOnce(text, talkMotion = null) {
+// M2 — [SFX:x] 클립. 같은 Edge-TTS 목소리로 의성어를 미리 합성해 캐시한다:
+// 외부 음원을 쓰면 음색이 튀고 라이선스 부담도 생기는데, 같은 목소리로 뽑으면
+// 이질감이 0이고 새 백엔드 코드도 0이다(기존 /tts를 그대로 부른다).
+// ponytail: 캐시는 voiceId별. 목소리를 바꾸면 통째로 버린다.
+const _sfxCache = new Map()
+let _sfxCacheVoice = null
+
+async function fetchSfxClip(kind) {
+  const phrase = SFX_KINDS[kind]
+  if (!phrase || !window.api?.tts) return null
+  if (_sfxCacheVoice !== state.voiceId) { _sfxCache.clear(); _sfxCacheVoice = state.voiceId }
+  if (_sfxCache.has(kind)) return _sfxCache.get(kind)
+  try {
+    const r = await window.api.tts(phrase, state.voiceId)
+    const clip = (r && !r.disabled && r.audio) ? r : null
+    _sfxCache.set(kind, clip) // null도 캐시 — 매 코멘트마다 실패를 재시도하지 않게
+    return clip
+  } catch {
+    _sfxCache.set(kind, null)
+    return null
+  }
+}
+
+function playClip(r) {
+  return new Promise((resolve) => {
+    try {
+      const bytes = atob(r.audio)
+      const buf = new Uint8Array(bytes.length)
+      for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i)
+      const url = URL.createObjectURL(new Blob([buf], { type: r.mime || 'audio/wav' }))
+      const a = new Audio(url)
+      const done = () => { URL.revokeObjectURL(url); resolve() }
+      a.onended = done
+      a.onerror = done
+      a.play().catch(done)
+    } catch { resolve() }
+  })
+}
+
+async function _speakOnce(text, talkMotion = null, priority = 'user', sfx = null) {
   let didEnterTalk = false
+  state.speakingPriority = priority
 
   try {
+    // 비언어 발성이 먼저 — "후후" 하고 나서 말이 이어져야 자연스럽다.
+    // 클립이 없으면(합성 실패 등) 그냥 건너뛴다. 문장만으로도 말은 통한다.
+    if (sfx) {
+      const clip = await fetchSfxClip(sfx)
+      if (clip) await playClip(clip)
+    }
+    if (!text) return
     const r = await window.api.tts(text, state.voiceId)
 
     if (r?.disabled) {
@@ -529,7 +582,19 @@ async function _speakOnce(text, talkMotion = null) {
     }
   } catch (e) {
     finishSpeakingMotion({ didEnterTalk })
+  } finally {
+    state.speakingPriority = null
   }
+}
+
+/**
+ * M2 관전 코멘트 발화. [SFX:x]를 떼어 같은 목소리 클립을 먼저 흘리고, 남은
+ * 문장을 평소 TTS/립싱크/표정 경로에 태운다. ambient라 사용자 발화를 안 끊는다.
+ */
+export function speakAmbient(rawText, talkMotion = null) {
+  const { text, sfx } = parseSfx(rawText)
+  if (!text && !sfx) return Promise.resolve()
+  return speakText(text, talkMotion, { priority: 'ambient', sfx })
 }
 
 function setupSTT(micBtn) {
