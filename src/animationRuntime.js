@@ -84,6 +84,21 @@ export function clearVRMFadeHandlers(model) {
   set.clear()
 }
 
+/**
+ * VMD 판(clearVRMFadeHandlers의 MMD 대응). MMD는 helper-소유 mixer라
+ * model.mixer 기준으론 못 떼므로 addEventListener를 받은 그 mixer를
+ * 함께 저장한다 — 레코드는 { mixer, handler } 쌍. 교체/해제/모델정리에서
+ * finished 리스너가 영구 잔류(클로저가 action·clip·model 붙잡음)하는 누수 차단.
+ */
+export function clearVMDFadeHandlers(model) {
+  const set = model?._vmdFadeHandlers
+  if (!set) return
+  for (const { mixer, handler } of set) {
+    try { mixer.removeEventListener('finished', handler) } catch {}
+  }
+  set.clear()
+}
+
 // ── 클립 → 절차적 레이어 핸드오프 (C단계) ──────────────────────────────
 //
 // 공통 패턴: action을 fade로 내리고, fade가 *끝난* 시점에 — 그 사이 새
@@ -150,6 +165,7 @@ export function releaseActiveClips(model, ctx, { fade = 0.45 } = {}) {
         // MMD는 mixer가 남아 있으면 물리가 동결 자세를 따라간다 —
         // 무클립 모드로 복원 (stashMmdMixer 주석 참조)
         if (slot.flag === '_vmdClipActive') {
+          clearVMDFadeHandlers(model) // ② 명시 해제: 안 터질 finished 리스너 배수
           model._clipMorphNames = null // 표정/입 소유권 반납
           stashMmdMixer(model)
         } else {
@@ -731,6 +747,9 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
             const prevClip = model._activeVmdClip ?? null
             action = mixer.clipAction(clip)
             action.reset().setEffectiveTimeScale(1).setEffectiveWeight(1)
+            // ① 이전 non-loop 클립의 finished 리스너 배수: 여기서 supersede하면
+            // fadeOut→stop 경로라 finished가 안 터져 리스너가 영구 잔류한다.
+            clearVMDFadeHandlers(model)
             if (prevAction && prevAction !== action) prevAction.fadeOut(FADE_SEC)
             action.fadeIn(FADE_SEC).play()
             if (seekT > 0) action.time = seekT
@@ -763,9 +782,11 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
               // 켜고, 여기서 끈다 — FBX 경로와 같은 분담.
               const liveMixer = (helper.objects?.get?.(model.obj))?.mixer
               if (liveMixer) {
+                const record = { mixer: liveMixer, handler: null }
                 const onFinished = (e) => {
                   if (e.action !== action) return
                   liveMixer.removeEventListener('finished', onFinished)
+                  model._vmdFadeHandlers?.delete(record) // ④ 자연 종료: 자기 레코드 삭제
                   scheduleGuardedRelease(model, ctx, {
                     action,
                     fade: 0.5,
@@ -779,6 +800,8 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
                     },
                   })
                 }
+                record.handler = onFinished
+                ;(model._vmdFadeHandlers ||= new Set()).add(record)
                 liveMixer.addEventListener('finished', onFinished)
               }
             } else {

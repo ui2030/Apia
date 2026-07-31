@@ -80,6 +80,7 @@ import {
   playMMDAnimation as playMMDAnimationRaw,
   playFBXAnimation as playFBXAnimationRaw,
   clearVRMFadeHandlers,
+  clearVMDFadeHandlers,
   releaseActiveClips
 } from './animationRuntime.js'
 
@@ -1507,6 +1508,7 @@ function clearModel() {
   clothRideStreak = 0
 
   if (currentModel.type === 'mmd') {
+    clearVMDFadeHandlers(currentModel) // ③ 모델 정리: helper mixer 제거 전 리스너 배수
     try { getMmdHelper()?.remove(currentModel.obj) } catch {}
     // 클립 해제 때 보관해둔 mixer까지 명시적으로 놓아준다
     currentModel._stashedMmdMixer = null
