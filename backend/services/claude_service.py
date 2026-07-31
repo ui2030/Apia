@@ -18,6 +18,7 @@ from ai_config import (
     GROQ_KEY,
     CLAUDE_MODEL,
     GROQ_MODEL,
+    GROQ_VISION_MODEL,
     SYSTEM_PROMPT,
     MAX_NEW_TOKENS,
     TEMPERATURE,
@@ -630,6 +631,127 @@ class ClaudeService:
         if active_mode == "local":
             return await self._summarize_local(self.DIRECTOR_SYSTEM, payload)
         raise RuntimeError(f"unsupported mode for director: {active_mode}")
+
+    # M2 관전 모드 — 사용자가 고른 창 한 장을 보고 "지금 뭐가 벌어지나"를 읽는다.
+    # 방송이 아니라 옆에서 같이 보는 친구라 코멘트는 짧고 드물어야 한다. 흥미도가
+    # 낮으면 **말하지 않는 것이 정답**이라고 명시적으로 지시한다 — 매 tick 떠들면
+    # 15분 만에 꺼버리게 된다.
+    SPECTATE_SYSTEM = (
+        "You are watching one window on the user's screen, sitting beside them "
+        "like a friend — not narrating, not streaming. Look at the image and "
+        "output ONLY a compact JSON object (no prose, no markdown). Schema: "
+        "{\"summary\": one short Korean sentence describing what is on screen "
+        "right now, \"focus\": {\"x\": number -1..1, \"y\": number -1..1} the "
+        "normalized point most worth looking at (-1,-1 = top-left, 0,0 = center, "
+        "1,1 = bottom-right), \"interest\": number 0..1 how remarkable this "
+        "moment is, \"comment\": short Korean line the character would actually "
+        "say out loud (at most 40 characters, casual spoken Korean, no emoji), "
+        "\"emotion\": one of [\"happy\",\"sad\",\"angry\",\"surprised\",\"neutral\","
+        "\"relaxed\"]}. "
+        "You may prefix `comment` with at most one of [SFX:laugh] [SFX:sigh] "
+        "[SFX:wow] [SFX:hmm] [SFX:huh] when a non-verbal sound fits better than "
+        "words. "
+        "CRITICAL: most moments are not worth speaking about. Set interest below "
+        "0.4 for ordinary/idle/unchanged-looking screens and leave `comment` an "
+        "empty string. Only go above 0.6 for something genuinely notable. "
+        "`recent` holds what you already said — never repeat those, and if "
+        "nothing new happened since `lastSummary`, say so by keeping interest "
+        "low. Never describe passwords, private messages, or personal data; if "
+        "the window looks like it holds those, return interest 0 and an empty "
+        "comment. Output ONLY the JSON."
+    )
+
+    def vision_model_for(self, mode: str) -> Optional[str]:
+        """해당 provider에서 이미지를 받을 수 있는 모델 이름. 없으면 None.
+
+        local/hf_api는 텍스트 전용 경로라 항상 None — 로컬 Qwen에 이미지를 밀어
+        넣는 건 이 서비스의 계약 밖이다(그리고 관전은 사용자가 게임을 돌리는
+        중에 도는 기능이라 로컬 VRAM을 더 먹으면 안 된다).
+        """
+        if mode == "claude":
+            return CLAUDE_MODEL or None
+        if mode == "groq":
+            return GROQ_VISION_MODEL or None
+        return None
+
+    async def describe_screen(
+        self,
+        image_b64: str,
+        context: Optional[dict] = None,
+        ai_mode: Optional[str] = None,
+    ) -> Optional[str]:
+        """화면 한 장 → 엄격 JSON 문자열(raw). 비전 불가/미가용이면 None.
+
+        검증·clamp·침묵 게이트는 전부 클라이언트(src/spectateDriver.js)가 한다 —
+        director와 같은 분담이라 백엔드는 raw만 돌려준다.
+        """
+        active_mode = await self.ensure_mode(ai_mode)
+        model = self.vision_model_for(active_mode)
+        if not model:
+            return None
+
+        payload = "Context: " + json.dumps(context or {}, ensure_ascii=False) + "\nJSON:"
+        if active_mode == "claude":
+            return await self._describe_claude(model, image_b64, payload)
+        if active_mode == "groq":
+            return await self._describe_groq(model, image_b64, payload)
+        return None
+
+    async def _describe_claude(self, model: str, image_b64: str, user: str) -> str:
+        def _call():
+            response = self._claude.messages.create(
+                model=model,
+                max_tokens=400,
+                temperature=0.4,
+                system=self.SPECTATE_SYSTEM,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": image_b64,
+                            },
+                        },
+                        {"type": "text", "text": user},
+                    ],
+                }],
+            )
+            return response.content[0].text.strip()
+
+        try:
+            return await asyncio.to_thread(_call)
+        except Exception as error:
+            raise RuntimeError(f"claude vision failed: {error}") from error
+
+    async def _describe_groq(self, model: str, image_b64: str, user: str) -> str:
+        def _call():
+            response = self._groq.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": self.SPECTATE_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": user},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                            },
+                        ],
+                    },
+                ],
+                max_tokens=400,
+                temperature=0.4,
+            )
+            return response.choices[0].message.content.strip()
+
+        try:
+            return await asyncio.to_thread(_call)
+        except Exception as error:
+            raise RuntimeError(f"groq vision failed: {error}") from error
 
     async def _summarize_claude(self, system: str, user: str) -> str:
         try:

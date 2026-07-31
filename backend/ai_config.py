@@ -94,6 +94,13 @@ GROQ_KEY = _read_env("APIA_GROQ_KEY", "GROQ_KEY", default="")
 
 CLAUDE_MODEL = _read_env("APIA_CLAUDE_MODEL", "CLAUDE_MODEL", default="claude-sonnet-4-6")
 GROQ_MODEL = _read_env("APIA_GROQ_MODEL", "GROQ_MODEL", default="llama-3.3-70b-versatile")
+# 관전 모드(M2) 비전 호출용. GROQ_MODEL 기본값(llama-3.3-70b)은 **텍스트 전용**이라
+# 그대로 이미지를 보내면 실패한다. 그래서 비전은 별도 모델 이름으로 분리한다.
+# 빈 문자열이면 groq 비전 비활성(관전이 조용히 쉰다). Claude는 전 모델이 비전
+# 가능이라 CLAUDE_MODEL을 그대로 쓴다.
+GROQ_VISION_MODEL = _read_env(
+    "APIA_GROQ_VISION_MODEL", default="meta-llama/llama-4-scout-17b-16e-instruct"
+)
 
 AUTO_MODE_PRIORITY = tuple(
     item.strip()

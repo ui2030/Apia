@@ -52,6 +52,19 @@ class DirectorResponse(BaseModel):
     raw: Optional[str] = None
 
 
+class SpectateRequest(BaseModel):
+    # M2 관전 모드 — 창 한 장(base64 JPEG) + 컴팩트 컨텍스트(직전 코멘트/요약).
+    # 이미지는 저장하지 않는다: 프롬프트로만 흘러가고 응답 뒤 버려진다.
+    image_b64: str
+    context: Dict = Field(default_factory=dict)
+    ai_mode: Optional[str] = None
+
+
+class SpectateResponse(BaseModel):
+    # LLM 원시 출력(클라이언트의 parseSpectate가 검증/clamp). 비전 불가/실패면 None.
+    raw: Optional[str] = None
+
+
 class ChatCitation(BaseModel):
     """An assistant-emitted `[N]` marker resolved to its source. Same shape
     whether the source is web (step 4), file (future), or memory (future)."""
