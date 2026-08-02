@@ -9,7 +9,6 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from ai_config import (
     FILES_CHUNK_CHARS,
@@ -131,13 +130,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Assistant Backend", version="1.0.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS 미들웨어를 두지 않는다. 이 백엔드의 유일한 호출자는 Electron 메인
+# 프로세스이고(렌더러는 전부 window.api를 거친다), 메인 프로세스의 fetch는
+# 브라우저가 아니라서 CORS를 요구하지 않는다. allow_origins=["*"]를 두면
+# 사용자가 연 아무 웹페이지의 스크립트가 127.0.0.1의 이 서버를 호출하고
+# 응답까지 읽을 수 있다 — 폴더 색인 등록, 문서 내용 조회, API 키 대리 사용이
+# 전부 가능해진다. 얻는 기능은 없고 공격면만 열리므로 두지 않는다.
 
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(director.router, prefix="/director", tags=["director"])
