@@ -19,8 +19,8 @@
    또는
    const result = await window.api.importCharacterZip({
      zipPath: 'C:/path/model.zip',
-     displayName: '마리',
-     customName: '우리집 마리',
-     summary: '차분한 아이돌풍 캐릭터',
+     displayName: '캐릭터 이름',
+     customName: '내가 부를 이름',
+     summary: '캐릭터 한 줄 소개',
      description: '원본 설명이나 사용자 설명'
    })

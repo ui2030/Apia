@@ -55,21 +55,18 @@ backend/apia.db
 checkpoints/
 backend/checkpoints/
 mixamo-fbx/
-# Debug render screenshots named after a character IP — keep out of a public repo.
-kisaki/
+# Debug render screenshots of whichever model is loaded locally.
+render-shots/
 
 # Third-party character model assets (copyright — redistribution not permitted).
 # Kept on local disk so the app runs, but never tracked in the public repo. The
-# engine is model-agnostic; per-user models live locally only.
-src/assets/Aru/
-src/assets/Hina_Swimsuit/
-src/assets/Kisaki/
-src/assets/Kisaki_Uniform/
-src/assets/Mari_Idol/
-src/assets/Mika/
-src/assets/Vanya/
-src/assets/nozomi-hikari/
-src/assets/characters/
+# engine is model-agnostic; per-user models live locally only. Ignore every
+# asset subfolder by default and re-include only the engine-owned ones, so no
+# model folder name ever has to be written down here.
+src/assets/*/
+!src/assets/motions/
+!src/assets/room/
+!src/assets/textures/
 src/assets/character_registry.json
 
 # Python bytecode + local test/tool artifacts.
@@ -77,3 +74,9 @@ __pycache__/
 *.pyc
 test-results/
 .claude/
+
+# 비밀값과 DB 곁 파일 — 이름이 정확히 .env / apia.db 인 것만 막히던 구멍 보완.
+backend.env
+**/backend.env
+backend/apia.db*
+*.swp

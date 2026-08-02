@@ -370,7 +370,7 @@ Key files:
 
 ### 21. Warm room palette + furniture set (Phase D)
 
-Phase B의 방은 단조로운 회색 시멘트 박스로 보였다는 사용자 피드백 + 두 영상 reference(블루아카 "선생님, 잠깐 시간 좀 내주세요" 시리즈) → 따뜻한 학교 카페 톤 + 창문 + 가구 set으로 한 번 더 손봤다.
+Phase B의 방은 단조로운 회색 시멘트 박스로 보였다는 사용자 피드백 + 참고 영상 두 편(캐릭터가 실내에서 생활하는 연출) → 따뜻한 학교 카페 톤 + 창문 + 가구 set으로 한 번 더 손봤다.
 
 - `src/furnitureLayout.js` 신설: `FURNITURE_DEFAULT`가 가구별 `id/type/label/position/size/color/interaction/bubbleText`의 단일 source of truth. `sceneRuntime`의 가시 메시와 `world.js`의 상호작용 객체가 같은 좌표·라벨을 share — Codex MUST-FIX (Phase D round 1): 두 곳에 좌표 복제가 있으면 사용자가 한 쪽 옮길 때 시각/클릭이 분리됨.
 - 톤 변경 (`src/sceneRuntime.js`):
@@ -485,7 +485,7 @@ Key files (F1 fix + F2):
 
 ### 25. Phase G — motion clip sample + procedural walk/sit polish
 
-사용자 요청 "블루아카 영상처럼 자연스러운 걸음/앉기". 자연스러움의 9할은 키프레임 모션 클립(.vrma / .vmd) — procedural sine wave로는 한계 명확. 사용자 시간 박스를 위해 두 트랙 동시 진행: ① 인프라/디딤돌 클립 확보 + ② 클립 없을 때도 더 자연스러운 procedural.
+사용자 요청 "참고 영상처럼 자연스러운 걸음/앉기". 자연스러움의 9할은 키프레임 모션 클립(.vrma / .vmd) — procedural sine wave로는 한계 명확. 사용자 시간 박스를 위해 두 트랙 동시 진행: ① 인프라/디딤돌 클립 확보 + ② 클립 없을 때도 더 자연스러운 procedural.
 
 - **클립 인프라 확인**: 1개 sample `.vrma`를 `src/assets/motions/vrma/idle/breath_soft.vrma`에 배치 (pixiv/three-vrm의 `test.vrma`, MIT 라이센스). vite glob 자동 픽업 + `motionAssets.resolveMotionAsset()` 정상 resolve를 build 통과로 확인.
 - **공개 라이브러리 가이드 정리** (`src/assets/motions/vrma/README.md` 갱신):
