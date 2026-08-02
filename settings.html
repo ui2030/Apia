@@ -752,6 +752,10 @@
 let settings = {}
 let models = []
 let importedCharacters = []
+// 활성 캐릭터의 정본. 메인 창도 레지스트리를 먼저 읽어 모델을 로드하므로,
+// 설정 화면의 "적용 중" 배지도 여기에 맞춘다(settings.activeCharacter는 구버전
+// settings.models 폴백용 미러라 어긋날 수 있다).
+let registryActiveId = null
 
 async function init() {
   if (!window.api) {
@@ -850,11 +854,13 @@ async function init() {
 async function loadCharacterRegistryIfAvailable() {
   if (typeof window.api.listCharacters !== 'function') {
     importedCharacters = []
+    registryActiveId = null
     return
   }
 
   try {
     const result = await window.api.listCharacters()
+    registryActiveId = result?.activeCharacterId || null
     if (Array.isArray(result?.characters)) {
       importedCharacters = result.characters
     } else if (Array.isArray(result)) {
@@ -865,6 +871,7 @@ async function loadCharacterRegistryIfAvailable() {
   } catch (err) {
     console.warn('[Settings] listCharacters 실패:', err)
     importedCharacters = []
+    registryActiveId = null
   }
 }
 
@@ -890,6 +897,7 @@ function renderModels() {
 }
 
 function getActiveModelId() {
+  if (registryActiveId) return registryActiveId
   return settings.activeCharacter || settings.activeModel || 'dummy'
 }
 
@@ -1022,9 +1030,20 @@ function getModelIcon(type) {
   return '🧩'
 }
 
-function selectBuiltin() {
+async function selectBuiltin() {
   settings.activeModel = 'dummy'
   settings.activeCharacter = 'dummy'
+  // 레지스트리의 활성 캐릭터도 함께 비운다 — 여기를 안 비우면 메인 창이 계속
+  // 이전 캐릭터를 로드해, 설정에는 내장 캐릭터가 "적용 중"인데 화면에는 다른
+  // 모델이 떠 있는 상태가 된다.
+  registryActiveId = null
+  if (typeof window.api.setActiveCharacter === 'function') {
+    try {
+      await window.api.setActiveCharacter('dummy')
+    } catch (err) {
+      console.warn('[Settings] setActiveCharacter(dummy) 실패:', err)
+    }
+  }
   renderModels()
 }
 
@@ -1035,6 +1054,7 @@ async function selectImportedCharacter(characterId) {
   if (typeof window.api.setActiveCharacter === 'function') {
     try {
       await window.api.setActiveCharacter(characterId)
+      registryActiveId = characterId
     } catch (err) {
       console.warn('[Settings] setActiveCharacter 실패:', err)
     }

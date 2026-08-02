@@ -149,3 +149,58 @@ describe('WindowManager.flushPendingAnchor', () => {
     expect(() => manager.flushPendingAnchor()).not.toThrow()
   })
 })
+
+describe('WindowManager.moveMainToWorkArea', () => {
+  // `landings`는 setBounds 호출마다 창이 "실제로" 앉는 자리. 배율이 다른
+  // 모니터로 건너뛸 때 Chromium이 옮기기 전 모니터의 배율로 변환해 첫 호출이
+  // 빗나가는 상황을 흉내낸다.
+  async function managerWithMain(landings) {
+    let bounds = { x: 0, y: 0, width: 1280, height: 800 }
+    const setBounds = vi.fn(() => {
+      bounds = landings.length ? landings.shift() : bounds
+    })
+    const win = {
+      isDestroyed: () => false,
+      on: vi.fn(),
+      once: vi.fn(),
+      setIgnoreMouseEvents: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
+      getBounds: () => ({ ...bounds }),
+      setBounds,
+      webContents: { on: vi.fn(), send: vi.fn(), openDevTools: vi.fn() },
+      loadFile: vi.fn(async () => {}),
+      loadURL: vi.fn(async () => {})
+    }
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    const manager = new WindowManager(createDeps({ BrowserWindow: function () { return win }, log }))
+    await manager.createMainWindow()
+    setBounds.mockClear()
+    return { manager, setBounds, log }
+  }
+
+  const target = { x: -2195, y: -306, width: 2195, height: 1187 }
+
+  it('sets the bounds once when the window lands inside the target work area', async () => {
+    const { manager, setBounds, log } = await managerWithMain([{ ...target }])
+    expect(manager.moveMainToWorkArea(target)).toBe(true)
+    expect(setBounds).toHaveBeenCalledTimes(1)
+    expect(log.warn).not.toHaveBeenCalledWith('[WINDOW_MOVE_RETRY]', expect.anything())
+  })
+
+  it('retries once when the first move lands outside the target work area', async () => {
+    const { manager, setBounds, log } = await managerWithMain([
+      { x: 3840, y: 535, width: 1920, height: 1080 }, // 화면 밖으로 튄 상태
+      { ...target }
+    ])
+    expect(manager.moveMainToWorkArea(target)).toBe(true)
+    expect(setBounds).toHaveBeenCalledTimes(2)
+    expect(setBounds).toHaveBeenLastCalledWith(target)
+    expect(log.warn).toHaveBeenCalledWith('[WINDOW_MOVE_RETRY]', expect.anything())
+  })
+
+  it('rejects a malformed work area without touching the window', async () => {
+    const { manager, setBounds } = await managerWithMain([])
+    expect(manager.moveMainToWorkArea({ x: 0, y: 0, width: NaN, height: 800 })).toBe(false)
+    expect(setBounds).not.toHaveBeenCalled()
+  })
+})

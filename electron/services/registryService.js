@@ -151,6 +151,15 @@ function getCharacterById(characterId) {
 
 function setActiveCharacter(characterId) {
   const registry = readRegistry()
+  // null/'dummy' = 내장 캐릭터로 되돌리기. 활성 캐릭터의 정본은 이 레지스트리라
+  // (메인 창이 settings보다 먼저 읽는다) 여기를 비워야 내장 캐릭터로 폴백한다.
+  // 비울 수단이 없으면 설정에는 내장 캐릭터가 선택돼 보이는데 화면에는 이전
+  // 캐릭터가 계속 떠 있는 상태로 갈라진다.
+  if (characterId == null || characterId === 'dummy') {
+    registry.activeCharacterId = null
+    writeRegistry(registry)
+    return { ok: true, activeCharacterId: null }
+  }
   const exists = registry.characters.some((character) => character.id === characterId)
 
   if (!exists) {

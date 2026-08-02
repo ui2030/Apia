@@ -897,7 +897,7 @@ ipcMain.handle('get-displays', () => {
   }))
 })
 
-ipcMain.handle('settings:moveToDisplay', (e, payload) => {
+ipcMain.handle('settings:moveToDisplay', async (e, payload) => {
   const displayId = Number(payload?.displayId)
   if (!Number.isFinite(displayId)) return { ok: false, error: 'bad-display-id' }
   const display = screen.getAllDisplays().find((d) => d.id === displayId)
@@ -907,15 +907,18 @@ ipcMain.handle('settings:moveToDisplay', (e, payload) => {
   // 벽지모드로 부착된 채 setBounds만 하면 Progman-child 좌표가 어긋날 수 있고,
   // enableWallpaper는 attached 상태에선 no-op이라 재부착이 안 돈다 — 반드시
   // 분리 → 이동 → 재부착 순서(Codex MUST-FIX).
+  // disableWallpaper는 헬퍼 프로세스를 spawn하는 async라 반드시 await한다. 안
+  // 기다리면 창이 아직 Progman의 WS_CHILD인 채로 setBounds가 돌고, 자식 창의
+  // SetWindowPos는 부모(가상 데스크톱) 기준 좌표라 엉뚱한 모니터에 떨어진다.
   if (wallpaperMode.isAttached()) {
-    try { wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn }) } catch {}
+    try { await wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn }) } catch {}
   }
   if (!windows.moveMainToWorkArea(display.workArea)) {
     return { ok: false, error: 'move-failed' }
   }
   syncWallpaperMode() // 벽지모드면 새 모니터 전체 bounds로 재부착, 아니면 유지
   repositionCornerWindow() // 핫코너도 캐릭터를 따라간다
-  logInfo('[DISPLAY_MOVE]', { displayId })
+  logInfo('[DISPLAY_MOVE]', { displayId, landed: main.getBounds() })
   return { ok: true }
 })
 
@@ -1078,12 +1081,14 @@ function rewallpaperOnDisplayChange() {
   // in a burst, and each re-attach spawns the sync Win32 helper (Codex
   // NICE-TO-HAVE). Coalesce to one detach + re-attach.
   if (rewallpaperTimer) clearTimeout(rewallpaperTimer)
-  rewallpaperTimer = setTimeout(() => {
+  rewallpaperTimer = setTimeout(async () => {
     rewallpaperTimer = null
     const settings = loadSettings()
     if (settings.useWallpaperMode === false) return
     try {
-      wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
+      // await 필수 — 분리 전에 syncWallpaperMode가 setBounds를 돌리면 아직
+      // Progman 자식이라 좌표가 부모 기준으로 해석된다.
+      await wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
     } catch {}
     syncWallpaperMode()
   }, 500)
@@ -1419,7 +1424,7 @@ function destroyCornerWindow() {
 
 // ── Phase F1 wallpaper mode integration ─────────────────────────────────────
 
-function syncWallpaperMode() {
+async function syncWallpaperMode() {
   const main = windows.getMain()
   if (!main || main.isDestroyed()) return
   const want = loadSettings().useWallpaperMode !== false
@@ -1445,10 +1450,15 @@ function syncWallpaperMode() {
     // canvas + window stay in sync (otherwise a workArea-sized canvas gets
     // stretched to the full physical monitor → zoomed-in look on a HiDPI
     // secondary display).
-    try {
-      const disp = screen.getDisplayMatching(main.getBounds())
-      if (disp?.bounds) main.setBounds(disp.bounds)
-    } catch {}
+    // 이미 부착돼 있으면 건너뛴다 — 헬퍼가 이미 창을 모니터 물리 rect에 맞춰
+    // 놨고, Progman 자식 상태의 setBounds는 부모 기준 좌표라 창을 엉뚱한
+    // 모니터로 밀어낸다(설정 저장만 해도 캐릭터가 옆 모니터로 튀던 원인).
+    if (!wallpaperMode.isAttached()) {
+      try {
+        const disp = screen.getDisplayMatching(main.getBounds())
+        if (disp?.bounds) main.setBounds(disp.bounds)
+      } catch {}
+    }
     const ready = main.isVisible() ? Promise.resolve() : new Promise((resolve) => {
       main.once('ready-to-show', resolve)
     })
@@ -1508,7 +1518,8 @@ function syncWallpaperMode() {
     })
   } else {
     if (wallpaperMode.isAttached()) {
-      wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn })
+      // await 필수 — 분리가 끝나기 전 setBounds는 Progman 자식 좌표로 해석된다.
+      try { await wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn }) } catch {}
     }
     // Restore the normal overlay behavior (floating, accepts clicks) at workArea
     // bounds — a previous wallpaper session may have grown it to full display

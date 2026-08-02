@@ -17,7 +17,8 @@ const fs = require('fs')
 
 const {
   pickTargetWorkArea,
-  workAreaCentre
+  workAreaCentre,
+  workAreaContains
 } = require('./windowBoundsPolicy')
 
 function escapeHtml(value) {
@@ -199,6 +200,16 @@ class WindowManager {
     // display's workArea even after a small taskbar / DPI change.
     const anchor = workAreaCentre(bounds)
     if (!anchor) return
+    // 어느 모니터에도 속하지 않는 앵커는 저장하지 않는다. 창이 일시적으로
+    // 화면 밖 좌표에 놓인 순간(벽지모드 재부착 중 등)의 값을 그대로 적으면
+    // 다음 실행 때 복원 대상이 사라진 모니터를 가리켜 창이 안 보이게 된다.
+    try {
+      const displays = this.#screen.getAllDisplays()
+      if (!displays.some((d) => workAreaContains(d?.workArea, anchor.x, anchor.y))) {
+        this.#log.warn('[WINDOW_ANCHOR_OFFSCREEN_SKIP]', anchor)
+        return
+      }
+    } catch {}
     try {
       const current = this.#loadSettings()
       this.#saveSettings({ ...current, windowAnchor: anchor })
@@ -229,13 +240,26 @@ class WindowManager {
     const main = this.#main
     if (!main || main.isDestroyed()) return false
     if (!workArea || ![workArea.x, workArea.y, workArea.width, workArea.height].every(Number.isFinite)) return false
+    const target = {
+      x: workArea.x,
+      y: workArea.y,
+      width: workArea.width,
+      height: workArea.height
+    }
     try {
-      main.setBounds({
-        x: workArea.x,
-        y: workArea.y,
-        width: workArea.width,
-        height: workArea.height
-      })
+      main.setBounds(target)
+      // 배율이 다른 모니터로 건너뛸 때 Chromium의 DIP↔물리 변환은 "옮기기 전"
+      // 모니터의 배율을 쓴다 — 한 번의 setBounds로는 목표 작업영역 밖에
+      // 떨어질 수 있다. 실제로 앉은 자리를 재서 어긋났으면 한 번 더 맞춘다
+      // (두 번째 호출은 목표 모니터의 배율로 변환된다). 창이 화면 밖에
+      // 남아 사라져 보이는 일을 막는 안전장치이기도 하다.
+      const landed = main.getBounds()
+      const cx = landed.x + Math.floor(landed.width / 2)
+      const cy = landed.y + Math.floor(landed.height / 2)
+      if (!workAreaContains(workArea, cx, cy)) {
+        this.#log.warn('[WINDOW_MOVE_RETRY]', { want: target, landed })
+        main.setBounds(target)
+      }
     } catch {
       return false
     }

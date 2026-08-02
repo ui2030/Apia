@@ -146,12 +146,23 @@ static class ApiaWallpaper
             }
             else if (action == "detach")
             {
+                // A child window's stored position is PARENT-relative. Progman
+                // spans the whole virtual desktop, so SetParent(hwnd, NULL) with
+                // SWP_NOMOVE re-interprets that parent-relative value as a screen
+                // coordinate and the window teleports by the virtual-desktop
+                // origin (measured: +3840,+535 on a 4K-left / FHD-primary rig).
+                // Electron then reports garbage bounds and every later setBounds
+                // is computed from the wrong monitor/DPI. GetWindowRect returns
+                // SCREEN coords even for a child, so capture the true rect first
+                // and put the window back exactly where it looked.
+                RECT r; GetWindowRect(hwnd, out r);
                 long style = GetWindowLongPtr(hwnd, GWL_STYLE).ToInt64();
                 long newStyle = (style & ~WS_CHILD) | WS_POPUP;
                 SetParent(hwnd, IntPtr.Zero);
                 SetWindowLongPtr(hwnd, GWL_STYLE, new IntPtr(newStyle));
-                SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                Console.WriteLine("{\"ok\":true}");
+                SetWindowPos(hwnd, IntPtr.Zero, r.L, r.T, r.R - r.L, r.B - r.T, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
+                RECT after; GetWindowRect(hwnd, out after);
+                Console.WriteLine("{\"ok\":true,\"rect\":\"" + after.L + "," + after.T + "," + after.R + "," + after.B + "\"}");
                 return 0;
             }
             Console.WriteLine("{\"ok\":false,\"error\":\"unknown-action\"}");

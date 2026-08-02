@@ -148,3 +148,28 @@ describe('readRegistry aggregate consistency', () => {
     expect(registry.characters).toEqual([])
   })
 })
+
+describe('setActiveCharacter — 내장 캐릭터로 되돌리기', () => {
+  beforeEach(async () => {
+    await writeFile(registryPath(), JSON.stringify({
+      version: 2,
+      activeCharacterId: 'c1',
+      characters: [validEntry('c1')]
+    }), 'utf-8')
+  })
+
+  it("'dummy'를 주면 활성 캐릭터를 비운다(설정과 화면이 갈라지지 않게)", () => {
+    expect(registryService.setActiveCharacter('dummy')).toEqual({ ok: true, activeCharacterId: null })
+    expect(registryService.readRegistry().activeCharacterId).toBe(null)
+  })
+
+  it('null을 주면 활성 캐릭터를 비운다', () => {
+    registryService.setActiveCharacter(null)
+    expect(registryService.readRegistry().activeCharacterId).toBe(null)
+  })
+
+  it('없는 id는 여전히 거부한다', () => {
+    expect(() => registryService.setActiveCharacter('nope')).toThrow(/not found/i)
+    expect(registryService.readRegistry().activeCharacterId).toBe('c1')
+  })
+})
