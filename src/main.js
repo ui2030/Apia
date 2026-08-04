@@ -741,6 +741,7 @@ const presence = createPresenceMonitor({ onTransition: handlePresenceTransition 
 // 잠금 화면 뒤에서 행동이 돌고 욕구 보정 구간도 끊긴다.
 let pauseLocked = false
 let pauseSuspended = false
+let pauseAway = false // 5분 무입력 — 렌더만 멈춘다(자율 행동은 그대로)
 let powerPausedAt = 0 // 정지 시작 시각(0=정상). 두 플래그가 다 풀려야 끝난다.
 let pauseResumeTimer = null
 const RESUME_GRACE_MS = 8000 // 재개 유예 — 복귀 확정(유휴 폴링)·인사 기회 먼저
@@ -784,6 +785,9 @@ function handlePresenceTransition(evt) {
 
 function handlePresenceIdleFeed(idleSec) {
   presence.onIdle(idleSec)
+  // 아무도 안 보는 동안(부재) 렌더 정지. 복귀는 다음 유휴 폴링(≤5s)이 확정한다.
+  pauseAway = presence.getState() === 'away'
+  syncRenderPause()
 }
 
 function handlePresenceEventFeed(name) {
@@ -791,8 +795,8 @@ function handlePresenceEventFeed(name) {
   // 화면이 안 보이는 동안 자율 행동 정지(전력·CPU 절약). 욕구는 재개 때 보정.
   if (name === 'lock-screen') { pauseLocked = true; startPowerPause() }
   else if (name === 'suspend') { pauseSuspended = true; startPowerPause() }
-  else if (name === 'unlock-screen') { pauseLocked = false; maybeEndPowerPause() }
-  else if (name === 'resume') { pauseSuspended = false; maybeEndPowerPause() }
+  else if (name === 'unlock-screen') { pauseLocked = false; pauseAway = false; maybeEndPowerPause() }
+  else if (name === 'resume') { pauseSuspended = false; pauseAway = false; maybeEndPowerPause() }
   // 렌더 정지/재개는 유예 없이 즉시 — 두 플래그 파생값으로 판단(해제 순서 무관).
   syncRenderPause()
 }
@@ -2064,14 +2068,25 @@ function lipsyncMMD(delta) {
 }
 
 // Codex MUST-FIX(perf): 세션 잠금/절전 중엔 렌더+6패스 포스트프로세싱을 멈춘다.
-// paused는 pauseLocked||pauseSuspended 파생값(해제 순서가 꼬여도 조기 재개 방지).
-// 스킵-but-rAF유지가 아니라 rAF 자체를 끊어야 렌더러가 깨어나지 않아 전력이 준다.
+// paused는 pauseLocked||pauseSuspended||pauseAway 파생값(해제 순서가 꼬여도
+// 조기 재개 방지). 스킵-but-rAF유지가 아니라 rAF 자체를 끊어야 렌더러가 깨어나지
+// 않아 전력이 준다. pauseAway=5분 무입력(presenceManager 'away') — 아무도 안 보는
+// 동안 빈 방을 계속 그리느라 코어 하나를 태우던 걸 멈춘다.
 let _rafId = null
 let _renderPaused = false
+// 60fps 상한. 144Hz 화면에서 2.4배 프레임을 공짜로 그리던 걸 막는다. 임계는
+// 1/60보다 살짝 낮게 둔다 — 정확히 1/60이면 60Hz 화면의 미세 지터에 매 프레임이
+// 걸려 30fps로 반토막 난다.
+const FRAME_MIN_DELTA = 1 / 63
+// 재개 첫 프레임 델타 상한. 멈춰 있던 시간이 통째로 들어오면 물리/믹서가 튄다
+// (MMD는 unitStep 1/120·maxStepNum 4 = 33ms까지만 정속 소화).
+const FRAME_MAX_DELTA = 1 / 20
+let _frameAcc = 0
 
 function startRenderLoop() {
   if (_rafId != null) return // 중복 rAF 등록 가드(재개가 두 번 불려도 루프 1개)
   clock.getDelta() // 잠든 시간 델타 삼킴 — MMD 물리가 거대 timestep을 받지 않게
+  _frameAcc = 0    // 정지 직전에 모아둔 잔여분도 버린다(재개 첫 프레임 점프 방지)
   _rafId = requestAnimationFrame(animate)
 }
 
@@ -2080,7 +2095,7 @@ function stopRenderLoop() {
 }
 
 function syncRenderPause() {
-  const paused = pauseLocked || pauseSuspended
+  const paused = pauseLocked || pauseSuspended || pauseAway
   if (paused && !_renderPaused) { _renderPaused = true; stopRenderLoop() }
   else if (!paused && _renderPaused) { _renderPaused = false; startRenderLoop() }
 }
@@ -2088,7 +2103,14 @@ function syncRenderPause() {
 function animate() {
   _rafId = requestAnimationFrame(animate)
 
-  const delta = clock.getDelta()
+  // 프레임 상한 — 모자란 프레임은 델타만 모으고 그리지 않는다. 잔여분은
+  // 다음 프레임으로 넘겨 144Hz에서도 평균이 60fps에 붙게 한다(0으로 리셋하면
+  // 3프레임에 한 번=48fps로 떨어진다). 델타는 잔여분을 뺀 소비분만 먹인다 —
+  // 잔여분까지 먹이면 같은 시간이 두 번 계상돼 애니메이션이 실시간보다 빨라진다.
+  _frameAcc += clock.getDelta()
+  if (_frameAcc < FRAME_MIN_DELTA) return
+  const delta = Math.min(_frameAcc - (_frameAcc % FRAME_MIN_DELTA), FRAME_MAX_DELTA)
+  _frameAcc %= FRAME_MIN_DELTA
   const t = clock.getElapsedTime()
 
   if (currentModel) {
@@ -2290,6 +2312,16 @@ async function tryLoadActiveCharacterFromRegistry() {
     const entryUrl = manifest.entryFileUrl || manifest.entryAbsoluteWebPath || null
     if (!entryUrl) return false
 
+    // 같은 모델이면 다시 로드하지 않는다. 설정 저장·캐릭터 재통지마다
+    // PMX+물리 전체 재로드가 돌아 포즈·앉기 상태가 통째로 날아갔다.
+    // 크기/접지만 재적용해 charScale 변경은 반영한다.
+    if (normalizeUrlToFetchable(entryUrl) === currentModel?.sourcePath) {
+      applyCharacterScale()
+      alignCharacterToGround()
+      measureSeatedHipHeight(currentModel?.poseRig?.registry) // 리스케일 후 재측정(stale 방지)
+      return true
+    }
+
     await loadModel(entryUrl, { manifestPath: character.modelManifestPath })
     return true
   } catch (err) {
@@ -2338,14 +2370,8 @@ if (window.api) {
     const loadedFromRegistry = await tryLoadActiveCharacterFromRegistry()
     if (loadedFromRegistry) return
 
+    // 레지스트리에 활성 캐릭터가 없으면 내장 캐릭터(이미 로드돼 있다).
     applyCharacterProfileBundle(null)
-
-    if (s.activeModel && s.activeModel !== 'dummy') {
-      const m = (s.models || []).find((model) => model.id === s.activeModel)
-      if (m?.path) {
-        await loadModel(m.path)
-      }
-    }
   }).catch(() => {})
 
   // Step 1: settings UI slider edits arrive via this broadcast. motionManager
@@ -2372,23 +2398,9 @@ if (window.api) {
 
     applyCharacterProfileBundle(null)
 
-    const selectedId = s.activeModel
-    const selectedModel = (s.models || []).find((m) => m.id === selectedId)
-    const selectedPath = selectedModel?.path || null
-
-    const currentPath =
-      currentModel?.type === 'dummy'
-        ? 'dummy'
-        : currentModel?.sourcePath || null
-
-    const nextPath = selectedId === 'dummy' ? 'dummy' : selectedPath
-
-    if (nextPath !== currentPath) {
-      if (selectedId === 'dummy') {
-        loadDummy()
-      } else if (selectedPath) {
-        await loadModel(selectedPath)
-      }
+    // 레지스트리 활성 캐릭터가 없다 = 내장 캐릭터. 이미 내장이면 크기만 재적용.
+    if (currentModel?.type !== 'dummy') {
+      loadDummy()
     } else {
       applyCharacterScale()
       alignCharacterToGround()

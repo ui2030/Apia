@@ -34,7 +34,7 @@ function createDeps(overrides = {}) {
     preloadPath: '/tmp/preload.js',
     mainLogPath: '/tmp/main.log',
     loadSettings: () => ({ alwaysOnTop: true, windowAnchor: null }),
-    saveSettings: vi.fn((s) => s),
+    patchSettings: vi.fn((s) => s),
     ...overrides
   }
 }
@@ -124,9 +124,9 @@ describe('WindowManager constructor', () => {
       .toThrow(/loadSettings/)
   })
 
-  it('rejects non-function saveSettings', () => {
-    expect(() => new WindowManager(createDeps({ saveSettings: undefined })))
-      .toThrow(/saveSettings/)
+  it('rejects non-function patchSettings', () => {
+    expect(() => new WindowManager(createDeps({ patchSettings: undefined })))
+      .toThrow(/patchSettings/)
   })
 
   it('starts with null main/settings refs', () => {

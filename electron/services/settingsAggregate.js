@@ -21,8 +21,6 @@ const { normalizeAnchor } = require('./windowBoundsPolicy')
 const VALID_AI_MODES = new Set(['auto', 'local', 'hf_api', 'claude', 'groq'])
 
 const SETTINGS_DEFAULTS = Object.freeze({
-  activeModel: 'dummy',
-  activeCharacter: null,
   models: [],
   alwaysOnTop: true,
   charScale: 100,
@@ -110,6 +108,12 @@ class SettingsRepository {
   normalize(data = {}) {
     const settings = { ...SETTINGS_DEFAULTS, ...(data || {}) }
 
+    // 활성 캐릭터의 정본은 character_registry.json 하나뿐이다. 구버전
+    // settings.json에 남아 있는 미러 키는 읽는 즉시 버린다 — 스키마가
+    // passthrough라 안 버리면 저장할 때마다 되살아나 레지스트리와 갈라진다.
+    delete settings.activeModel
+    delete settings.activeCharacter
+
     if (!VALID_AI_MODES.has(settings.aiMode)) {
       settings.aiMode = SETTINGS_DEFAULTS.aiMode
     }
@@ -167,9 +171,28 @@ class SettingsRepository {
     return this.#dataDir
   }
 
+  // 문서 통째 쓰기. 부트스트랩/기본값 복구용 — 사용자 조작 경로는 patch()를
+  // 쓴다(스냅샷 되돌림 방지).
   save(data) {
+    return this.#write(data)
+  }
+
+  /**
+   * 부분 갱신. 디스크에서 다시 읽어 **호출자가 준 필드만** 얹는다.
+   * 설정 창처럼 열릴 때 찍은 스냅샷을 통째로 되쓰는 writer가 있으면, 그
+   * 사이 다른 경로에서 바뀐 값(관전 일시정지 등)이 조용히 되돌아간다.
+   */
+  patch(partial) {
+    return this.#write({ ...this.load(), ...(partial || {}) })
+  }
+
+  // tmp → rename 원자적 쓰기. 저장 도중 크래시/전원차단이 나도 반쪽 JSON이
+  // 대상 경로에 노출되지 않는다(registryService.atomicWriteJson과 같은 패턴).
+  #write(data) {
     const normalized = this.normalize(data)
-    fs.writeFileSync(this.#settingsPath, JSON.stringify(normalized, null, 2))
+    const tmpPath = `${this.#settingsPath}.tmp`
+    fs.writeFileSync(tmpPath, JSON.stringify(normalized, null, 2), 'utf-8')
+    fs.renameSync(tmpPath, this.#settingsPath)
     return normalized
   }
 

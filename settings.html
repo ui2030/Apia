@@ -750,11 +750,9 @@
 
 <script>
 let settings = {}
-let models = []
 let importedCharacters = []
-// 활성 캐릭터의 정본. 메인 창도 레지스트리를 먼저 읽어 모델을 로드하므로,
-// 설정 화면의 "적용 중" 배지도 여기에 맞춘다(settings.activeCharacter는 구버전
-// settings.models 폴백용 미러라 어긋날 수 있다).
+// 활성 캐릭터의 정본(단일 출처) — 메인 창도 이 레지스트리를 읽어 모델을
+// 로드하므로, 설정 화면의 "적용 중" 배지도 여기에 맞춘다.
 let registryActiveId = null
 
 async function init() {
@@ -814,8 +812,6 @@ async function init() {
     window.api?.onSpectateState?.(renderSpectateStatus)
     window.api?.spectateState?.().then(renderSpectateStatus).catch(() => {})
     refreshSpectateWindows().catch(() => {})
-
-  models = settings.models || []
 
   await loadCharacterRegistryIfAvailable()
   renderModels()
@@ -885,20 +881,13 @@ function renderModels() {
   list.appendChild(makeBuiltinCard(activeId === 'dummy'))
 
   // 새 registry 기반 캐릭터
-  if (importedCharacters.length > 0) {
-    importedCharacters.forEach(character => {
-      list.appendChild(makeImportedCharacterCard(character, activeId === character.id))
-    })
-    return
-  }
-
-  // 구버전 settings.models fallback
-  models.forEach(m => list.appendChild(makeLegacyCard(m, activeId === m.id)))
+  importedCharacters.forEach(character => {
+    list.appendChild(makeImportedCharacterCard(character, activeId === character.id))
+  })
 }
 
 function getActiveModelId() {
-  if (registryActiveId) return registryActiveId
-  return settings.activeCharacter || settings.activeModel || 'dummy'
+  return registryActiveId || 'dummy'
 }
 
 function makeBuiltinCard(active) {
@@ -966,57 +955,12 @@ function makeImportedCharacterCard(character, active) {
           importedCharacters = importedCharacters.filter(c => c.id !== character.id)
         }
 
-        if (settings.activeCharacter === character.id) {
-          settings.activeCharacter = 'dummy'
-          settings.activeModel = 'dummy'
-        }
-
         await loadCharacterRegistryIfAvailable()
         renderModels()
         showToast(`${name} 삭제됨`, 'warn', 2500)
       } catch (err) {
         showToast('삭제 실패: ' + (err?.message || err), 'error')
       }
-    })
-  }
-
-  return d
-}
-
-function makeLegacyCard(m, active) {
-  const d = document.createElement('div')
-  d.className = 'model-card' + (active ? ' active' : '')
-  const icon = getModelIcon(m.type)
-
-  d.innerHTML = `
-    <div class="model-icon">${icon}</div>
-    <div class="model-info">
-      <div class="model-name">${escapeHtml(m.name || m.id || '이름 없음')}</div>
-      <div class="model-type">${escapeHtml((m.type || 'built-in').toUpperCase())}</div>
-    </div>
-    ${active
-      ? '<span class="badge">적용 중</span>'
-      : '<button class="btn btn-ghost" data-action="select-legacy">선택</button>'}
-    ${m.id !== 'dummy'
-      ? '<button class="btn btn-red" data-action="remove-legacy">✕</button>'
-      : ''}
-  `
-
-  const selectBtn = d.querySelector('[data-action="select-legacy"]')
-  if (selectBtn) {
-    selectBtn.addEventListener('click', () => {
-      settings.activeModel = m.id
-      settings.activeCharacter = null
-      renderModels()
-    })
-  }
-
-  const removeBtn = d.querySelector('[data-action="remove-legacy"]')
-  if (removeBtn) {
-    removeBtn.addEventListener('click', () => {
-      models = models.filter(model => model.id !== m.id)
-      if (settings.activeModel === m.id) settings.activeModel = 'dummy'
-      renderModels()
     })
   }
 
@@ -1031,9 +975,7 @@ function getModelIcon(type) {
 }
 
 async function selectBuiltin() {
-  settings.activeModel = 'dummy'
-  settings.activeCharacter = 'dummy'
-  // 레지스트리의 활성 캐릭터도 함께 비운다 — 여기를 안 비우면 메인 창이 계속
+  // 레지스트리의 활성 캐릭터를 비운다 — 여기를 안 비우면 메인 창이 계속
   // 이전 캐릭터를 로드해, 설정에는 내장 캐릭터가 "적용 중"인데 화면에는 다른
   // 모델이 떠 있는 상태가 된다.
   registryActiveId = null
@@ -1048,9 +990,6 @@ async function selectBuiltin() {
 }
 
 async function selectImportedCharacter(characterId) {
-  settings.activeCharacter = characterId
-  settings.activeModel = characterId
-
   if (typeof window.api.setActiveCharacter === 'function') {
     try {
       await window.api.setActiveCharacter(characterId)
@@ -1179,14 +1118,9 @@ async function importFile(file) {
       throw new Error(result?.error || '응답이 비어 있습니다.')
     }
 
+    // 배지("적용 중")는 레지스트리 활성 캐릭터만 따른다 — 가져오기가 활성으로
+    // 만들어 주는 건 첫 캐릭터일 때뿐이고, 그 판단은 레지스트리가 한다.
     await loadCharacterRegistryIfAvailable()
-
-    const importedId = result.character?.id || result.id || result.characterId || null
-
-    if (importedId) {
-      settings.activeCharacter = importedId
-      settings.activeModel = importedId
-    }
 
     renderModels()
     clearImportInputs()
@@ -1666,9 +1600,10 @@ const saveBusy = (() => {
 })()
 
 async function save() {
+  // 설정 창이 **직접 편집하는 필드만** 보낸다(화이트리스트). 창을 열 때 찍은
+  // 스냅샷을 통째로 되쓰면, 그 사이 다른 경로에서 바뀐 값(관전 일시정지 등)이
+  // 저장 한 번에 조용히 되돌아간다. 나머지 필드는 메인이 디스크 값을 유지한다.
   const saved = {
-    ...settings,
-    models,
     alwaysOnTop: document.getElementById('always-on-top').checked,
     charScale: parseInt(document.getElementById('char-scale').value, 10),
     autoBehavior: document.getElementById('auto-behavior').checked,

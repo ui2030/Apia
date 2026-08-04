@@ -270,6 +270,10 @@ function setComposerBusy(isBusy) {
   if (micBtn) micBtn.disabled = isBusy
 }
 
+// 5초 헬스 폴링은 성공할 때마다 /voices를 부르고 있었다(하루 17,000회).
+// 목소리 목록은 백엔드가 새로 올라올 때만 바뀌므로 오프라인→온라인 전이에서만
+// 부른다(첫 성공 포함 — 초기값은 null).
+let _backendOnline = null
 async function checkBackend() {
   const statusEl = document.getElementById('backend-status')
   if (!statusEl) return
@@ -277,9 +281,11 @@ async function checkBackend() {
   const r = await window.api.checkBackend()
   if (r.ok) {
     statusEl.textContent = '● 연결됨'; statusEl.className = 'online'
-    loadVoices()
+    if (_backendOnline !== true) loadVoices()
+    _backendOnline = true
   } else {
     statusEl.textContent = '● 백엔드 오프라인'; statusEl.className = 'offline'
+    _backendOnline = false
   }
 }
 

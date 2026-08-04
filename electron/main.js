@@ -258,7 +258,9 @@ const settingsRepo = new SettingsRepository({
 // Thin wrappers preserve the existing call shape used by IPC handlers and
 // registerCharacterIpc below.
 const loadSettings = () => settingsRepo.load()
-const saveSettings = (data) => settingsRepo.save(data)
+// 사용자 조작 경로는 전부 patch(부분 갱신). 문서 통째 쓰기는 스냅샷을 되쓰면서
+// 그 사이 다른 곳에서 바뀐 값을 되돌린다.
+const patchSettings = (partial) => settingsRepo.patch(partial)
 
 // backend.env is a separate boundary from apia-settings.json — secrets,
 // line-oriented, must round-trip with the Python loader.
@@ -277,7 +279,7 @@ const windows = new WindowManager({
   preloadPath: path.join(__dirname, 'preload.js'),
   mainLogPath: MAIN_LOG_PATH,
   loadSettings,
-  saveSettings
+  patchSettings
 })
 
 // ✅ 중요한 수정:
@@ -499,8 +501,7 @@ function broadcastSpectateState() {
 }
 
 function setSpectatePaused(paused) {
-  const s = loadSettings()
-  saveSettings({ ...s, spectatePaused: !!paused })
+  patchSettings({ spectatePaused: !!paused })
   spectate.gate.reset() // 재개 시 첫 프레임은 무조건 새 프레임으로 취급
   return broadcastSpectateState()
 }
@@ -845,7 +846,7 @@ ipcMain.handle('save-world', (e, data) => {
 ipcMain.handle('get-settings', () => loadSettings())
 
 ipcMain.handle('save-settings', (e, data) => {
-  const settings = saveSettings(data)
+  const settings = patchSettings(data)
   return { ok: true, settings }
 })
 
@@ -855,7 +856,8 @@ ipcMain.handle('open-settings', () => {
 })
 
 ipcMain.handle('apply-settings', (e, s) => {
-  const settings = saveSettings(s)
+  // s는 설정 UI가 실제로 편집하는 필드만 담은 부분 payload다(settings.html save()).
+  const settings = patchSettings(s)
   // Phase F Codex MUST-FIX: WindowManager.applySettings still calls
   // setAlwaysOnTop. In wallpaper mode that would yank the BrowserWindow
   // out of the WorkerW layer and back to overlay, defeating the mode.
@@ -916,7 +918,9 @@ ipcMain.handle('settings:moveToDisplay', async (e, payload) => {
   if (!windows.moveMainToWorkArea(display.workArea)) {
     return { ok: false, error: 'move-failed' }
   }
-  syncWallpaperMode() // 벽지모드면 새 모니터 전체 bounds로 재부착, 아니면 유지
+  // await 필수 — 부착이 끝나야 창이 새 모니터 rect에 앉는다. 안 기다리면
+  // 핫코너가 이전 모니터 자리에 그대로 남는다.
+  await syncWallpaperMode() // 벽지모드면 새 모니터 전체 bounds로 재부착, 아니면 유지
   repositionCornerWindow() // 핫코너도 캐릭터를 따라간다
   logInfo('[DISPLAY_MOVE]', { displayId, landed: main.getBounds() })
   return { ok: true }
@@ -1065,8 +1069,11 @@ function startWallpaperHealthCheck() {
     try { healthy = await wallpaperMode.isStillAttached(main) } catch { healthy = true }
     if (!healthy) {
       logWarn('[WALLPAPER_REATTACH]', 'lost Progman parent (shell recreated?) — re-syncing')
-      wallpaperMode.markDetached() // clear stale state so enableWallpaper re-attaches
-      syncWallpaperMode()
+      // 실제 분리를 await한다. markDetached는 내부 플래그만 지워서, 창이 아직
+      // Progman 자식인 채로 syncWallpaperMode의 setBounds가 돌았다 — 자식 창
+      // 좌표는 부모(가상 데스크톱) 기준이라 창이 엉뚱한 모니터로 튀었다.
+      try { await wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn }) } catch {}
+      await syncWallpaperMode()
     }
   }, 20000)
   if (wallpaperHealthTimer.unref) wallpaperHealthTimer.unref()
@@ -1090,7 +1097,9 @@ function rewallpaperOnDisplayChange() {
       // Progman 자식이라 좌표가 부모 기준으로 해석된다.
       await wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
     } catch {}
-    syncWallpaperMode()
+    // 재부착 완료까지 기다린 뒤 핫코너를 새 모니터로 옮긴다.
+    await syncWallpaperMode()
+    repositionCornerWindow()
   }, 500)
 }
 app.whenReady().then(() => {
@@ -1178,8 +1187,7 @@ app.whenReady().then(async () => {
   registerCharacterIpc({
     mainWindowRef: () => windows.getMain(),
     settingsWindowRef: () => windows.getSettings(),
-    loadSettings,
-    saveSettings
+    loadSettings
   })
 
   await windows.createMainWindow()
@@ -1462,7 +1470,10 @@ async function syncWallpaperMode() {
     const ready = main.isVisible() ? Promise.resolve() : new Promise((resolve) => {
       main.once('ready-to-show', resolve)
     })
-    Promise.resolve(ready).then(async () => {
+    // return 필수 — 이 체인을 안 돌려주면 await syncWallpaperMode()가 부착이
+    // 끝나기 전에 반환된다. 부착 뒤 창 좌표에 의존하는 호출자(핫코너 재배치)가
+    // 이전 모니터 자리를 그대로 쓰게 된다.
+    return Promise.resolve(ready).then(async () => {
       // Codex MUST-FIX (round 2): a stale ready-to-show promise from an
       // earlier sync can fire after the user has flipped the toggle off.
       // Re-read settings + window state inside the .then() so the actual
@@ -1521,16 +1532,23 @@ async function syncWallpaperMode() {
       // await 필수 — 분리가 끝나기 전 setBounds는 Progman 자식 좌표로 해석된다.
       try { await wallpaperMode.disableWallpaper(main, { info: logInfo, warn: logWarn }) } catch {}
     }
+    // ON 분기와 대칭인 재확인. 분리를 기다리는 동안 사용자가 토글을 다시 켰다면
+    // (빠른 연속 토글) 여기서 오버레이 상태를 복원해봐야 그 뒤 도착하는 부착과
+    // 어긋나 "부착됐는데 오버레이 취급"(캐릭터 안 보임·코너 버튼 없음)이 된다.
+    // 켜기를 유발한 그 호출이 자기 sync를 따로 돌리므로 여기선 빠지면 된다.
+    const live = windows.getMain()
+    if (!live || live.isDestroyed()) return
+    if (loadSettings().useWallpaperMode !== false) return
     // Restore the normal overlay behavior (floating, accepts clicks) at workArea
     // bounds — a previous wallpaper session may have grown it to full display
     // bounds (Codex MUST-FIX: don't leave a taskbar-covering click sink).
     try {
-      const d = screen.getDisplayMatching(main.getBounds())
-      if (d?.workArea) main.setBounds(d.workArea)
+      const d = screen.getDisplayMatching(live.getBounds())
+      if (d?.workArea) live.setBounds(d.workArea)
     } catch {}
-    try { main.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
-    try { main.setIgnoreMouseEvents(false) } catch {}
-    try { main.webContents?.send('wallpaper:opaque', false) } catch {}
+    try { live.setAlwaysOnTop(loadSettings().alwaysOnTop !== false) } catch {}
+    try { live.setIgnoreMouseEvents(false) } catch {}
+    try { live.webContents?.send('wallpaper:opaque', false) } catch {}
     // 오버레이 모드는 메인 창 자체 버튼을 쓰므로 코너 창 제거.
     destroyCornerWindow()
   }

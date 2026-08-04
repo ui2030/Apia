@@ -184,6 +184,61 @@ describe('load / save roundtrip', () => {
   })
 })
 
+describe('patch', () => {
+  it('leaves omitted fields alone', () => {
+    const repo = createRepo()
+    repo.save({ aiMode: 'groq', charScale: 120, memoryTurns: 25 })
+    repo.patch({ charScale: 80 })
+    const reloaded = repo.load()
+    expect(reloaded.charScale).toBe(80)
+    expect(reloaded.aiMode).toBe('groq')   // 안 준 필드는 그대로
+    expect(reloaded.memoryTurns).toBe(25)
+  })
+
+  it('does not revert a flag changed between snapshot and save', () => {
+    // 설정 창이 열릴 때 찍은 스냅샷(spectatePaused:false)을 통째로 되쓰면,
+    // 그 사이 핫키로 켠 관전 일시정지가 조용히 풀린다 — 프라이버시 버그.
+    const repo = createRepo()
+    const snapshot = repo.load()
+    expect(snapshot.spectatePaused).toBe(false)
+
+    repo.patch({ spectatePaused: true }) // 다른 경로(핫키)가 먼저 바꿈
+
+    // 설정 창 저장: 자기가 편집하는 필드만 보낸다.
+    repo.patch({ charScale: 150, ttsEnabled: false })
+
+    const reloaded = repo.load()
+    expect(reloaded.spectatePaused).toBe(true)
+    expect(reloaded.charScale).toBe(150)
+  })
+
+  it('never re-emits the legacy active-character mirror keys', async () => {
+    // 활성 캐릭터의 정본은 character_registry.json 하나뿐. 구버전 파일에
+    // 남아 있던 미러 키가 살아 돌아오면 레지스트리와 갈라진다.
+    await writeFile(settingsPath, JSON.stringify({
+      activeModel: 'char-old',
+      activeCharacter: 'char-old',
+      charScale: 110
+    }), 'utf-8')
+    const repo = createRepo()
+    expect(repo.load()).not.toHaveProperty('activeCharacter')
+    expect(repo.load()).not.toHaveProperty('activeModel')
+
+    repo.patch({ ttsEnabled: false })
+    const onDisk = JSON.parse(await readFile(settingsPath, 'utf-8'))
+    expect(onDisk).not.toHaveProperty('activeCharacter')
+    expect(onDisk).not.toHaveProperty('activeModel')
+    expect(onDisk.charScale).toBe(110) // 나머지 값은 보존
+  })
+
+  it('writes atomically (no .tmp left behind)', async () => {
+    const repo = createRepo()
+    repo.patch({ charScale: 101 })
+    await expect(access(`${settingsPath}.tmp`)).rejects.toThrow()
+    expect(repo.load().charScale).toBe(101)
+  })
+})
+
 describe('ensureRuntimeFiles', () => {
   it('creates the backend.env.example file on first run', async () => {
     const repo = createRepo()

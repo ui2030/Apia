@@ -18,8 +18,6 @@ import {
 // this constant should change too — the test is here to catch *schema* drift
 // (e.g. enum value removal) against the same shape the main process uses.
 const DEFAULT_SETTINGS = {
-  activeModel: 'dummy',
-  activeCharacter: null,
   models: [],
   alwaysOnTop: true,
   charScale: 100,
@@ -40,8 +38,6 @@ describe('SettingsSchema', () => {
   it('accepts a realistic populated settings object', () => {
     const populated = {
       ...DEFAULT_SETTINGS,
-      activeModel: 'vrm-1234',
-      activeCharacter: 'char-abcd',
       models: [{ id: 'vrm-1234', name: 'Alice' }],
       charScale: 120,
       aiMode: 'groq',
@@ -67,9 +63,9 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.safeParse(bad).success).toBe(false)
   })
 
-  it('rejects missing activeCharacter (must be string or null, not undefined)', () => {
-    const { activeCharacter, ...withoutActiveChar } = DEFAULT_SETTINGS
-    expect(SettingsSchema.safeParse(withoutActiveChar).success).toBe(false)
+  it('rejects missing voiceId (must be string or null, not undefined)', () => {
+    const { voiceId, ...withoutVoiceId } = DEFAULT_SETTINGS
+    expect(SettingsSchema.safeParse(withoutVoiceId).success).toBe(false)
   })
 })
 

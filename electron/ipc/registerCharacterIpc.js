@@ -2,7 +2,7 @@ const { ipcMain } = require('electron')
 const registryService = require('../services/registryService')
 const characterImportService = require('../services/characterImportService')
 
-function registerCharacterIpc({ mainWindowRef, settingsWindowRef, loadSettings, saveSettings }) {
+function registerCharacterIpc({ mainWindowRef, settingsWindowRef, loadSettings }) {
   // mainWindowRef + settingsWindowRef are getters because both windows can
   // close + reopen during app lifetime — capturing by value at registration
   // time leaves stale (often null) refs by the time IPC fires. Internal
@@ -57,13 +57,10 @@ function registerCharacterIpc({ mainWindowRef, settingsWindowRef, loadSettings, 
   ipcMain.handle('characters:setActive', async (e, { characterId }) => {
     const result = registryService.setActiveCharacter(characterId)
 
-    const settings = loadSettings()
-    settings.activeCharacter = characterId
-    settings.activeModel = characterId
-    saveSettings(settings)
-
+    // 활성 캐릭터는 레지스트리가 단일 출처 — settings에 미러하지 않는다.
+    // settings-applied는 렌더러가 레지스트리를 다시 읽게 하는 신호로만 쓴다.
     const live = mainWindow()
-    live?.webContents.send('settings-applied', settings)
+    live?.webContents.send('settings-applied', loadSettings())
     live?.webContents.send('character-changed', { characterId })
 
     const settingsWindow = settingsWindowRef?.()
@@ -84,16 +81,8 @@ function registerCharacterIpc({ mainWindowRef, settingsWindowRef, loadSettings, 
   })
 
   ipcMain.handle('characters:delete', async (e, { characterId }) => {
+    // 활성 포인터 재조정은 registryService.deleteCharacter 안에서 끝난다.
     const result = registryService.deleteCharacter(characterId)
-
-    // active가 바뀌었을 수 있으므로 settings 동기화
-    const settings = loadSettings()
-    if (settings.activeCharacter === characterId) {
-      const registry = registryService.readRegistry()
-      settings.activeCharacter = registry.activeCharacterId || 'dummy'
-      settings.activeModel = settings.activeCharacter
-      saveSettings(settings)
-    }
 
     const live = mainWindow()
     live?.webContents.send('settings-applied', loadSettings())

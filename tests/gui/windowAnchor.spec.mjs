@@ -25,8 +25,6 @@ test('phantom anchor on disk → main window restored to primary workArea', asyn
   // Seed a userData with an anchor that no real display contains.
   const userData = await mkdtemp(join(tmpdir(), 'apia-anchor-phantom-'))
   await writeFile(join(userData, 'apia-settings.json'), JSON.stringify({
-    activeModel: 'dummy',
-    activeCharacter: null,
     models: [],
     alwaysOnTop: true,
     charScale: 100,
@@ -65,8 +63,6 @@ test('graceful shutdown writes windowAnchor back to apia-settings.json', async (
 
   // Start with no anchor — first run.
   await writeFile(settingsPath, JSON.stringify({
-    activeModel: 'dummy',
-    activeCharacter: null,
     models: [],
     alwaysOnTop: true,
     charScale: 100,

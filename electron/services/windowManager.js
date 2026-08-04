@@ -109,7 +109,7 @@ class WindowManager {
   #main = null
   #settings = null
 
-  #saveSettings
+  #patchSettings
   #anchorDebounceTimer = null
 
   constructor({
@@ -122,7 +122,7 @@ class WindowManager {
     preloadPath,       // resolved absolute path to preload.js
     mainLogPath,       // for the startup-error HTML
     loadSettings,      // () => settings — used at main-window create time
-    saveSettings,      // (partial) => settings — used to persist windowAnchor
+    patchSettings,     // (partial) => settings — used to persist windowAnchor
     devURL = 'http://localhost:5173'
   }) {
     if (!BrowserWindow) throw new Error('WindowManager: BrowserWindow required')
@@ -132,7 +132,7 @@ class WindowManager {
     if (!preloadPath) throw new Error('WindowManager: preloadPath required')
     if (!mainLogPath) throw new Error('WindowManager: mainLogPath required')
     if (typeof loadSettings !== 'function') throw new Error('WindowManager: loadSettings required')
-    if (typeof saveSettings !== 'function') throw new Error('WindowManager: saveSettings required')
+    if (typeof patchSettings !== 'function') throw new Error('WindowManager: patchSettings required')
 
     this.#BrowserWindow = BrowserWindow
     this.#screen = screen
@@ -143,7 +143,7 @@ class WindowManager {
     this.#preloadPath = preloadPath
     this.#mainLogPath = mainLogPath
     this.#loadSettings = loadSettings
-    this.#saveSettings = saveSettings
+    this.#patchSettings = patchSettings
     this.#devURL = devURL
   }
 
@@ -200,9 +200,9 @@ class WindowManager {
     // display's workArea even after a small taskbar / DPI change.
     const anchor = workAreaCentre(bounds)
     if (!anchor) return
-    // 어느 모니터에도 속하지 않는 앵커는 저장하지 않는다. 창이 일시적으로
-    // 화면 밖 좌표에 놓인 순간(벽지모드 재부착 중 등)의 값을 그대로 적으면
-    // 다음 실행 때 복원 대상이 사라진 모니터를 가리켜 창이 안 보이게 된다.
+    // 어느 모니터에도 속하지 않는 앵커는 저장하지 않는다. patch()가 막는 건
+    // "옛 스냅샷이 앵커를 되살리는" 경로고, 여기서 막는 건 "벽지모드 재부착·
+    // 모니터 변경 중 일시적으로 화면 밖에 놓인 창의 좌표를 그대로 적는" 경로다.
     try {
       const displays = this.#screen.getAllDisplays()
       if (!displays.some((d) => workAreaContains(d?.workArea, anchor.x, anchor.y))) {
@@ -211,8 +211,7 @@ class WindowManager {
       }
     } catch {}
     try {
-      const current = this.#loadSettings()
-      this.#saveSettings({ ...current, windowAnchor: anchor })
+      this.#patchSettings({ windowAnchor: anchor })
     } catch (error) {
       this.#log.warn('[WINDOW_ANCHOR_SAVE_WARN]', error)
     }

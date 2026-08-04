@@ -32,9 +32,10 @@ const windowAnchorSchema = z.object({
   y: z.number().finite()
 }).nullable()
 
+// 활성 캐릭터는 character_registry.json의 activeCharacterId가 단일 출처다.
+// 옛 미러 키(activeModel/activeCharacter)는 스키마에서 제외 — settingsAggregate
+// .normalize()가 읽는 즉시 버린다.
 const SettingsSchema = z.object({
-  activeModel: z.string(),
-  activeCharacter: z.string().nullable(),
   models: z.array(z.unknown()),
   alwaysOnTop: z.boolean(),
   charScale: z.number().min(1).max(500),
