@@ -17,6 +17,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import path from 'node:path'
 
 // Discovery helpers are injected via the constructor's `discovery` option,
 // so no module-level mocking is needed. Tests build a fresh discovery bag
@@ -109,11 +110,38 @@ function createDefaultDiscovery() {
   }
 }
 
+/**
+ * In-memory fs stand-in for the pidfile IO. Injected into *every* instance so
+ * no test ever touches a real /tmp/userData/backend-data.
+ */
+function createFakeFs(initialFiles = {}) {
+  const files = new Map(Object.entries(initialFiles))
+  return {
+    files,
+    mkdirSync: vi.fn(),
+    existsSync: vi.fn((p) => files.has(String(p))),
+    readFileSync: vi.fn((p) => {
+      if (!files.has(String(p))) {
+        const error = new Error(`ENOENT: ${p}`)
+        error.code = 'ENOENT'
+        throw error
+      }
+      return files.get(String(p))
+    }),
+    writeFileSync: vi.fn((p, data) => { files.set(String(p), String(data)) }),
+    unlinkSync: vi.fn((p) => { files.delete(String(p)) })
+  }
+}
+
 function createBaseDeps(overrides = {}) {
   const log = createFakeLog()
   const spawn = vi.fn()
   const spawnSync = vi.fn()
   return {
+    fs: createFakeFs(),
+    // 기본은 "조회 결과 없음" = 채택 안 함(= 오늘 동작). 채택을 시험하는
+    // 테스트만 이걸 덮어쓴다.
+    queryCommandLine: vi.fn(() => null),
     configuredUrl: 'http://127.0.0.1:8000/',
     hasExplicitUrl: false,
     isDev: false,
@@ -800,5 +828,172 @@ describe('isE2EDisabled', () => {
     expect(new BackendLifecycle(onDeps).isE2EDisabled()).toBe(true)
     const offDeps = createBaseDeps({ env: {} })
     expect(new BackendLifecycle(offDeps).isE2EDisabled()).toBe(false)
+  })
+})
+
+// ── pidfile + 고아 백엔드 채택 ───────────────────────────────────────────
+//
+// 앱이 크래시로 죽으면 백엔드만 살아남는다. 다음 실행의 ensureRunning은
+// /health가 응답하니 스폰 없이 true로 빠지고, 예전엔 #startedByApp이 false로
+// 남아 restart()가 영영 'not-managed'였다(= 새 API 키가 적용 안 됨).
+// pidfile로 신원을 확인해 소유권을 되찾는 경로를 여기서 검증한다.
+
+const PID_FILE = path.join('/tmp/userData', 'backend-data', 'backend.pid.json')
+const ADOPTED_BACKEND = '/opt/apia/backend/.venv/bin/python'
+
+function pidRecord(overrides = {}) {
+  return JSON.stringify({
+    pid: 4242,
+    port: '8000',
+    backendPath: ADOPTED_BACKEND,
+    spawnTime: '2026-08-27T00:00:00.000Z',
+    ...overrides
+  })
+}
+
+describe('pidfile', () => {
+  it('writes {pid, port, backendPath, spawnTime} after a successful spawn', async () => {
+    const { http, https } = createFakeHttp([
+      { error: new Error('not yet') },
+      { status: 200 }
+    ])
+    const fs = createFakeFs()
+    const deps = createBaseDeps({ http, https, fs, platform: 'linux' })
+    deps.discovery.getBackendLaunchCandidates = vi.fn(() => [
+      { label: 'venv', command: ADOPTED_BACKEND, args: ['main.py'], cwd: '/opt/apia/backend' }
+    ])
+    deps.spawn.mockReturnValue(createFakeChild({ pid: 4242 }))
+
+    await new BackendLifecycle(deps).ensureRunning()
+
+    const written = JSON.parse(fs.files.get(PID_FILE))
+    expect(written.pid).toBe(4242)
+    expect(written.port).toBe('8000')
+    expect(written.backendPath).toBe(ADOPTED_BACKEND)
+    expect(typeof written.spawnTime).toBe('string')
+  })
+
+  it('removes the pidfile on stop', async () => {
+    const { http, https } = createFakeHttp([
+      { error: new Error('not yet') },
+      { status: 200 }
+    ])
+    const fs = createFakeFs()
+    const deps = createBaseDeps({ http, https, fs, platform: 'linux' })
+    deps.spawn.mockReturnValue(createFakeChild({ pid: 4242 }))
+    const backend = new BackendLifecycle(deps)
+    await backend.ensureRunning()
+    expect(fs.files.has(PID_FILE)).toBe(true)
+
+    backend.stop()
+    expect(fs.files.has(PID_FILE)).toBe(false)
+  })
+})
+
+describe('adoption (고아 백엔드 되찾기)', () => {
+  function adoptionDeps(overrides = {}) {
+    // /health가 계속 200 = 이미 떠 있는 백엔드.
+    const { http, https } = createFakeHttp([
+      { status: 200 }, { status: 200 }, { status: 200 }, { status: 200 }
+    ])
+    return createBaseDeps({
+      http,
+      https,
+      platform: 'win32',
+      fs: createFakeFs({ [PID_FILE]: pidRecord() }),
+      queryCommandLine: vi.fn(() => `"${ADOPTED_BACKEND}" main.py`),
+      ...overrides
+    })
+  }
+
+  it('채택 성공하면 restart가 not-managed 대신 실제 재시작을 한다', async () => {
+    const deps = adoptionDeps()
+    // restart 안쪽 ensureRunning은 skipHealthCheck라 스폰까지 간다.
+    deps.spawn.mockReturnValue(createFakeChild({ pid: 777 }))
+    const backend = new BackendLifecycle(deps)
+
+    expect(await backend.ensureRunning()).toBe(true)
+    expect(deps.spawn).not.toHaveBeenCalled()      // 살아 있으니 스폰 안 함
+    expect(backend.isStartedByApp()).toBe(true)    // 그래도 우리 것으로 인정
+    expect(deps.log.info).toHaveBeenCalledWith('[BACKEND_ADOPTED]', { pid: 4242, port: '8000' })
+
+    const result = await backend.restart()
+    expect(result).toEqual({ ok: true, started: true })
+    // 채택한 pid를 트리 킬한 뒤 새로 띄웠다.
+    expect(deps.spawnSync).toHaveBeenCalledWith(
+      'taskkill', ['/pid', '4242', '/T', '/F'], expect.any(Object)
+    )
+    expect(deps.spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('커맨드라인이 기록된 경로와 다르면 채택하지 않는다', async () => {
+    const deps = adoptionDeps({
+      queryCommandLine: vi.fn(() => 'C:\Windows\System32\notepad.exe')
+    })
+    const backend = new BackendLifecycle(deps)
+    expect(await backend.ensureRunning()).toBe(true)
+    expect(backend.isStartedByApp()).toBe(false)
+    expect(await backend.restart()).toEqual({ ok: false, skipped: 'not-managed' })
+    expect(deps.spawnSync).not.toHaveBeenCalled()  // 남의 프로세스를 죽이지 않는다
+  })
+
+  it('pid가 죽어 있으면(조회 결과 없음) 채택하지 않고 낡은 기록을 지운다', async () => {
+    const deps = adoptionDeps({ queryCommandLine: vi.fn(() => null) })
+    const backend = new BackendLifecycle(deps)
+    await backend.ensureRunning()
+    expect(backend.isStartedByApp()).toBe(false)
+    expect(deps.log.warn).toHaveBeenCalledWith('[BACKEND_ADOPT_SKIP]', {
+      reason: 'pid-not-alive', pid: 4242
+    })
+    // 다시 채택될 일이 없는 기록 — 남겨두면 실행할 때마다 같은 조회·경고를 반복한다.
+    expect(deps.fs.files.has(PID_FILE)).toBe(false)
+    await backend.ensureRunning()
+    expect(deps.queryCommandLine).toHaveBeenCalledTimes(1) // 두 번째엔 조회조차 안 함
+  })
+
+  it('기록된 포트가 현재 URL과 다르면 커맨드라인 조회조차 하지 않는다', async () => {
+    const deps = adoptionDeps({
+      fs: createFakeFs({ [PID_FILE]: pidRecord({ port: '9999' }) })
+    })
+    const backend = new BackendLifecycle(deps)
+    await backend.ensureRunning()
+    expect(backend.isStartedByApp()).toBe(false)
+    expect(deps.queryCommandLine).not.toHaveBeenCalled()
+    expect(deps.log.warn).toHaveBeenCalledWith('[BACKEND_ADOPT_SKIP]', {
+      reason: 'port-mismatch', recorded: '9999'
+    })
+  })
+
+  it('채택한 백엔드의 stop()은 자식 핸들 없이 pid로 죽이고 pidfile을 지운다', async () => {
+    const deps = adoptionDeps()
+    const backend = new BackendLifecycle(deps)
+    await backend.ensureRunning()
+
+    backend.stop()
+    expect(deps.spawnSync).toHaveBeenCalledWith(
+      'taskkill', ['/pid', '4242', '/T', '/F'], expect.any(Object)
+    )
+    expect(deps.fs.files.has(PID_FILE)).toBe(false)
+    expect(backend.isStartedByApp()).toBe(false)
+  })
+
+  it('채택 후 그 pid가 남의 프로세스로 바뀌었으면 죽이지 않는다', async () => {
+    // 채택한 백엔드엔 exit 리스너가 없다 — 채택과 stop 사이에 조용히 죽고 OS가
+    // pid를 재사용시켰을 수 있다. 죽이기 직전 신원 재확인이 없으면 taskkill이
+    // 애먼 프로세스를 날린다.
+    const deps = adoptionDeps({
+      queryCommandLine: vi.fn()
+        .mockReturnValueOnce(`"${ADOPTED_BACKEND}" main.py`)   // 채택 시점: 우리 것
+        .mockReturnValue('C:\\Windows\\System32\\notepad.exe')  // stop 시점: 남의 것
+    })
+    const backend = new BackendLifecycle(deps)
+    await backend.ensureRunning()
+    expect(backend.isStartedByApp()).toBe(true)
+
+    backend.stop()
+    expect(deps.spawnSync).not.toHaveBeenCalled()   // 죽이지 않았다
+    expect(deps.log.warn).toHaveBeenCalledWith('[BACKEND_STOP_STALE_PID]', { pid: 4242 })
+    expect(deps.fs.files.has(PID_FILE)).toBe(false) // 낡은 기록은 정리
+    expect(backend.isStartedByApp()).toBe(false)
   })
 })

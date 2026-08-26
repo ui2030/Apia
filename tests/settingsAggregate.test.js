@@ -210,6 +210,60 @@ describe('normalize', () => {
   })
 })
 
+// 스키마가 문서를 통째로 거부해도 필드 하나 때문에 나머지를 다 잃으면 안 된다.
+// load()는 안 쓰지만 patch()가 `{...load(), ...partial}`을 저장하므로, 사용자가
+// 설정을 한 번 만지는 순간 그 손실이 디스크에 확정된다.
+describe('schema-fail per-field salvage', () => {
+  // memoryTurns 10.5는 범위 보정(1~50)을 통과하고 z.number().int()에서만 걸린다
+  // — 실제로 도달 가능한 유일한 계열의 실패 케이스.
+  const poisoned = {
+    memoryTurns: 10.5,
+    aiMode: 'groq',
+    charScale: 137,
+    voiceId: 'ko-KR-Some-Voice',
+    windowAnchor: { x: 12, y: 34 },
+    myFutureKey: { nested: true },
+    activeModel: 'legacy-mirror',
+    activeCharacter: 'legacy-mirror'
+  }
+
+  it('defaults only the poisoned field and keeps everything else', () => {
+    const repo = createRepo()
+    const out = repo.normalize(poisoned)
+
+    expect(out.memoryTurns).toBe(SETTINGS_DEFAULTS.memoryTurns) // 유일한 손실
+    expect(out.aiMode).toBe('groq')
+    expect(out.charScale).toBe(137)
+    expect(out.voiceId).toBe('ko-KR-Some-Voice')
+    expect(out.windowAnchor).toEqual({ x: 12, y: 34 })
+  })
+
+  it('preserves unknown (passthrough) keys and still drops the legacy mirrors', () => {
+    const out = createRepo().normalize(poisoned)
+    expect(out.myFutureKey).toEqual({ nested: true })
+    expect('activeModel' in out).toBe(false)
+    expect('activeCharacter' in out).toBe(false)
+  })
+
+  it('logs [SETTINGS_SCHEMA_FAIL] with the dropped field list', () => {
+    createRepo().normalize(poisoned)
+    expect(log.warn).toHaveBeenCalledWith('[SETTINGS_SCHEMA_FAIL]', expect.objectContaining({
+      dropped: ['memoryTurns']
+    }))
+  })
+
+  it('patch() no longer persists the whole-document loss', () => {
+    const repo = createRepo()
+    repo.save(poisoned)          // 저장 시점에 이미 salvage된 문서가 디스크로
+    repo.patch({ charScale: 90 })
+    const reloaded = repo.load()
+    expect(reloaded.charScale).toBe(90)
+    expect(reloaded.aiMode).toBe('groq')            // 예전엔 'auto'로 되돌아갔다
+    expect(reloaded.voiceId).toBe('ko-KR-Some-Voice')
+    expect(reloaded.myFutureKey).toEqual({ nested: true })
+  })
+})
+
 describe('load / save roundtrip', () => {
   it('returns defaults when the file does not exist', () => {
     const repo = createRepo()

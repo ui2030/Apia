@@ -967,8 +967,11 @@ function makeImportedCharacterCard(character, active) {
   const selectBtn = d.querySelector('[data-action="select"]')
   if (selectBtn) {
     selectBtn.addEventListener('click', async () => {
-      await selectImportedCharacter(character.id)
-      showToast(`${character.displayName || character.id} 적용됨`, 'info', 2000)
+      // 실패해도 "적용됨"이 뜨던 거짓 성공 토스트 제거 — 실패 토스트는
+      // selectImportedCharacter가 이미 띄운다.
+      if (await selectImportedCharacter(character.id)) {
+        showToast(`${character.displayName || character.id} 적용됨`, 'info', 2000)
+      }
     })
   }
 
@@ -980,7 +983,9 @@ function makeImportedCharacterCard(character, active) {
 
       try {
         if (typeof window.api.deleteCharacter === 'function') {
-          await window.api.deleteCharacter(character.id)
+          // 핸들러는 이제 throw 대신 {ok:false, error}로도 실패를 알린다.
+          const result = await window.api.deleteCharacter(character.id)
+          if (result && result.ok === false) throw new Error(result.error || '알 수 없는 오류')
         } else {
           // API가 아직 없으면 로컬 목록에서만 제거
           importedCharacters = importedCharacters.filter(c => c.id !== character.id)
@@ -1008,29 +1013,41 @@ function getModelIcon(type) {
 async function selectBuiltin() {
   // 레지스트리의 활성 캐릭터를 비운다 — 여기를 안 비우면 메인 창이 계속
   // 이전 캐릭터를 로드해, 설정에는 내장 캐릭터가 "적용 중"인데 화면에는 다른
-  // 모델이 떠 있는 상태가 된다.
-  registryActiveId = null
+  // 모델이 떠 있는 상태가 된다. **성공한 뒤에** 비운다 — 먼저 비우면 실패 시
+  // UI만 내장 캐릭터로 바뀌고 레지스트리는 그대로라 화면과 갈라진다.
   if (typeof window.api.setActiveCharacter === 'function') {
     try {
-      await window.api.setActiveCharacter('dummy')
+      const result = await window.api.setActiveCharacter('dummy')
+      if (result && result.ok === false) throw new Error(result.error || '알 수 없는 오류')
+      registryActiveId = null
     } catch (err) {
-      console.warn('[Settings] setActiveCharacter(dummy) 실패:', err)
+      showToast('기본 캐릭터 적용 실패: ' + (err?.message || err), 'error', 4000)
+      renderModels()
+      return
     }
+  } else {
+    registryActiveId = null
   }
   renderModels()
 }
 
+// 성공 여부를 돌려준다 — 호출자가 "적용됨" 토스트를 성공했을 때만 띄운다.
 async function selectImportedCharacter(characterId) {
+  let ok = true
   if (typeof window.api.setActiveCharacter === 'function') {
     try {
-      await window.api.setActiveCharacter(characterId)
+      const result = await window.api.setActiveCharacter(characterId)
+      // 핸들러가 reject 대신 {ok:false}로 돌아오는 경로도 실패로 센다.
+      if (result && result.ok === false) throw new Error(result.error || '알 수 없는 오류')
       registryActiveId = characterId
     } catch (err) {
-      console.warn('[Settings] setActiveCharacter 실패:', err)
+      ok = false
+      showToast('캐릭터 적용 실패: ' + (err?.message || err), 'error', 4000)
     }
   }
 
   renderModels()
+  return ok
 }
 
 function bindImportEvents() {

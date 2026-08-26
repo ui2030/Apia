@@ -55,16 +55,27 @@ function registerCharacterIpc({ mainWindowRef, settingsWindowRef, loadSettings }
   })
 
   ipcMain.handle('characters:setActive', async (e, { characterId }) => {
-    const result = registryService.setActiveCharacter(characterId)
+    // 서비스가 실제로 throw한다(없는 캐릭터 id). 여기서 안 잡으면 renderer의
+    // invoke가 reject되고, 설정 UI는 이미 낙관적으로 바꿔 놓은 상태와 갈라진다.
+    let result
+    try {
+      result = registryService.setActiveCharacter(characterId)
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) }
+    }
 
     // 활성 캐릭터는 레지스트리가 단일 출처 — settings에 미러하지 않는다.
     // settings-applied는 렌더러가 레지스트리를 다시 읽게 하는 신호로만 쓴다.
+    // 입력 id를 그대로 되쏘지 않는다 — 'dummy'는 서비스가 null(내장 캐릭터)로
+    // 정규화하므로, 에코하면 브로드캐스트만 레지스트리와 다른 값을 들고 간다.
+    const activeId = result.activeCharacterId
+
     const live = mainWindow()
     live?.webContents.send('settings-applied', loadSettings())
-    live?.webContents.send('character-changed', { characterId })
+    live?.webContents.send('character-changed', { characterId: activeId })
 
     const settingsWindow = settingsWindowRef?.()
-    settingsWindow?.webContents.send('character-changed', { characterId })
+    settingsWindow?.webContents.send('character-changed', { characterId: activeId })
 
     return result
   })
@@ -82,11 +93,19 @@ function registerCharacterIpc({ mainWindowRef, settingsWindowRef, loadSettings }
 
   ipcMain.handle('characters:delete', async (e, { characterId }) => {
     // 활성 포인터 재조정은 registryService.deleteCharacter 안에서 끝난다.
-    const result = registryService.deleteCharacter(characterId)
+    let result
+    try {
+      result = registryService.deleteCharacter(characterId)
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error) }
+    }
 
     const live = mainWindow()
     live?.webContents.send('settings-applied', loadSettings())
-    live?.webContents.send('character-changed', { characterId: null })
+    // 삭제한 게 활성 캐릭터였다면 서비스가 남은 첫 캐릭터로 활성 포인터를 옮긴다.
+    // 예전엔 여기서 null을 하드코딩해 보내서, 메인 창은 내장 캐릭터로 폴백하는데
+    // 레지스트리는 다른 캐릭터를 활성으로 들고 있는 갈라짐이 났다.
+    live?.webContents.send('character-changed', { characterId: result.activeCharacterId })
 
     return result
   })

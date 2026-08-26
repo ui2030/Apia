@@ -179,10 +179,39 @@ class SettingsRepository {
 
     const parsed = SettingsSchema.safeParse(settings)
     if (!parsed.success) {
-      this.#log.warn('[SETTINGS_SCHEMA_FAIL]', parsed.error.issues)
-      return { ...SETTINGS_DEFAULTS }
+      return this.#salvage(settings, parsed.error.issues)
     }
     return parsed.data
+  }
+
+  /**
+   * 스키마가 문서를 통째로 거부했을 때, 필드 단위로 살릴 수 있는 건 살린다.
+   *
+   * 예전엔 defaults를 통째로 돌려줬다. load()는 쓰지 않으니 그 자체론 조용하지만,
+   * 사용자가 설정을 한 번이라도 만지면 patch()가 `{...load(), ...partial}`을
+   * 저장하면서 그 손실을 디스크에 확정시킨다 — 필드 하나가 깨졌다고 API 키·앵커·
+   * 목소리까지 날아간다. 필드별로 다시 검증해서 통과하는 값은 그대로 둔다.
+   */
+  #salvage(settings, issues) {
+    const salvaged = { ...SETTINGS_DEFAULTS }
+    const dropped = []
+
+    for (const [key, fieldSchema] of Object.entries(SettingsSchema.shape)) {
+      if (!(key in settings)) continue
+      if (fieldSchema.safeParse(settings[key]).success) salvaged[key] = settings[key]
+      else dropped.push(key)
+    }
+
+    // passthrough로 들어온 미지의 키는 스키마가 검사하지 않으므로 그대로 보존한다.
+    // 단 legacy 미러(activeModel/activeCharacter)는 위에서 이미 delete됐고, 여기서도
+    // 되살아나면 안 된다 — settings 객체에 없으니 자연히 빠진다.
+    for (const key of Object.keys(settings)) {
+      if (key in SettingsSchema.shape) continue
+      salvaged[key] = settings[key]
+    }
+
+    this.#log.warn('[SETTINGS_SCHEMA_FAIL]', { dropped, issues })
+    return salvaged
   }
 
   load() {

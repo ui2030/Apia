@@ -173,3 +173,46 @@ describe('setActiveCharacter — 내장 캐릭터로 되돌리기', () => {
     expect(registryService.readRegistry().activeCharacterId).toBe('c1')
   })
 })
+
+// 삭제가 활성 포인터를 어디로 옮겼는지 반환값이 알려줘야 한다. IPC가 예전엔
+// characterId:null을 하드코딩해서 브로드캐스트했고, 남은 캐릭터로 재바인딩된
+// 레지스트리와 갈라졌다(설정은 A가 활성인데 메인 창은 내장 캐릭터).
+describe('deleteCharacter — 삭제 후 활성 캐릭터 반환', () => {
+  it('활성 캐릭터를 지우면 남은 첫 캐릭터 id를 함께 돌려준다', async () => {
+    await writeFile(registryPath(), JSON.stringify({
+      version: 2,
+      activeCharacterId: 'c1',
+      characters: [validEntry('c1'), validEntry('c2')]
+    }), 'utf-8')
+
+    const result = registryService.deleteCharacter('c1')
+    expect(result).toEqual({ ok: true, deletedId: 'c1', activeCharacterId: 'c2' })
+    expect(registryService.readRegistry().activeCharacterId).toBe('c2')
+  })
+
+  it('마지막 캐릭터를 지우면 activeCharacterId는 null', async () => {
+    await writeFile(registryPath(), JSON.stringify({
+      version: 2,
+      activeCharacterId: 'c1',
+      characters: [validEntry('c1')]
+    }), 'utf-8')
+
+    expect(registryService.deleteCharacter('c1')).toEqual({
+      ok: true, deletedId: 'c1', activeCharacterId: null
+    })
+  })
+
+  it('비활성 캐릭터를 지우면 활성 포인터는 그대로', async () => {
+    await writeFile(registryPath(), JSON.stringify({
+      version: 2,
+      activeCharacterId: 'c1',
+      characters: [validEntry('c1'), validEntry('c2')]
+    }), 'utf-8')
+
+    expect(registryService.deleteCharacter('c2').activeCharacterId).toBe('c1')
+  })
+
+  it('없는 id는 throw (IPC가 잡아서 {ok:false}로 바꾼다)', () => {
+    expect(() => registryService.deleteCharacter('nope')).toThrow(/not found/i)
+  })
+})

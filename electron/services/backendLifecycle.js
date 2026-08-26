@@ -41,6 +41,26 @@ const DEFAULT_READY_TIMEOUT_MS = 20000
 const DEFAULT_READY_INTERVAL_MS = 500
 const DEFAULT_PROBE_TIMEOUT_MS = 8000
 
+// 이전 실행이 남긴 고아 백엔드를 다시 우리 것으로 인정(adoption)하기 위한 기록.
+// DATA_DIR에 둔다 — 백엔드가 이미 쓰는 디렉터리라 새 경로 규약이 늘지 않는다.
+const PID_FILE_NAME = 'backend.pid.json'
+
+/**
+ * 살아 있는 프로세스의 커맨드라인에 실제로 찍히는 절대 경로 하나를 고른다.
+ * 채택 시 "그때 그 백엔드가 맞는가"를 이 문자열 포함 여부로 판별한다.
+ *
+ * ponytail: `py -3 main.py`처럼 커맨드가 상대 런처인 후보는 커맨드라인에
+ * 절대 경로가 안 찍혀 채택에 실패한다(=오늘과 같은 not-managed로 후퇴).
+ * 실제 운영 경로인 venv/packaged 후보는 command가 절대라 커버된다. 느슨하게
+ * 매칭하느니 못 잡는 편이 낫다 — PID가 재사용된 남의 프로세스를 taskkill하는
+ * 것이 훨씬 나쁜 실패다.
+ */
+function resolveBackendPath(candidate) {
+  if (path.isAbsolute(candidate.command)) return candidate.command
+  const script = candidate.args?.[candidate.args.length - 1]
+  return script ? path.resolve(candidate.cwd || '.', script) : candidate.command
+}
+
 class BackendLifecycle {
   // Private state — anything callers want must be exposed via a method, so
   // the lifetime invariants ("process handle nulls itself when the child
@@ -60,8 +80,15 @@ class BackendLifecycle {
   #spawnSync
   #http
   #https
+  #fs
+  #queryCommandLine
 
   #process = null
+  // 채택한(이전 실행이 남긴) 백엔드의 PID. #process가 null이어도 stop()이
+  // 이 pid로 죽일 수 있어야 restart가 실제로 재시작이 된다. 죽일 때 신원을
+  // 다시 확인해야 하므로 pidfile 레코드도 함께 들고 있는다.
+  #ownedPid = null
+  #ownedRecord = null
   #startedByApp = false
   #ensurePromise = null
   #lastLaunchAt = 0
@@ -84,6 +111,10 @@ class BackendLifecycle {
     spawnSync = spawnSyncDefault,
     http = httpDefault,
     https = httpsDefault,
+    // pidfile IO + 프로세스 커맨드라인 조회도 주입 — 테스트가 실제 디스크나
+    // 실제 프로세스 조회 없이 채택 경로를 통째로 돌릴 수 있어야 한다.
+    fs: fsDep = fs,
+    queryCommandLine = null,
     // Discovery helpers are injected as a single bag so tests can swap
     // them without monkey-patching the require cache. Default is the
     // real backendDiscovery module — production code never passes this.
@@ -110,6 +141,8 @@ class BackendLifecycle {
     this.#spawnSync = spawnSync
     this.#http = http
     this.#https = https
+    this.#fs = fsDep
+    this.#queryCommandLine = queryCommandLine || ((pid) => this.#defaultQueryCommandLine(pid))
 
     this.#url = trimTrailingSlashes(configuredUrl) || DEFAULT_BACKEND_URL
     this.#discovery = discovery
@@ -156,6 +189,136 @@ class BackendLifecycle {
   // process.env (the source of truth lives in the lifecycle constructor).
   isE2EDisabled() {
     return this.#e2eDisable
+  }
+
+  // ── Pidfile + 고아 백엔드 채택 ──────────────────────────────────────────
+  //
+  // 문제: 앱이 크래시로 죽으면 백엔드만 살아남는다. 다음 실행에서 /health가
+  // 응답하므로 ensureRunning은 스폰 없이 true로 빠지고, #startedByApp이 false로
+  // 남아 restart()가 'not-managed'를 돌려준다 → 설정 창은 "외부 백엔드"라고
+  // 안내하고 새 API 키는 영영 적용되지 않는다.
+  //
+  // 해결: 스폰할 때 pid/port/절대경로를 파일로 남기고, 다음 실행에서 신원
+  // 3중 확인(pid 생존 + 커맨드라인에 그 절대경로 포함 + 포트 일치)이 전부
+  // 맞을 때만 소유권을 되찾는다. 하나라도 어긋나면 오늘과 같은 동작(채택 안 함).
+
+  #pidFilePath() {
+    if (!this.#userDataPath) return null
+    try {
+      return path.join(this.getSpawnConfig().dataDir, PID_FILE_NAME)
+    } catch {
+      return null
+    }
+  }
+
+  #writePidFile(pid, candidate) {
+    const target = this.#pidFilePath()
+    if (!target || !pid) return
+    try {
+      this.#fs.mkdirSync(path.dirname(target), { recursive: true })
+      this.#fs.writeFileSync(target, JSON.stringify({
+        pid,
+        port: this.getSpawnConfig().port,
+        backendPath: resolveBackendPath(candidate),
+        spawnTime: new Date().toISOString()
+      }, null, 2), 'utf-8')
+    } catch (error) {
+      this.#log.warn('[BACKEND_PIDFILE_WRITE_FAIL]', error?.message || error)
+    }
+  }
+
+  #deletePidFile() {
+    const target = this.#pidFilePath()
+    if (!target) return
+    try {
+      if (this.#fs.existsSync(target)) this.#fs.unlinkSync(target)
+    } catch (error) {
+      this.#log.warn('[BACKEND_PIDFILE_DELETE_FAIL]', error?.message || error)
+    }
+  }
+
+  #readPidFile() {
+    const target = this.#pidFilePath()
+    if (!target) return null
+    try {
+      if (!this.#fs.existsSync(target)) return null
+      const record = JSON.parse(this.#fs.readFileSync(target, 'utf-8'))
+      const pid = Number(record?.pid)
+      if (!Number.isInteger(pid) || pid <= 0) return null
+      if (!record?.backendPath) return null
+      return { ...record, pid }
+    } catch (error) {
+      this.#log.warn('[BACKEND_PIDFILE_READ_FAIL]', error?.message || error)
+      return null
+    }
+  }
+
+  #defaultQueryCommandLine(pid) {
+    try {
+      // Number()로 한 번 걸러서 pid가 셸/PowerShell 문자열에 그대로 끼어드는 걸 막는다.
+      const safePid = Number(pid)
+      if (!Number.isInteger(safePid) || safePid <= 0) return null
+      const result = this.#platform === 'win32'
+        ? this.#spawnSync('powershell', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${safePid}"; if ($p) { $p.CommandLine }`
+          ], { windowsHide: true, encoding: 'utf-8', timeout: 5000 })
+        : this.#spawnSync('ps', ['-p', String(safePid), '-o', 'args='], {
+            encoding: 'utf-8',
+            timeout: 5000
+          })
+      // 죽은 pid면 ps는 status!=0, PowerShell은 빈 출력 — 둘 다 null로 수렴.
+      if (!result || result.status !== 0) return null
+      const out = String(result.stdout || '').trim()
+      return out || null
+    } catch (error) {
+      this.#log.warn('[BACKEND_PID_QUERY_FAIL]', error?.message || error)
+      return null
+    }
+  }
+
+  /**
+   * 기록된 pid가 "그때 그 백엔드"로 아직 살아 있는가. 채택할 때와 죽일 때
+   * **같은 판정**을 쓴다 — 그 사이에 프로세스가 죽고 OS가 pid를 남에게
+   * 재사용시켰을 수 있고, 그 상태로 taskkill하면 애먼 프로세스를 죽인다.
+   * @returns 'ok' | 'pid-not-alive' | 'identity-mismatch'
+   */
+  #pidIdentity(record) {
+    const commandLine = this.#queryCommandLine(record.pid)
+    if (!commandLine) return 'pid-not-alive'
+    // 경로 비교는 소문자로 — Windows 파일시스템이 대소문자를 구분하지 않는다.
+    return commandLine.toLowerCase().includes(String(record.backendPath).toLowerCase())
+      ? 'ok'
+      : 'identity-mismatch'
+  }
+
+  #tryAdoptExisting() {
+    if (this.#startedByApp || this.#e2eDisable) return false
+    const record = this.#readPidFile()
+    if (!record) return false
+
+    // 채택에 실패한 기록은 지운다. 죽었거나(pid-not-alive), 남에게 넘어갔거나
+    // (identity-mismatch), 지금 설정으로는 무의미한(port-mismatch) 기록이라
+    // 나중에 다시 채택될 일이 없다 — 안 지우면 실행할 때마다 커맨드라인 조회
+    // (win32에선 PowerShell 스폰)를 되풀이하고 같은 경고만 쌓인다.
+    if (String(record.port) !== String(this.getSpawnConfig().port)) {
+      this.#log.warn('[BACKEND_ADOPT_SKIP]', { reason: 'port-mismatch', recorded: record.port })
+      this.#deletePidFile()
+      return false
+    }
+
+    const identity = this.#pidIdentity(record)
+    if (identity !== 'ok') {
+      this.#log.warn('[BACKEND_ADOPT_SKIP]', { reason: identity, pid: record.pid })
+      this.#deletePidFile()
+      return false
+    }
+
+    this.#ownedPid = record.pid
+    this.#ownedRecord = record
+    this.#startedByApp = true
+    this.#log.info('[BACKEND_ADOPTED]', { pid: record.pid, port: record.port })
+    return true
   }
 
   // ── URL discovery (port collision) ─────────────────────────────────────
@@ -241,9 +404,12 @@ class BackendLifecycle {
 
     child.on('exit', (code, signal) => {
       this.#log.warn('[BACKEND_EXIT]', { label, code, signal })
+      // `#process === child` 조건이 재시작 레이스도 막아준다 — stop()이 이미
+      // #process를 비운 뒤 새 자식을 스폰했다면 여기서 새 pidfile을 지우지 않는다.
       if (this.#process === child) {
         this.#process = null
         this.#startedByApp = false
+        this.#deletePidFile()
       }
     })
 
@@ -305,6 +471,9 @@ class BackendLifecycle {
 
     const ready = await this.#waitForReady()
     if (ready) {
+      // 준비된 뒤에만 기록한다 — 뜨다 만 프로세스의 pid를 남기면 다음 실행이
+      // 엉뚱한 것을 채택한다.
+      this.#writePidFile(child.pid, candidate)
       this.#log.info(`[BACKEND_READY] ${candidate.label}`, { url: this.#url })
       return true
     }
@@ -340,7 +509,12 @@ class BackendLifecycle {
     // can still answer /health for a few milliseconds while its socket
     // lingers — without this skip, restart would return ok:true without
     // spawning a replacement. Codex MUST-FIX.
-    if (!skipHealthCheck && await this.isHealthy()) return true
+    if (!skipHealthCheck && await this.isHealthy()) {
+      // 이미 살아 있다 = 우리가 띄운 것이거나, 이전 실행이 남긴 고아다.
+      // 후자를 여기서 되찾아야 restart()가 'not-managed'로 빠지지 않는다.
+      this.#tryAdoptExisting()
+      return true
+    }
     return this.#runEnsure({ force })
   }
 
@@ -399,6 +573,10 @@ class BackendLifecycle {
       }
     }
 
+    // pidfile이 뒤늦게 나타났을 수도 있으니(부팅 직후 백엔드가 먼저 뜬 경우 등)
+    // 포기 직전에 한 번 더 채택을 시도한다.
+    if (!this.#startedByApp) this.#tryAdoptExisting()
+
     if (!this.#startedByApp) {
       // Distinguish "we never managed this backend" from "we tried but the
       // last spawn failed". Codex NICE-TO-HAVE: the renderer can show a
@@ -427,10 +605,21 @@ class BackendLifecycle {
 
   stop() {
     const child = this.#process
-    if (!child) return
+    // 채택한 백엔드는 자식 핸들이 없다 — pid만으로 죽일 수 있어야 한다.
+    const ownedPid = this.#ownedPid
+    const ownedRecord = this.#ownedRecord
+
+    if (!child && !ownedPid) return
 
     this.#process = null
+    this.#ownedPid = null
+    this.#ownedRecord = null
     this.#startedByApp = false
+
+    if (!child) {
+      this.#stopAdopted(ownedPid, ownedRecord)
+      return
+    }
 
     try {
       // Windows tree-kill is REQUIRED for packaged PyInstaller backends —
@@ -462,6 +651,37 @@ class BackendLifecycle {
     } catch (error) {
       this.#log.warn('[BACKEND_STOP_WARN]', error)
     }
+    this.#deletePidFile()
+  }
+
+  // 핸들 없이 pid만 있는 경우(채택한 백엔드)의 종료 경로. 자식 핸들이 있을 때와
+  // 같은 이유로 Windows는 트리 킬이 필수다(패키지 백엔드가 손자 프로세스를 남긴다).
+  //
+  // 채택한 백엔드에는 exit 리스너가 없다 — 채택과 stop 사이에 그 프로세스가
+  // 조용히 죽고 OS가 pid를 남에게 물려줬을 수 있다. 죽이기 직전에 신원을 다시
+  // 확인한다. 어긋나면 안 죽이고 기록만 정리한다(남의 프로세스를 죽이는 것이
+  // 백엔드 하나 못 죽이는 것보다 훨씬 나쁜 실패다).
+  #stopAdopted(pid, record) {
+    if (!pid) return
+    if (record && this.#pidIdentity(record) !== 'ok') {
+      this.#log.warn('[BACKEND_STOP_STALE_PID]', { pid })
+      this.#deletePidFile()
+      return
+    }
+    try {
+      if (this.#platform === 'win32') {
+        this.#spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+          windowsHide: true,
+          stdio: 'ignore'
+        })
+      } else {
+        this.#spawnSync('kill', ['-TERM', String(pid)], { stdio: 'ignore' })
+      }
+      this.#log.info('[BACKEND_ADOPTED_STOP]', { pid })
+    } catch (error) {
+      this.#log.warn('[BACKEND_STOP_WARN]', error)
+    }
+    this.#deletePidFile()
   }
 }
 

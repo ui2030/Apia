@@ -294,7 +294,9 @@ function deleteCharacter(characterId) {
     }
   }
 
-  return { ok: true, deletedId: characterId }
+  // 활성 포인터가 어디로 옮겨갔는지 호출자(IPC 브로드캐스트)가 알아야 한다.
+  // 레지스트리가 비면 null.
+  return { ok: true, deletedId: characterId, activeCharacterId: registry.activeCharacterId }
 }
 
 module.exports = {

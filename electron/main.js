@@ -55,6 +55,7 @@ const {
 } = require('./services/backendDiscovery')
 const { BackendLifecycle } = require('./services/backendLifecycle')
 const { SettingsRepository } = require('./services/settingsAggregate')
+const { saveWorldDocument } = require('./services/worldStore')
 const { BackendEnvRepository } = require('./services/backendEnvRepository')
 const { WindowManager } = require('./services/windowManager')
 const wallpaperMode = require('./services/wallpaperMode')
@@ -859,8 +860,9 @@ ipcMain.handle('load-world', () => {
 })
 
 ipcMain.handle('save-world', (e, data) => {
-  fs.writeFileSync(WORLD_PATH, JSON.stringify(data, null, 2), { encoding: 'utf-8' })
-  return { ok: true }
+  // 검증 실패 시 기존 파일은 건드리지 않는다 — 반쪽짜리 세계로 덮어쓰느니
+  // 마지막으로 성공한 세계를 지키는 편이 낫다(렌더러가 result.ok를 본다).
+  return saveWorldDocument(WORLD_PATH, data, { warn: logWarn })
 })
 
 ipcMain.handle('get-settings', () => loadSettings())
@@ -1107,9 +1109,13 @@ function rewallpaperOnDisplayChange() {
   // Debounce — a single monitor change can fire metrics-changed several times
   // in a burst, and each re-attach spawns the sync Win32 helper (Codex
   // NICE-TO-HAVE). Coalesce to one detach + re-attach.
+  // 종료 중이면 재부착하지 않는다 — shutdownOnce가 분리를 기다리는 2초 동안
+  // 디스플레이 이벤트가 들어오면 방금 뗀 창을 다시 붙여 놓는다.
+  if (quittingApia) return
   if (rewallpaperTimer) clearTimeout(rewallpaperTimer)
   rewallpaperTimer = setTimeout(async () => {
     rewallpaperTimer = null
+    if (quittingApia) return
     const settings = loadSettings()
     if (settings.useWallpaperMode === false) return
     try {
@@ -1117,6 +1123,9 @@ function rewallpaperOnDisplayChange() {
       // Progman 자식이라 좌표가 부모 기준으로 해석된다.
       await wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
     } catch {}
+    // 분리를 기다리는 동안 종료가 시작됐을 수 있다. 여기서 안 막으면 shutdownOnce가
+    // 막 떼어낸 창을 이 함수가 다시 붙여 놓는다(다음 실행 모니터 튐의 재발 경로).
+    if (quittingApia) return
     // 재부착 완료까지 기다린 뒤 핫코너를 새 모니터로 옮긴다.
     await syncWallpaperMode()
     repositionCornerWindow()
@@ -1169,13 +1178,19 @@ app.on('web-contents-created', (event, contents) => {
     })
     try {
       contents.reload()
-      // Restore visibility only if the crash actually hid the window — avoids
-      // needlessly re-show()ing the wallpaper-attached main window.
-      if (wasVisible) {
-        contents.once('did-finish-load', () => {
-          if (!win.isDestroyed() && !win.isVisible()) win.show()
-        })
-      }
+      contents.once('did-finish-load', () => {
+        if (win.isDestroyed()) return
+        // Restore visibility only if the crash actually hid the window — avoids
+        // needlessly re-show()ing the wallpaper-attached main window.
+        if (wasVisible && !win.isVisible()) win.show()
+        // 리로드된 렌더러는 wallpaperOpaque=false 상태로 되살아나는데, 창은 여전히
+        // 벽지 레이어에 붙어 있다 → 투명하게 그려서 캐릭터가 영영 안 보인다.
+        // 헬스 프로브는 HWND 부모만 보므로 이 상태를 절대 못 잡는다. sync를 다시
+        // 돌려 opaque를 재전송한다(enableWallpaper는 이미 부착돼 있으면 no-op).
+        if (win === windows.getMain()) {
+          syncWallpaperMode().catch((error) => logWarn('[RECOVER_WALLPAPER_SYNC_FAIL]', error))
+        }
+      })
     } catch (error) {
       logError('[WEB_CONTENTS_RECOVER_FAIL]', error)
     }
@@ -1297,6 +1312,16 @@ function startPresenceFeed() {
         try { main.webContents.send('presence:event', { name }) } catch {}
       })
     } catch {}
+  }
+}
+
+// 종료 시 5초 폴링을 끊는다 — unref도 안 돼 있어서 창이 다 닫힌 뒤에도 살아
+// 있었다. powerMonitor 리스너는 프로세스와 함께 죽으므로 따로 떼지 않는다
+// (startPresenceFeed의 재진입 가드가 중복 등록도 막는다).
+function stopPresenceFeed() {
+  if (presencePollTimer) {
+    clearInterval(presencePollTimer)
+    presencePollTimer = null
   }
 }
 
@@ -1806,26 +1831,56 @@ ipcMain.handle('chat:toggle', () => {
   return { ok: true }
 })
 
+// ── 종료 경로 단일화 ────────────────────────────────────────────────────────
+//
+// 예전엔 quitApia()와 before-quit이 각자 정리(분리 + backend.stop)를 돌렸고,
+// 둘 다 disableWallpaper를 await하지 않았다. 분리는 Win32 헬퍼를 spawn하는
+// 비동기 작업이라, 프로세스가 먼저 죽으면 창이 Progman 자식인 채로 남아
+// 다음 실행에서 좌표가 부모(가상 데스크톱) 기준으로 해석돼 캐릭터가 엉뚱한
+// 모니터로 튀었다. 이제 두 경로가 같은 shutdownOnce()를 통과한다 — 이중 분리도,
+// 이중 backend.stop도 구조적으로 불가능하다.
+const SHUTDOWN_DETACH_TIMEOUT_MS = 2000
 let quittingApia = false
-function quitApia() {
-  if (quittingApia) return
+let shutdownPromise = null
+
+function shutdownOnce() {
+  if (shutdownPromise) return shutdownPromise
+  // 플래그부터 세운다 — 분리를 기다리는 2초 동안 디스플레이 이벤트가 들어와도
+  // 재부착하지 않도록(rewallpaperOnDisplayChange가 이 플래그를 본다).
   quittingApia = true
-  try {
-    wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
-  } catch (error) {
-    logWarn('[QUIT_DETACH_WARN]', error?.message || error)
-  }
-  try { globalShortcut.unregisterAll() } catch {}
-  try { tray?.destroy?.(); tray = null } catch {}
-  // Phase F2: destroy chatWindow on real quit so it doesn't keep the process
-  // alive after backend stop.
-  try {
-    if (chatWindow && !chatWindow.isDestroyed()) chatWindow.destroy()
-    chatWindow = null
-  } catch {}
-  try { destroyCornerWindow() } catch {}
-  if (backend.isStartedByApp()) backend.stop()
-  app.quit()
+  shutdownPromise = (async () => {
+    try { globalShortcut.unregisterAll() } catch {}
+    try { tray?.destroy?.(); tray = null } catch {}
+    if (rewallpaperTimer) { clearTimeout(rewallpaperTimer); rewallpaperTimer = null }
+    stopCursorFeed()
+    stopPresenceFeed()
+    stopWallpaperHealthCheck()
+    try { destroyCornerWindow() } catch {}
+    // Phase F2: destroy chatWindow on real quit so it doesn't keep the process
+    // alive after backend stop.
+    try {
+      if (chatWindow && !chatWindow.isDestroyed()) chatWindow.destroy()
+      chatWindow = null
+    } catch {}
+    // Drain the debounced anchor save before the window is gone — otherwise
+    // a quit during a drag loses the final position.
+    try { windows.flushPendingAnchor() } catch (error) { logWarn('[QUIT_ANCHOR_FLUSH_WARN]', error?.message || error) }
+    // 분리를 실제로 기다리되 상한을 둔다 — 헬퍼가 멈춰도 종료가 영원히 막히면 안 된다.
+    try {
+      await Promise.race([
+        wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn }),
+        new Promise((resolve) => setTimeout(resolve, SHUTDOWN_DETACH_TIMEOUT_MS))
+      ])
+    } catch (error) {
+      logWarn('[QUIT_DETACH_WARN]', error?.message || error)
+    }
+    if (backend.isStartedByApp()) backend.stop()
+  })()
+  return shutdownPromise
+}
+
+function quitApia() {
+  shutdownOnce().finally(() => app.quit())
 }
 
 app.on('window-all-closed', () => {
@@ -1845,26 +1900,16 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   logInfo('[BEFORE_QUIT]', { backendStartedByApp: backend.isStartedByApp() })
   // H단계 — quit이 quitApia()가 아닌 경로(OS 종료, E2E의 app.close())로
   // 시작되면 chatWindow의 close 핸들러가 preventDefault로 종료를 영원히
-  // 막는다. before-quit에서 플래그를 세워 "진짜 종료"임을 알린다.
-  quittingApia = true
-  stopCursorFeed()
-  destroyCornerWindow()
-  stopWallpaperHealthCheck()
-  try {
-    wallpaperMode.disableWallpaper(windows.getMain(), { info: logInfo, warn: logWarn })
-  } catch (error) {
-    logWarn('[BEFORE_QUIT_DETACH_WARN]', error?.message || error)
-  }
-  // Drain the debounced anchor save before the window is gone — otherwise
-  // a quit during a drag loses the final position.
-  windows.flushPendingAnchor()
-  if (backend.isStartedByApp()) {
-    backend.stop()
-  }
+  // 막는다. shutdownOnce()가 플래그를 세워 "진짜 종료"임을 알린다.
+  //
+  // 종료를 한 번 붙잡아 두고(정리는 비동기다) 끝난 뒤 exit한다. preventDefault
+  // 없이 두면 벽지 분리 헬퍼가 끝나기 전에 프로세스가 사라진다.
+  event.preventDefault()
+  shutdownOnce().finally(() => app.exit(0))
 })
 
 app.on('will-quit', () => {
