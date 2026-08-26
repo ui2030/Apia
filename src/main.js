@@ -82,7 +82,8 @@ import {
   playFBXAnimation as playFBXAnimationRaw,
   clearVRMFadeHandlers,
   clearVMDFadeHandlers,
-  releaseActiveClips
+  releaseActiveClips,
+  clearClipCache
 } from './animationRuntime.js'
 
 // Stable ctx passed to every animation call. Per codex review: don't rebuild
@@ -207,9 +208,22 @@ function playMotion(motion) {
       // Step 5 of /goal — VRMA clips also need the clipMask treatment so
       // the procedural arm/torso layers don't fight the mixer's clip track.
       if (currentModel) currentModel._vrmaClipActive = true
+      // 실패 정리 — VMD 경로와 같은 구멍이었다(Codex 사후검토). playVRMAnimation은
+      // 로드 실패·race 추월·gltf에 vrmAnimations 없음 전부 reject가 아니라 null
+      // resolve라, .catch만 걸어두면 optimistic 플래그가 영구히 남아 호흡/제스처
+      // 같은 절차 레이어가 다음 성공 클립까지 죽어버린다.
+      // 가드는 VMD와 동일: 모델 참조 + per-model 토큰으로 "그 사이 새 재생/모델
+      // 교체가 있었으면 손대지 않음"(추월 null은 새 재생이 이미 자기 상태를 세팅).
+      const playModel = currentModel
+      const playToken = playModel ? (playModel._vrmaPlaySeq = (playModel._vrmaPlaySeq || 0) + 1) : 0
+      const cleanupFailedPlay = () => {
+        if (!playModel || playModel !== currentModel || playModel._vrmaPlaySeq !== playToken) return
+        playModel._vrmaClipActive = false
+      }
       playVRMAnimation(asset.url, { loop: asset.loop, fadeIn: asset.fadeIn })
+        .then((action) => { if (!action) cleanupFailedPlay() })
         .catch((err) => {
-          if (currentModel) currentModel._vrmaClipActive = false
+          cleanupFailedPlay()
           console.warn('[playMotion] vrma clip failed', motion.name, err)
         })
     }
@@ -1644,6 +1658,9 @@ function clearModel() {
   // 모델 교체 시 렌더러의 렌더리스트 캐시도 비워 구 모델 참조가 남지 않게(Codex).
   renderer.renderLists?.dispose?.()
 
+  // VMD 클립 캐시는 본 이름에 묶여 있다 — 다음 모델에 물려주면 안 된다.
+  clearClipCache()
+
   // Step 2 of /goal: bone cache is gone — poseRig (per-model registry)
   // owns role resolution now.
   currentModel = null
@@ -2218,10 +2235,12 @@ window.__setLightingHour = (h, immediate = true) =>
 window.__setWallpaperOpaque = (on) => { try { _sceneRuntime.setWallpaperOpaque?.(on === true) } catch {} return true }
 // 후처리 킬스위치/튜닝 — 알파나 성능이 현장에서 문제면 끌 수 있게.
 window.__setPostFx = (on) => { _sceneRuntime.postFx?.setEnabled(on); return _sceneRuntime.postFx?.isEnabled() ?? null }
-window.__tunePostFx = ({ bloom, vignette, ao } = {}) => {
+window.__tunePostFx = ({ bloom, vignette, ao, aoScale } = {}) => {
   if (bloom) _sceneRuntime.postFx?.setBloom(bloom)
   if (vignette !== undefined) _sceneRuntime.postFx?.setVignette(vignette)
   if (ao) _sceneRuntime.postFx?.setAo(ao)
+  // aoScale: GTAO 렌더 해상도 배율(기본 0.5). 화질/성능 저울질을 현장에서.
+  if (aoScale !== undefined) _sceneRuntime.postFx?.setAoScale(aoScale)
   return true
 }
 

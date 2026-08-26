@@ -1,6 +1,7 @@
 // src/chatShared.js — tiny pure helpers shared by both chat surfaces
 // (chatRenderer.js = wallpaper window, chat.js = overlay). Pure functions only
-// (no DOM, no window.api) so they unit-test under vitest's node environment.
+// (no window.api) so they unit-test under vitest's node environment. The one
+// DOM toucher (pollWhileVisible) takes `document` as an injectable argument.
 
 // Map a raw backend/IPC error string to a short Korean user message. Kept in
 // one place so both surfaces phrase timeouts / network / backend-down the same.
@@ -92,4 +93,28 @@ export function parseSfx(raw) {
     return ''
   }).replace(/\s{2,}/g, ' ').trim()
   return { text, sfx }
+}
+
+// 보이는 동안에만 도는 폴링. 채팅 창은 닫아도 파괴가 아니라 hide라서(재열기를
+// 즉시로 만드는 의도된 설계) 그냥 두면 안 보이는 창이 5초마다 백엔드를 계속
+// 두드린다. document.hidden을 따라 인터벌을 끊고, 다시 보일 때 즉시 1회 실행
+// 후 재개한다.
+//
+// start/stop은 양방향 멱등이다 — visibilitychange가 연달아 와도 인터벌이 쌓이지
+// 않고, 이미 멈춘 상태에서 stop이 또 와도 무해하다.
+export function pollWhileVisible(fn, intervalMs, doc = globalThis.document) {
+  let id = null
+  const start = () => {
+    if (id !== null) return
+    id = setInterval(fn, intervalMs)
+    fn() // 재개 즉시 1회 — 숨어 있는 동안 놓친 상태를 바로 따라잡는다
+  }
+  const stop = () => {
+    if (id === null) return
+    clearInterval(id)
+    id = null
+  }
+  doc?.addEventListener?.('visibilitychange', () => (doc.hidden ? stop() : start()))
+  if (!doc?.hidden) start()
+  return { stop, isRunning: () => id !== null }
 }

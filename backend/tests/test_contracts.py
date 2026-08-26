@@ -61,7 +61,7 @@ def test_voices_response_shape(client, patched_voice):
     VoicesResponse.model_validate(data)
 
 
-def test_warmup_post_ready_shape(client, patched_voice, patched_stt, fake_claude):
+def test_warmup_post_ready_shape(client, patched_voice, fake_claude):
     # fake_claude has is_mode_initialized → True by default, so POST short-circuits
     # to the "ready" branch.
     fake_claude.is_mode_initialized.return_value = True
@@ -72,7 +72,7 @@ def test_warmup_post_ready_shape(client, patched_voice, patched_stt, fake_claude
     WarmupReadyResponse.model_validate(data)
 
 
-def test_warmup_post_warming_shape(client, patched_voice, patched_stt, fake_claude, monkeypatch):
+def test_warmup_post_warming_shape(client, patched_voice, fake_claude, monkeypatch):
     # Force the warming branch by claiming the target mode is not yet initialized.
     # Also reset module-level _warm_task so the prior "ready" test doesn't leave
     # a completed task that short-circuits this one.
@@ -87,6 +87,23 @@ def test_warmup_post_warming_shape(client, patched_voice, patched_stt, fake_clau
     data = response.json()
     assert data["status"] == "warming"
     WarmupWarmingResponse.model_validate(data)
+
+
+def test_warmup_does_not_prime_stt(client, patched_voice, fake_claude, monkeypatch):
+    """STT는 /stt/transcribe 호출자가 없어(마이크는 브라우저 Web Speech API)
+    워밍업에서 뺐다 — whisper 'small'(~500MB)을 아무도 안 쓸 목적으로 올리던 낭비."""
+    from routers import stt
+
+    primed = []
+
+    async def _prime() -> None:
+        primed.append(True)
+
+    monkeypatch.setattr(stt, "prime", _prime)
+    fake_claude.is_mode_initialized.return_value = True
+
+    assert client.post("/warmup").status_code == 200
+    assert primed == []
 
 
 def test_warmup_get_status_shape(client, fake_claude):

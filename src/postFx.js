@@ -92,11 +92,21 @@ const AlphaVignetteShader = {
  * @returns {{ render(scene,camera):void, setSize(w,h,dpr):void,
  *             setEnabled(on):void, isEnabled():boolean,
  *             setBloom({strength,radius,threshold}):void, setVignette(v):void,
- *             setAo({enabled,intensity,radius,thickness,scale,samples}):void }}
+ *             setAo({enabled,intensity,radius,thickness,scale,samples}):void,
+ *             setAoScale(v):number, getAoScale():number }}
  */
-export function createPostFx({ renderer, scene, camera, outlineEffect }) {
+export function createPostFx({ renderer, scene, camera, outlineEffect, aoScale = 0.5 }) {
   const size = renderer.getSize(new Vector2())
   const dpr = renderer.getPixelRatio()
+
+  // GTAO 해상도 배율 — AO는 저주파 음영이라 절반 해상도로 깔아도 육안 차이가
+  // 거의 없고 그 패스의 픽셀 비용은 1/4이 된다. 최신 사이즈를 여기 들고 있다가
+  // (생성 시점 dpr을 쓰면 모니터 이동/DPI 변경 후 어긋난다) 배율이 바뀌면
+  // 그 값으로 즉시 재적용한다.
+  let lastW = size.x
+  let lastH = size.y
+  let lastPr = dpr
+  let curAoScale = Number.isFinite(aoScale) && aoScale > 0 ? aoScale : 1
 
   // WebGL2면 MSAA 4 샘플 HalfFloat 타깃(현 캔버스 AA와 시각 동급).
   const isWebGL2 = renderer.capabilities.isWebGL2
@@ -136,6 +146,14 @@ export function createPostFx({ renderer, scene, camera, outlineEffect }) {
   composer.addPass(finalPass)
   composer.addPass(outputPass)
 
+  const applyAoSize = () => {
+    gtaoPass.setSize(
+      Math.max(1, Math.round(lastW * lastPr * curAoScale)),
+      Math.max(1, Math.round(lastH * lastPr * curAoScale))
+    )
+  }
+  applyAoSize()
+
   let enabled = true
 
   return {
@@ -151,9 +169,19 @@ export function createPostFx({ renderer, scene, camera, outlineEffect }) {
       composer.render()
     },
     setSize(w, h, pixelRatio) {
-      if (Number.isFinite(pixelRatio)) composer.setPixelRatio(pixelRatio)
+      if (Number.isFinite(pixelRatio)) { composer.setPixelRatio(pixelRatio); lastPr = pixelRatio }
+      lastW = w
+      lastH = h
       composer.setSize(w, h) // SavePass 포함 전 패스에 전파(r164 확인)
+      applyAoSize() // composer가 GTAO도 풀해상도로 올려놨으니 뒤에서 되돌린다
     },
+    setAoScale(v) {
+      if (!Number.isFinite(v) || v <= 0) return curAoScale
+      curAoScale = Math.min(1, v)
+      applyAoSize()
+      return curAoScale
+    },
+    getAoScale() { return curAoScale },
     setEnabled(on) { enabled = !!on },
     isEnabled() { return enabled },
     setBloom({ strength, radius, threshold } = {}) {

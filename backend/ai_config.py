@@ -121,6 +121,10 @@ AUTO_MODE_PRIORITY = tuple(
     if item.strip()
 )
 
+# local 모드 유휴 해제 — 4bit 양자화라도 7B는 VRAM을 수 GB 물고 있는데, 한 번
+# 쓰고 몇 시간 방치되는 게 이 앱의 보통 사용 패턴이다. 분 단위, 0이면 비활성.
+LOCAL_IDLE_UNLOAD_MIN = _read_int("APIA_LOCAL_IDLE_UNLOAD_MIN", default=30)
+
 MAX_NEW_TOKENS = _read_int("APIA_MAX_NEW_TOKENS", default=512)
 TEMPERATURE = float(_read_env("APIA_TEMPERATURE", default="0.7"))
 TOP_P = float(_read_env("APIA_TOP_P", default="0.9"))

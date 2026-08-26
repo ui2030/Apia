@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { toUserMessage, isActiveFrame, createSpeechQueue, parseSfx } from '../src/chatShared.js'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { toUserMessage, isActiveFrame, createSpeechQueue, parseSfx, pollWhileVisible } from '../src/chatShared.js'
 
 describe('toUserMessage — 에러 한국어화', () => {
   it('타임아웃을 시간초과 안내로 매핑', () => {
@@ -198,5 +198,83 @@ describe('createSpeechQueue — 사용자 발화 보호', () => {
     const amb = speak(async () => { ran.push('ambient') }, { priority: 'ambient' })
     await Promise.all([u1, amb])
     expect(ran).toEqual(['user1', 'ambient'])
+  })
+})
+
+// ── 숨겨진 창 폴링 정지 ─────────────────────────────────────────────────
+// 채팅 창은 닫아도 파괴가 아니라 hide다(재열기를 즉시로 만드는 의도된 설계).
+// 그래서 안 보이는 창이 5초마다 백엔드를 계속 두드리고 있었다.
+function fakeDoc(hidden = false) {
+  const doc = { hidden, listeners: [] }
+  doc.addEventListener = (type, fn) => { if (type === 'visibilitychange') doc.listeners.push(fn) }
+  doc.setHidden = (v) => { doc.hidden = v; doc.listeners.forEach((fn) => fn()) }
+  return doc
+}
+
+describe('pollWhileVisible', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('보이는 상태로 시작하면 즉시 1회 + 주기 실행', () => {
+    vi.useFakeTimers()
+    const fn = vi.fn()
+    pollWhileVisible(fn, 5000, fakeDoc(false))
+    expect(fn).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(10000)
+    expect(fn).toHaveBeenCalledTimes(3)
+  })
+
+  it('숨겨진 상태로 시작하면 아무것도 안 돈다', () => {
+    vi.useFakeTimers()
+    const fn = vi.fn()
+    const poll = pollWhileVisible(fn, 5000, fakeDoc(true))
+    expect(fn).not.toHaveBeenCalled()
+    expect(poll.isRunning()).toBe(false)
+    vi.advanceTimersByTime(60000)
+    expect(fn).not.toHaveBeenCalled()
+  })
+
+  it('숨으면 멈추고, 다시 보이면 즉시 1회 후 재개', () => {
+    vi.useFakeTimers()
+    const fn = vi.fn()
+    const doc = fakeDoc(false)
+    const poll = pollWhileVisible(fn, 5000, doc)
+    fn.mockClear()
+
+    doc.setHidden(true)
+    expect(poll.isRunning()).toBe(false)
+    vi.advanceTimersByTime(60000)
+    expect(fn).not.toHaveBeenCalled()
+
+    doc.setHidden(false)
+    expect(fn).toHaveBeenCalledTimes(1) // 재개 즉시 1회
+    vi.advanceTimersByTime(5000)
+    expect(fn).toHaveBeenCalledTimes(2)
+  })
+
+  it('같은 방향 이벤트가 연달아 와도 인터벌이 쌓이거나 깨지지 않는다(양방향 멱등)', () => {
+    vi.useFakeTimers()
+    const fn = vi.fn()
+    const doc = fakeDoc(false)
+    pollWhileVisible(fn, 5000, doc)
+
+    doc.hidden = false
+    doc.listeners.forEach((f) => f()) // visible 이벤트 중복
+    doc.listeners.forEach((f) => f())
+    fn.mockClear()
+    vi.advanceTimersByTime(5000)
+    expect(fn).toHaveBeenCalledTimes(1) // 인터벌 1개만 살아있다
+
+    doc.setHidden(true)
+    doc.setHidden(true) // hidden 이벤트 중복 — 이미 멈춘 상태에 stop 재호출
+    fn.mockClear()
+    vi.advanceTimersByTime(60000)
+    expect(fn).not.toHaveBeenCalled()
+  })
+
+  it('document가 없어도(비-DOM 환경) 터지지 않는다', () => {
+    vi.useFakeTimers()
+    let poll = null
+    expect(() => { poll = pollWhileVisible(() => {}, 5000, null) }).not.toThrow()
+    poll?.stop()
   })
 })

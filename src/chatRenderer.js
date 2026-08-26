@@ -15,7 +15,7 @@
 //     it; reopen via tray click / Ctrl+Alt+A is instant.
 
 import { analyzeWav } from './lipsyncRuntime.js'
-import { toUserMessage, isActiveFrame, createSpeechQueue } from './chatShared.js'
+import { toUserMessage, isActiveFrame, createSpeechQueue, pollWhileVisible } from './chatShared.js'
 
 const state = {
   history: [],
@@ -60,8 +60,8 @@ function startBackendPolling() {
     dot.style.background = ok ? '#4ade80' : '#ef4444'
     dot.title = ok ? '백엔드 온라인' : '백엔드 오프라인'
   }
-  tick()
-  setInterval(tick, 5000)
+  // 숨겨진(닫힌) 창이 5초마다 백엔드를 두드리던 낭비 차단 — 다시 보일 때 즉시 1회.
+  pollWhileVisible(tick, 5000)
 }
 
 async function hydrateSettings() {

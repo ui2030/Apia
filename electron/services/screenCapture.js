@@ -93,16 +93,18 @@ function createCaptureGate({ desktopCapturer, diffThreshold = 6, captureSize = {
      *           |{status:'no-change',diff:number}|{status:'ok',diff:number,dataUrl:string}}
      */
     async capture(sourceId) {
-      const sources = await desktopCapturer.getSources({
+      // 1단계 — 게이트용 320x180만 받는다. 예전엔 720p를 먼저 렌더한 뒤 줄여서
+      // 게이트를 돌렸는데, 거절되는 프레임(대부분)에서도 1280x720 렌더 비용을
+      // 다 내고 버리는 셈이었다.
+      const probe = await desktopCapturer.getSources({
         types: ['window'],
-        thumbnailSize: captureSize,
+        thumbnailSize: { width: DIFF_W, height: DIFF_H },
         fetchWindowIcons: false
       })
-      const hit = sources.find((s) => s.id === sourceId)
-      if (!hit || !hit.thumbnail || hit.thumbnail.isEmpty()) return { status: 'no-source' }
+      const probeHit = probe.find((s) => s.id === sourceId)
+      if (!probeHit || !probeHit.thumbnail || probeHit.thumbnail.isEmpty()) return { status: 'no-source' }
 
-      const small = hit.thumbnail.resize({ width: DIFF_W, height: DIFF_H, quality: 'good' })
-      const gray = toGray(small.toBitmap())
+      const gray = toGray(probeHit.thumbnail.toBitmap())
 
       if (isDeadFrame(gray)) {
         deadStreak += 1
@@ -114,6 +116,19 @@ function createCaptureGate({ desktopCapturer, diffThreshold = 6, captureSize = {
       const diff = frameDiff(prevGray, gray)
       prevGray = gray
       if (diff < diffThreshold) return { status: 'no-change', diff }
+
+      // 2단계 — 게이트를 통과한 프레임만 전송 해상도로 다시 받는다. Electron엔
+      // source id 하나만 다시 렌더하는 API가 없어 통과 경로는 열거를 두 번 치른다.
+      // 이득은 압도적으로 흔한 거절 경로 쪽에 있다.
+      const full = await desktopCapturer.getSources({
+        types: ['window'],
+        thumbnailSize: captureSize,
+        fetchWindowIcons: false
+      })
+      const hit = full.find((s) => s.id === sourceId)
+      // 두 호출 사이에 창이 닫히거나 최소화될 수 있다. prevGray는 이미 방금
+      // 프레임으로 전진해 있으니 다음 틱은 그 기준으로 정상 비교된다.
+      if (!hit || !hit.thumbnail || hit.thumbnail.isEmpty()) return { status: 'no-source' }
 
       // JPEG로 보낸다 — PNG는 스크린샷에서 몇 배 크고, VLM 입력엔 손실압축으로 충분.
       return { status: 'ok', diff, dataUrl: hit.thumbnail.toJPEG(70).toString('base64') }

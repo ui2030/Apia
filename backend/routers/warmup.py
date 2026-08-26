@@ -6,9 +6,10 @@ claude_service의 provider init이 lazy로 바뀐 뒤, 첫 /chat 요청이 init 
 있음). 프론트가 시작 직후 이 엔드포인트를 한 번 치면 백그라운드에서 provider가 미리
 초기화되고, 첫 /chat 호출 시점엔 캐시된 mode가 그대로 재사용된다.
 
-같은 흐름으로 voice.py의 TTSService/VoiceManager, stt.py의 WhisperService도 lazy다 —
-pyttsx3 init은 OS에 따라 무겁고 whisper.load_model('small')은 ~500MB라 워밍업 시
-함께 prime한다.
+같은 흐름으로 voice.py의 TTSService/VoiceManager도 lazy라(pyttsx3 init은 OS에 따라
+무겁다) 워밍업 시 함께 prime한다. stt.py의 WhisperService는 여기서 prime하지 않는다 —
+/stt/transcribe 호출자가 없어(마이크는 브라우저 Web Speech API) ~500MB 모델을
+아무도 안 쓸 목적으로 올리게 된다.
 
 POST /warmup : 비동기로 워밍업 시작. 이미 ready면 즉시 ready 반환, 워밍 중이면 warming.
 GET  /warmup : 현재 initialized_modes / 활성 mode / warming 여부 조회.
@@ -19,7 +20,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from routers import stt, voice
+from routers import voice
 from routers.chat import claude
 from schemas import WarmupPostResponse, WarmupStatusResponse
 
@@ -36,11 +37,16 @@ def _resolve_target_mode(mode: str) -> str:
 
 
 async def _prime_all_services() -> None:
-    # voice/stt.prime()은 독립이고 둘 중 하나가 실패해도 다른 쪽 + 나머지 warmup
-    # 흐름은 살아남아야 한다. return_exceptions=True로 sibling 취소를 막고, 실패한
-    # prime은 로깅만 한 뒤 흘려보낸다 — 진짜 깨졌다면 첫 사용 시점에 다시 시도된다.
-    results = await asyncio.gather(voice.prime(), stt.prime(), return_exceptions=True)
-    for name, result in zip(("voice", "stt"), results):
+    # prime이 실패해도 나머지 warmup 흐름은 살아남아야 한다. return_exceptions=True로
+    # sibling 취소를 막고, 실패한 prime은 로깅만 한 뒤 흘려보낸다 — 진짜 깨졌다면
+    # 첫 사용 시점에 다시 시도된다.
+    #
+    # stt.prime()은 뺐다: /stt/transcribe를 부르는 코드가 하나도 없고(마이크는
+    # 브라우저 Web Speech API로 처리) whisper.load_model('small')은 ~500MB를
+    # 아무도 안 쓸 목적으로 올린다. 라우터 자체는 계약 테스트용으로 남기고,
+    # 혹시 다시 쓰이면 첫 요청 때 lazy로 로드된다.
+    results = await asyncio.gather(voice.prime(), return_exceptions=True)
+    for name, result in zip(("voice",), results):
         if isinstance(result, BaseException):
             _log.warning("%s.prime() failed during warmup", name, exc_info=result)
 
@@ -112,6 +118,11 @@ def _merge_last_error() -> Optional[str]:
 
 @router.get("", response_model=WarmupStatusResponse)
 async def warmup_status(request: Request):
+    # 유휴 local 모델 해제 기회. 별도 타이머 없이 이미 있는 호출에 얹는다
+    # (ensure_mode 쪽 검사는 target이 local이면 건너뛰므로 local 전용 사용자는
+    # 이 경로가 유일한 회수 지점이다).
+    await claude.maybe_unload_idle_local()
+
     auto_target = claude.resolve_auto_target()
     available = claude.list_available_modes()
     # Aggregate invariant assertion — auto_target must be in available_modes

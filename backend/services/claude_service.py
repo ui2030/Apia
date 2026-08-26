@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, List, Optional, Tuple
 
@@ -32,6 +33,7 @@ from ai_config import (
     TEMPERATURE,
     TOP_P,
     DEFAULT_MEMORY_TURNS,
+    LOCAL_IDLE_UNLOAD_MIN,
     LOADED_ENV_FILE,
 )
 
@@ -93,6 +95,10 @@ class ClaudeService:
         self._model = None
         self._tok = None
         self._torch = None
+        # local 유휴 해제용. _local_active는 추론 in-flight 카운터 —
+        # 자세한 안전성 근거는 _maybe_unload_local 참조.
+        self._local_last_used = 0.0
+        self._local_active = 0
         self._hf_client = None
         self._claude = None
         self._groq = None
@@ -206,6 +212,45 @@ class ClaudeService:
         async with self._init_lock:
             return await asyncio.to_thread(self._ensure_mode, requested_mode)
 
+    async def maybe_unload_idle_local(self) -> bool:
+        """`GET /warmup`가 부르는 유휴 해제 훅. local만 계속 쓰는 사용자는
+        `_ensure_mode`의 unload 검사가 늘 target=='local'로 걸러지므로, 상태 조회
+        경로에도 하나 달아둔다."""
+        async with self._init_lock:
+            return self._maybe_unload_local()
+
+    def _maybe_unload_local(self) -> bool:
+        """유휴 local 모델(_model/_tok) 해제. **반드시 `_init_lock` 안에서** 호출한다.
+
+        타이머를 새로 돌리지 않고, 어차피 lock을 잡는 경로(ensure_mode /
+        GET /warmup)에 얹는 기회주의적 방식이다 — 아무도 서비스를 안 건드리면
+        해제도 안 되지만, 그 상태면 VRAM을 다투는 쪽도 없다.
+
+        in-flight 가드(`_local_active`)가 평범한 int로 충분한 이유: 백엔드는 단일
+        이벤트 루프이고 증감 사이에 `await`가 없어(try/finally의 증감은 각각
+        원자적인 바이트코드 구간) 다른 코루틴이 중간 상태를 볼 수 없다. 추론 자체는
+        스레드로 나가지만 카운터를 만지는 건 루프 스레드뿐이다.
+        """
+        if LOCAL_IDLE_UNLOAD_MIN <= 0:
+            return False
+        if "local" not in self._initialized_modes or self._model is None:
+            return False
+        if self._local_active > 0:
+            return False
+        if time.monotonic() - self._local_last_used < LOCAL_IDLE_UNLOAD_MIN * 60:
+            return False
+
+        self._model = None
+        self._tok = None
+        self._initialized_modes.discard("local")  # 다음 사용 때 기존 lazy init이 다시 올린다
+        if self._torch is not None:
+            try:
+                self._torch.cuda.empty_cache()
+            except Exception as error:
+                print(f"[AI] cuda empty_cache failed: {type(error).__name__}: {error}")
+        print(f"[AI] local model released after {LOCAL_IDLE_UNLOAD_MIN}min idle")
+        return True
+
     def is_mode_initialized(self, mode: str) -> bool:
         """`routers.warmup`가 readiness 판단 시 사용. private set을 그대로 노출하지
         않으면서 캐시 hit을 캐시 hit으로 알 수 있게 한다."""
@@ -269,6 +314,11 @@ class ClaudeService:
             if normalized_mode == "auto"
             else normalized_mode
         )
+
+        # 지금 local로 갈 게 아니면 유휴 local 모델을 놓아줄 기회로 쓴다
+        # (ensure_mode가 이미 _init_lock을 잡고 들어왔다).
+        if target_mode != "local":
+            self._maybe_unload_local()
 
         if target_mode == "fallback":
             self.mode = "fallback"
@@ -338,6 +388,7 @@ class ClaudeService:
             )
             self._model.eval()
             self._torch = torch
+            self._local_last_used = time.monotonic()  # 방금 올린 모델이 유휴로 오판되지 않게
             self._clear_init_error_if_recovered("local")
             print("[AI] local model initialized")
         except ImportError as error:
@@ -1076,10 +1127,14 @@ class ClaudeService:
             generated = output[0][input_ids.shape[-1]:]
             return self._tok.decode(generated, skip_special_tokens=True).strip()
 
+        self._local_active += 1
         try:
             return await asyncio.to_thread(_infer)
         except Exception as error:
             raise RuntimeError(f"local summarize failed: {error}") from error
+        finally:
+            self._local_active -= 1
+            self._local_last_used = time.monotonic()
 
     async def _chat_local(
         self,
@@ -1120,11 +1175,15 @@ class ClaudeService:
             return self._tok.decode(generated, skip_special_tokens=True)
 
         loop = asyncio.get_event_loop()
+        self._local_active += 1
         try:
             return await loop.run_in_executor(None, _infer)
         except Exception as error:
             print(f"[AI] local inference error: {error}")
             return "I hit a local inference error. [EMOTION:sad]"
+        finally:
+            self._local_active -= 1
+            self._local_last_used = time.monotonic()
 
     async def _chat_hf_api(
         self,

@@ -569,6 +569,121 @@ export async function playFBXAnimation(url, { loop = false, fadeIn = 0.3 } = {},
   }
 }
 
+// ── VMD 클립 캐시 ──────────────────────────────────────────────────────
+// 자율 행동이 9~16초마다 클립을 트는데 매번 새 MMDLoader로 같은 .vmd를 다시
+// 받아 파싱했다(THREE.Cache 비활성, 60~260KB 파일이 9개). url 기준 LRU 8개로
+// **후처리(스트립+모프 수집)까지 끝난** 클립을 들고 있으면 재생 시 파싱도
+// 스트립도 없다. 진행 중 로드는 Promise 자체를 캐싱해 같은 url 동시 재생 2건이
+// 로더를 1번만 부른다.
+//
+// 트랙 이름은 본 이름에 묶여 있다 — 한 모델용으로 캐시된 클립이 다른 모델에서
+// 재생되면 안 되므로 모델 교체/해제 경로(main.js clearModel)에서 반드시 비운다.
+const CLIP_CACHE_MAX = 8
+const _clipCache = new Map() // url -> Promise<AnimationClip>
+
+/** 모델 교체/해제 시 호출. 캐시된 클립은 그 모델의 본 이름에 묶여 있다. */
+export function clearClipCache() {
+  _clipCache.clear()
+}
+
+/** url별 1회 로드. `load`는 준비 완료된 clip으로 resolve하는 Promise 팩토리. */
+export function cachedVmdClip(url, load) {
+  const hit = _clipCache.get(url)
+  if (hit) { _clipCache.delete(url); _clipCache.set(url, hit); return hit } // LRU 터치
+
+  const p = load()
+  _clipCache.set(url, p)
+  // 실패는 캐시하지 않는다(다음 재생에서 다시 시도). 여기서 소비한 rejection은
+  // 호출자가 따로 받으므로 unhandled가 되지 않는다.
+  p.catch(() => { if (_clipCache.get(url) === p) _clipCache.delete(url) })
+  while (_clipCache.size > CLIP_CACHE_MAX) _clipCache.delete(_clipCache.keys().next().value)
+  return p
+}
+
+/**
+ * 로드 직후 1회만 도는 후처리. 결과를 캐시하므로 재생마다 반복되지 않는다.
+ * 반환한 clip에 `_apiaMorphNames`(클립이 소유한 모프 이름 Set 또는 null)를 달아
+ * 재생 시점에 model._clipMorphNames로 옮겨 붙인다.
+ */
+export function prepareVmdClip(clip, modelObj, url = '') {
+  // Strip ROOT + IK bone position tracks (Step 5 of /goal hotfix).
+  //
+  // Some .vmd idle clips keyframe POSITION on the central spine
+  // (センター/グルーブ/腰/全ての親) and the foot IK targets
+  // (左足ＩＫ/右足ＩＫ/etc.). Under MMDAnimationHelper's mixer
+  // those translations physically walk the character across the
+  // room. Apia keeps the character where the user placed them.
+  //
+  // We strip *only* root + IK position tracks — NOT every bone.
+  // Hair/skirt/clothing bones have legitimate position offsets
+  // that the physics simulator + bind pose depend on; stripping
+  // those collapses the model.
+  //
+  // Codex MUST-FIX round 2: PMX rigs ship with EITHER full-width
+  // (`ＩＫ`) OR half-width (`IK`) bone names depending on the
+  // model author. The canonical set lives in half-width form and
+  // we normalize every track's bone name before comparing.
+  const normalizeBoneName = (n) => n.replace(/[ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ]/g, (c) =>
+    String.fromCharCode(c.charCodeAt(0) - 0xFEE0)
+  )
+  const ROOT_BONES = new Set(
+    [
+      'センター', 'グルーブ', '腰', '全ての親',
+      '左足IK', '右足IK', '左つま先IK', '右つま先IK',
+      '左足IK親', '右足IK親',
+    ].map(normalizeBoneName)
+  )
+  const beforeCount = clip.tracks.length
+  clip.tracks = clip.tracks.filter((tr) => {
+    if (!tr.name.endsWith('.position')) return true
+    const m = tr.name.match(/(?:^|\.)bones\[([^\]]+)\]\.position$/)
+    const boneName = m ? m[1] : tr.name.replace(/\.position$/, '')
+    return !ROOT_BONES.has(normalizeBoneName(boneName))
+  })
+  if (clip.tracks.length !== beforeCount) {
+    console.info('[VMD] stripped root+IK position tracks', {
+      url: url.split('/').pop(),
+      before: beforeCount,
+      after: clip.tracks.length,
+      dropped: beforeCount - clip.tracks.length,
+    })
+  }
+
+  // 클립이 연기하는 모프(표정·입 트랙) 수집 — 재생 중엔 표정/립싱크
+  // 런타임이 이 모프들을 양보한다(연기 클립의 표정이 절차 표정에
+  // 덮여 죽지 않게; 고품질 연기 VMD 도입의 전제).
+  const clipMorphs = new Set()
+  // 로더가 모프 트랙 키를 **인덱스 숫자**로 만들 수 있다
+  // (.morphTargetInfluences[71]). 양보 소비부(표정/립싱크)는 이름
+  // 기반이라 숫자를 그대로 두면 dict 미스로 양보가 조용히 무산 —
+  // 절차 표정이 클립 표정을 매 프레임 0으로 되돌린다(전신 연기 v2
+  // QA에서 실측). 역사전으로 이름으로 정규화한다.
+  let invDict = null
+  const morphNameByIdx = (key) => {
+    if (!invDict) {
+      invDict = new Map()
+      modelObj?.traverse?.((o) => {
+        if (o.morphTargetDictionary) {
+          for (const [name, idx] of Object.entries(o.morphTargetDictionary)) {
+            if (!invDict.has(String(idx))) invDict.set(String(idx), name)
+          }
+        }
+      })
+    }
+    return invDict.get(key) || key
+  }
+  for (const tr of clip.tracks) {
+    const mm = tr.name.match(/\.morphTargetInfluences\[([^\]]+)\]$/)
+    if (!mm) continue
+    clipMorphs.add(/^\d+$/.test(mm[1]) ? morphNameByIdx(mm[1]) : mm[1])
+  }
+  clip._apiaMorphNames = clipMorphs.size ? clipMorphs : null
+  if (clipMorphs.size) {
+    console.info('[VMD] clip owns morph tracks:', clipMorphs.size, [...clipMorphs].slice(0, 8).join(','))
+  }
+  return clip
+}
+
 /**
  * Plays a `.vmd` clip on the currently-loaded MMD model.
  *
@@ -590,92 +705,21 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
     if (ctx.getCurrentModel() !== model || myToken !== _vmdSequenceToken) return null
     if (!helper) return null
 
-    const loader = new MMDLoader()
-
     return new Promise((resolve) => {
-      loader.loadAnimation(
-        url,
-        model.obj,
+      cachedVmdClip(url, () => new Promise((res, rej) => {
+        new MMDLoader().loadAnimation(
+          url,
+          model.obj,
+          (c) => { try { res(prepareVmdClip(c, model.obj, url)) } catch (e) { rej(e) } },
+          undefined,
+          rej
+        )
+      })).then(
         (clip) => {
           if (ctx.getCurrentModel() !== model || myToken !== _vmdSequenceToken) { resolve(null); return }
 
-          // Strip ROOT + IK bone position tracks (Step 5 of /goal hotfix).
-          //
-          // Some .vmd idle clips keyframe POSITION on the central spine
-          // (センター/グルーブ/腰/全ての親) and the foot IK targets
-          // (左足ＩＫ/右足ＩＫ/etc.). Under MMDAnimationHelper's mixer
-          // those translations physically walk the character across the
-          // room. Apia keeps the character where the user placed them.
-          //
-          // We strip *only* root + IK position tracks — NOT every bone.
-          // Hair/skirt/clothing bones have legitimate position offsets
-          // that the physics simulator + bind pose depend on; stripping
-          // those collapses the model.
-          //
-          // Codex MUST-FIX round 2: PMX rigs ship with EITHER full-width
-          // (`ＩＫ`) OR half-width (`IK`) bone names depending on the
-          // model author. The canonical set lives in half-width form and
-          // we normalize every track's bone name before comparing.
-          const normalizeBoneName = (n) => n.replace(/[ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ]/g, (c) =>
-            String.fromCharCode(c.charCodeAt(0) - 0xFEE0)
-          )
-          const ROOT_BONES = new Set(
-            [
-              'センター', 'グルーブ', '腰', '全ての親',
-              '左足IK', '右足IK', '左つま先IK', '右つま先IK',
-              '左足IK親', '右足IK親',
-            ].map(normalizeBoneName)
-          )
-          const beforeCount = clip.tracks.length
-          clip.tracks = clip.tracks.filter((tr) => {
-            if (!tr.name.endsWith('.position')) return true
-            const m = tr.name.match(/(?:^|\.)bones\[([^\]]+)\]\.position$/)
-            const boneName = m ? m[1] : tr.name.replace(/\.position$/, '')
-            return !ROOT_BONES.has(normalizeBoneName(boneName))
-          })
-          if (clip.tracks.length !== beforeCount) {
-            console.info('[VMD] stripped root+IK position tracks', {
-              url: url.split('/').pop(),
-              before: beforeCount,
-              after: clip.tracks.length,
-              dropped: beforeCount - clip.tracks.length,
-            })
-          }
-
-          // 클립이 연기하는 모프(표정·입 트랙) 수집 — 재생 중엔 표정/립싱크
-          // 런타임이 이 모프들을 양보한다(연기 클립의 표정이 절차 표정에
-          // 덮여 죽지 않게; 고품질 연기 VMD 도입의 전제).
-          {
-            const clipMorphs = new Set()
-            // 로더가 모프 트랙 키를 **인덱스 숫자**로 만들 수 있다
-            // (.morphTargetInfluences[71]). 양보 소비부(표정/립싱크)는 이름
-            // 기반이라 숫자를 그대로 두면 dict 미스로 양보가 조용히 무산 —
-            // 절차 표정이 클립 표정을 매 프레임 0으로 되돌린다(전신 연기 v2
-            // QA에서 실측). 역사전으로 이름으로 정규화한다.
-            let invDict = null
-            const morphNameByIdx = (key) => {
-              if (!invDict) {
-                invDict = new Map()
-                model.obj?.traverse?.((o) => {
-                  if (o.morphTargetDictionary) {
-                    for (const [name, idx] of Object.entries(o.morphTargetDictionary)) {
-                      if (!invDict.has(String(idx))) invDict.set(String(idx), name)
-                    }
-                  }
-                })
-              }
-              return invDict.get(key) || key
-            }
-            for (const tr of clip.tracks) {
-              const mm = tr.name.match(/\.morphTargetInfluences\[([^\]]+)\]$/)
-              if (!mm) continue
-              clipMorphs.add(/^\d+$/.test(mm[1]) ? morphNameByIdx(mm[1]) : mm[1])
-            }
-            model._clipMorphNames = clipMorphs.size ? clipMorphs : null
-            if (clipMorphs.size) {
-              console.info('[VMD] clip owns morph tracks:', clipMorphs.size, [...clipMorphs].slice(0, 8).join(','))
-            }
-          }
+          // 캐시 히트든 방금 로드든, 모프 소유권은 재생마다 다시 넘긴다.
+          model._clipMorphNames = clip._apiaMorphNames || null
 
           // 물리 보존 + 크로스페이드 (B단계 — 옷 폭발/손 자세 잔존의 본 수정).
           //
@@ -811,7 +855,6 @@ export async function playMMDAnimation(url, { loop = false } = {}, ctx) {
 
           resolve(clip)
         },
-        undefined,
         (err) => {
           console.warn('[VMD] 로드 실패', url, err)
           resolve(null)

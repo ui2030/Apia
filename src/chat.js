@@ -3,7 +3,7 @@ import { setState, getState } from './characterController.js'
 import { setEmotion, requestFaceCamera } from './characterController.js'
 import { analyzeWav, playTimeline, stopTimeline } from './lipsyncRuntime.js'
 import { createTouchClassifier } from './touchInteraction.js'
-import { toUserMessage, isActiveFrame, createSpeechQueue, parseSfx, SFX_KINDS } from './chatShared.js'
+import { toUserMessage, isActiveFrame, createSpeechQueue, parseSfx, SFX_KINDS, pollWhileVisible } from './chatShared.js'
 
 // Step 3: character raycaster injected by main.js. null = wallpaper mode
 // active (or just no character loaded) — click-through manager skips the
@@ -72,8 +72,8 @@ export function initChat({
   window.api?.onChatStreamDelta?.((payload) => onStreamDelta(payload))
   window.api?.onChatStreamDone?.((payload) => onStreamDone(payload))
   window.api?.onChatStreamError?.((payload) => onStreamError(payload))
-  checkBackend()
-  setInterval(checkBackend, 5000)
+  // 창이 숨겨져 있는 동안은 폴링을 멈춘다(닫기=hide라 예전엔 계속 돌았다).
+  pollWhileVisible(checkBackend, 5000)
 }
 
 function applyRuntimeSettings(settings = {}) {

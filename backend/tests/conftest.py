@@ -76,6 +76,8 @@ def _install_fake_claude_module() -> MagicMock:
     fake_claude.get_last_init_error = MagicMock(return_value=None)
     fake_claude.select_auto_mode = MagicMock(return_value="groq")
     fake_claude.ensure_mode = AsyncMock(return_value="groq")
+    # GET /warmup이 부르는 유휴 local 해제 훅 (MagicMock 기본값은 await 불가).
+    fake_claude.maybe_unload_idle_local = AsyncMock(return_value=False)
     fake_claude.default_mode = "auto"
     fake_claude.mode = "groq"
 
