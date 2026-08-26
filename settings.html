@@ -363,6 +363,37 @@
         <option value="groq">Groq API</option>
         <option value="hf_api">HuggingFace API</option>
         <option value="claude">Claude API</option>
+        <option value="claude_code">Claude Code (구독 로그인)</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">행동 디렉터 모델</div>
+        <div class="row-sub">캐릭터가 혼자 있을 때의 분위기를 정하는 배경 호출</div>
+      </div>
+      <select id="ai-mode-director">
+        <option value="">기본(대화와 동일)</option>
+        <option value="auto">Auto</option>
+        <option value="local">로컬 (Qwen2.5)</option>
+        <option value="groq">Groq API</option>
+        <option value="hf_api">HuggingFace API</option>
+        <option value="claude">Claude API</option>
+        <option value="claude_code">Claude Code (구독 로그인)</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">관전 코멘트 모델</div>
+        <div class="row-sub">화면을 봐야 하므로 이미지를 읽을 수 있는 모델만 고를 수 있어요</div>
+      </div>
+      <select id="ai-mode-spectate">
+        <option value="">기본(대화와 동일)</option>
+        <option value="auto">Auto</option>
+        <option value="groq">Groq API</option>
+        <option value="claude">Claude API</option>
+        <option value="claude_code">Claude Code (구독 로그인)</option>
       </select>
     </div>
 
@@ -1181,6 +1212,10 @@ function applyToUI() {
   document.getElementById('scale-val').textContent = (settings.charScale || 100) + '%'
   document.getElementById('auto-behavior').checked = settings.autoBehavior !== false
   document.getElementById('ai-mode').value = settings.aiMode || 'auto'
+  // 저장된 값이 이 드롭다운에 없는 항목이면(관전에서 local 등) value 대입이
+  // 조용히 실패해 빈칸이 된다 — 그건 곧 ''(대화와 동일)이라 의도와 같다.
+  document.getElementById('ai-mode-director').value = settings.aiModeDirector || ''
+  document.getElementById('ai-mode-spectate').value = settings.aiModeSpectate || ''
   document.getElementById('memory-turns').value = settings.memoryTurns || 10
   document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '턴'
   document.getElementById('tts-enabled').checked = settings.ttsEnabled !== false
@@ -1608,6 +1643,8 @@ async function save() {
     charScale: parseInt(document.getElementById('char-scale').value, 10),
     autoBehavior: document.getElementById('auto-behavior').checked,
     aiMode: document.getElementById('ai-mode').value,
+    aiModeDirector: document.getElementById('ai-mode-director').value,
+    aiModeSpectate: document.getElementById('ai-mode-spectate').value,
     memoryTurns: parseInt(document.getElementById('memory-turns').value, 10),
     ttsEnabled: document.getElementById('tts-enabled').checked,
     voiceId: document.getElementById('voice-select').value,

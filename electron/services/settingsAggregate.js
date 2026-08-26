@@ -15,10 +15,23 @@
 const fs = require('fs')
 const path = require('path')
 
-const { SettingsSchema } = require('../schemas')
+const { SettingsSchema, aiModeSchema } = require('../schemas')
 const { normalizeAnchor } = require('./windowBoundsPolicy')
 
-const VALID_AI_MODES = new Set(['auto', 'local', 'hf_api', 'claude', 'groq'])
+// schemas.js의 aiMode enum이 단일 출처 — 여기서 다시 나열하면 둘이 갈라진다.
+const VALID_AI_MODES = new Set(aiModeSchema.options)
+
+// 관전은 화면 이미지를 보내므로 **비전 가능한 provider만** 의미가 있다. 텍스트
+// 전용(local/hf_api)을 고르면 백엔드 vision_model_for가 None을 돌려줘 관전이
+// 영영 조용해진다 — 설정 창 드롭다운엔 애초에 안 보이지만, 손으로 고친
+// settings.json에서 들어올 수 있으므로 읽는 경계에서 막는다.
+const VISION_AI_MODES = new Set(['auto', 'claude', 'groq', 'claude_code'])
+
+// 역할별 모델 필드('' = 대화와 동일)와 각각이 허용하는 값의 집합.
+const ROLE_AI_MODES = Object.freeze({
+  aiModeDirector: VALID_AI_MODES,
+  aiModeSpectate: VISION_AI_MODES
+})
 
 const SETTINGS_DEFAULTS = Object.freeze({
   models: [],
@@ -26,6 +39,11 @@ const SETTINGS_DEFAULTS = Object.freeze({
   charScale: 100,
   autoBehavior: true,
   aiMode: 'auto',
+  // 역할별 모델 라우팅. ''(기본) = 대화와 같은 모델을 쓴다. 디렉터/관전은 백그라운드로
+  // 자주 도는 호출이라, 대화는 비싼 모델로 쓰면서 이 둘만 싼 모델로 내리고 싶은
+  // 경우가 있다(반대도 마찬가지).
+  aiModeDirector: '',
+  aiModeSpectate: '',
   memoryTurns: 10,
   ttsEnabled: true,
   voiceId: null,
@@ -62,6 +80,12 @@ APIA_AI_MODE=auto
 # APIA_GROQ_MODEL=llama-3.3-70b-versatile
 # APIA_DEFAULT_MEMORY_TURNS=10
 # APIA_AUTO_MODE_PRIORITY=groq,claude,hf_api,local
+
+# === claude_code 모드 (설치된 Claude Code CLI를 구독 로그인 그대로 사용) ===
+# API 키가 필요 없는 대신 구독 사용량을 씁니다. auto는 이 모드를 절대 자동 선택하지
+# 않으므로, 쓰려면 설정 창에서 직접 고르세요.
+# APIA_CLAUDE_CODE_BIN=              # 비우면 PATH에서 claude를 찾음
+# APIA_CLAUDE_CODE_MODEL=            # 비우면 CLI 기본 모델
 
 # === step 2-4 (장기 기억 / 파일 검색 / 웹 검색) ===
 # APIA_MEMORY_ENABLED=true
@@ -120,6 +144,15 @@ class SettingsRepository {
 
     if (this.#shouldForceAutoAiMode() && settings.aiMode === 'local') {
       settings.aiMode = 'auto'
+    }
+
+    // 역할별 모델은 ''(전역 추종)이 기본이자 안전한 폴백 — 모르는 값이 오면
+    // 조용히 ''로 눕혀서 대화 모델을 따라가게 한다. shouldForceAutoAiMode의
+    // local→auto 강제는 전역 aiMode 전용이라 여기엔 적용하지 않는다.
+    for (const [key, allowed] of Object.entries(ROLE_AI_MODES)) {
+      if (settings[key] !== '' && !allowed.has(settings[key])) {
+        settings[key] = ''
+      }
     }
 
     settings.charScale = Number.isFinite(settings.charScale)
@@ -218,6 +251,7 @@ module.exports = {
   SettingsRepository,
   SETTINGS_DEFAULTS,
   VALID_AI_MODES,
+  VISION_AI_MODES,
   BACKEND_ENV_EXAMPLE_FILENAME,
   BACKEND_ENV_EXAMPLE_CONTENT
 }

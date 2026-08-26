@@ -6,7 +6,13 @@ auto fallback behavior.
 import asyncio
 import importlib.util
 import json
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable, List, Optional, Tuple
 
 from ai_config import (
@@ -17,6 +23,8 @@ from ai_config import (
     ANTHROPIC_KEY,
     GROQ_KEY,
     CLAUDE_MODEL,
+    CLAUDE_CODE_BIN,
+    CLAUDE_CODE_MODEL,
     GROQ_MODEL,
     GROQ_VISION_MODEL,
     SYSTEM_PROMPT,
@@ -27,6 +35,39 @@ from ai_config import (
     LOADED_ENV_FILE,
 )
 
+# claude_code 모드는 CLI 프로세스를 하나씩만 띄운다. 채팅·디렉터·관전이 각자
+# 타이머로 돌기 때문에 직렬화가 없으면 느린 호출 하나가 도는 사이 세 개가 겹쳐
+# 뜬다(구독 사용량 + 메모리 둘 다 낭비). 3.11 기준 Semaphore는 생성 시점에
+# 루프를 붙잡지 않으므로 모듈 레벨 생성이 안전하다.
+_CLAUDE_CODE_LOCK = asyncio.Semaphore(1)
+
+# system prompt + 대화 전사를 합친 총 길이 상한. 넘치면 오래된 history부터 버린다.
+_CLAUDE_CODE_MAX_CHARS = 16000
+
+# 사용자 개인 설정 격리 + 도구 차단 플래그. 실측(probe)으로 고른 조합:
+#   --safe-mode            : CLAUDE.md·플러그인·훅·MCP·스킬·에이전트 전부 비활성.
+#                            (OAuth 구독 로그인은 정상 동작 — --bare는 API 키만
+#                            읽으므로 여기선 절대 쓰면 안 된다.)
+#   --strict-mcp-config    : --mcp-config를 안 주므로 MCP 서버 0개(이중 방어).
+#   --no-session-persistence : 대화 내용이 ~/.claude 세션 파일로 디스크에 남지 않음.
+#   --tools ""             : 내장 도구 전무. 이 모드의 호출은 **하나도** 파일을
+#                            읽거나 명령을 실행할 일이 없다.
+#
+# 도구를 왜 아예 끄는지(실측 근거): -p 모드에서 Read를 한 칸이라도 열면 권한
+# 규칙으로 파일 하나만 허용하는 게 **불가능**하다. 워크스페이스 안의 파일 읽기는
+# 기본 허용이라 --allowedTools "Read(./x.jpg)"를 줘도 옆 파일이 그대로 읽히고
+# (--permission-mode manual/dontAsk도 동일), 절대경로로 사용자 홈까지 읽힌다.
+# deny 규칙은 allow보다 우선이라 "전부 막고 하나만" 조합도 성립하지 않는다.
+# 그래서 비전은 파일을 아예 만들지 않고 이미지를 stdin으로 직접 넣는다(아래).
+_CLAUDE_CODE_BASE_FLAGS = (
+    "-p",
+    "--safe-mode",
+    "--strict-mcp-config",
+    "--no-session-persistence",
+    "--tools",
+    "",
+)
+
 
 class ClaudeService:
     def __init__(self):
@@ -35,7 +76,7 @@ class ClaudeService:
             print(f"[AI] loaded env file: {LOADED_ENV_FILE}")
         self.default_mode = AI_MODE
         self.mode = AI_MODE
-        self.valid_modes = {"auto", "local", "hf_api", "claude", "groq"}
+        self.valid_modes = {"auto", "local", "hf_api", "claude", "groq", "claude_code"}
         self.auto_mode_priority = [
             mode for mode in AUTO_MODE_PRIORITY if mode in self.valid_modes and mode != "auto"
         ] or ["groq", "claude", "hf_api", "local"]
@@ -55,6 +96,8 @@ class ClaudeService:
         self._hf_client = None
         self._claude = None
         self._groq = None
+        self._claude_code_bin: Optional[str] = None
+        self._claude_code_cwd: Optional[str] = None
 
         # 실제 provider 초기화는 첫 /chat 요청 또는 /warmup 시 `ensure_mode`가 수행.
         # 예전엔 여기서 바로 초기화해서 local 모드일 때 서버 기동이 블로킹되고
@@ -78,7 +121,14 @@ class ClaudeService:
             return self._module_available("anthropic") and bool(ANTHROPIC_KEY)
         if mode == "groq":
             return self._module_available("groq") and bool(GROQ_KEY)
+        if mode == "claude_code":
+            # 키가 아니라 **CLI 바이너리 존재**가 유일한 전제조건 (로그인은 CLI가 관리).
+            return bool(self._resolve_claude_code_bin())
         return False
+
+    @staticmethod
+    def _resolve_claude_code_bin() -> Optional[str]:
+        return CLAUDE_CODE_BIN or shutil.which("claude")
 
     def _get_auto_candidates(self) -> List[str]:
         return [mode for mode in self.auto_mode_priority if self._mode_has_prereqs(mode)]
@@ -132,6 +182,8 @@ class ClaudeService:
             self._init_claude()
         elif mode == "groq":
             self._init_groq()
+        elif mode == "claude_code":
+            self._init_claude_code()
         else:
             self.mode = "fallback"
 
@@ -345,6 +397,191 @@ class ClaudeService:
             self._record_init_error("groq", error)
             self.mode = "fallback"
 
+    def _init_claude_code(self):
+        try:
+            binary = self._resolve_claude_code_bin()
+            if not binary:
+                raise RuntimeError(
+                    "claude CLI not found on PATH (install Claude Code, or set APIA_CLAUDE_CODE_BIN)"
+                )
+
+            # cwd는 **비어 있는 전용 디렉터리**여야 한다. 프로젝트 디렉터리에서
+            # 띄우면 CLI가 그 트리의 파일·설정을 볼 수 있게 되므로, 어디서 실행하든
+            # 격리된 빈 방으로 고정한다. DATA_DIR은 패키징된 빌드에서 Electron이
+            # 넣어주는 사용자 데이터 경로(ai_config가 backend.env를 찾을 때 쓰는 것과 동일).
+            data_dir = os.getenv("DATA_DIR", "").strip()
+            base = Path(data_dir) if data_dir else Path(tempfile.gettempdir())
+            work_dir = base / "claude-code-work"
+            work_dir.mkdir(parents=True, exist_ok=True)
+
+            self._claude_code_bin = binary
+            self._claude_code_cwd = str(work_dir)
+            self._clear_init_error_if_recovered("claude_code")
+            print(f"[AI] claude_code initialized bin={binary} cwd={work_dir}")
+        except Exception as error:
+            print(f"[AI] claude_code init failed: {type(error).__name__}: {error}")
+            self._record_init_error("claude_code", error)
+            self.mode = "fallback"
+
+    async def _run_claude_code(
+        self,
+        prompt: str,
+        system: str,
+        timeout: float,
+        image_b64: Optional[str] = None,
+    ) -> str:
+        """CLI를 단발로 돌려 `result` 문자열을 돌려준다.
+
+        계약(전부 의도적):
+          * argv는 **리스트**로만 넘긴다(shell 문자열 금지 — 프롬프트에 사용자가
+            친 따옴표/파이프가 들어가도 셸이 해석하지 않는다).
+          * 프롬프트 본문은 **stdin**으로만 간다. argv에 실으면 Windows 명령줄
+            길이 제한과 프로세스 목록 노출(다른 사용자에게 대화 내용이 보임)에 걸린다.
+          * 도구는 항상 0개(_CLAUDE_CODE_BASE_FLAGS).
+
+        `image_b64`가 있으면 stream-json 입력으로 바꿔 이미지를 content block으로
+        직접 넣는다. 화면 내용은 **신뢰할 수 없는 입력**이라(화면 속 텍스트가
+        "이 파일을 읽어라"라고 지시할 수 있다) 도구를 하나도 주지 않는 게 유일하게
+        확실한 차단이다. 임시 파일도 만들지 않으므로 지울 것도 없다.
+        """
+        args = [self._claude_code_bin, *_CLAUDE_CODE_BASE_FLAGS]
+        if image_b64:
+            # stream-json 입력은 stream-json 출력을 요구하고, 그건 다시 --verbose를
+            # 요구한다(CLI가 그렇게 검증한다). 셋은 한 덩어리다.
+            args += [
+                "--input-format", "stream-json",
+                "--output-format", "stream-json",
+                "--verbose",
+            ]
+            stdin_text = json.dumps({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": image_b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                },
+            }) + "\n"
+        else:
+            args += ["--output-format", "json"]
+            stdin_text = prompt
+        if CLAUDE_CODE_MODEL:
+            args += ["--model", CLAUDE_CODE_MODEL]
+        args += ["--system-prompt", system]
+
+        kwargs = {}
+        if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            # 없으면 호출 때마다 콘솔 창이 깜빡인다.
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        async with _CLAUDE_CODE_LOCK:
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self._claude_code_cwd,
+                **kwargs,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(stdin_text.encode("utf-8")), timeout
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                # 죽이고 **거둬가기까지** 해야 좀비가 안 남는다.
+                process.kill()
+                await process.wait()
+                raise
+
+        err = stderr.decode("utf-8", errors="replace").strip()[:200]
+        out = stdout.decode("utf-8", errors="replace").strip()
+        payload = None
+        if image_b64:
+            # stream-json은 여러 줄(system/assistant/result…)이 흘러나온다. 마지막
+            # `type == "result"` 한 줄만 최종 답이다.
+            for line in out.splitlines():
+                try:
+                    obj = json.loads(line.strip() or "{}")
+                except ValueError:
+                    continue
+                if obj.get("type") == "result":
+                    payload = obj
+        else:
+            try:
+                payload = json.loads(out)
+            except (json.JSONDecodeError, ValueError):
+                payload = None
+        if payload is None:
+            raise RuntimeError(
+                f"claude_code: unparseable CLI output (rc={process.returncode}): {err or out[:200]}"
+            )
+
+        if payload.get("is_error") or payload.get("subtype") != "success":
+            raise RuntimeError(
+                f"claude_code: CLI reported {payload.get('subtype')!r} "
+                f"(rc={process.returncode}): {payload.get('result') or err}"
+            )
+
+        result = payload.get("result")
+        if not isinstance(result, str) or not result.strip():
+            raise RuntimeError(f"claude_code: empty result (rc={process.returncode}): {err}")
+        return result.strip()
+
+    def _build_claude_code_prompt(
+        self, message: str, history: List[Any], memory_turns: Optional[int], system: str
+    ) -> str:
+        """system prompt는 --system-prompt로 따로 가고, stdin엔 전사만 싣는다.
+        총량이 상한을 넘으면 **오래된 turn부터** 버린다(최신 맥락 우선)."""
+        budget = max(1000, _CLAUDE_CODE_MAX_CHARS - len(system))
+        tail = [f"사용자: {message}", "어시스턴트:"]
+        lines = [
+            f"{'사용자' if m['role'] == 'user' else '어시스턴트'}: {m['content']}"
+            for m in self._build_messages(history, memory_turns)
+        ]
+        while lines and len("\n".join(lines + tail)) > budget:
+            lines.pop(0)
+        # history를 다 버려도 넘치면(= 현재 메시지 자체가 김) 앞을 자른다.
+        return "\n".join(lines + tail)[-budget:]
+
+    async def _chat_claude_code(
+        self,
+        message: str,
+        history: List[Any],
+        memory_turns: Optional[int],
+        context_blocks: Optional[dict] = None,
+    ) -> str:
+        system = self._build_system_prompt(context_blocks)
+        prompt = self._build_claude_code_prompt(message, history, memory_turns, system)
+        try:
+            return await self._run_claude_code(prompt, system, timeout=150)
+        except Exception as error:  # noqa: BLE001
+            return f"Claude Code error: {str(error)[:80]} [EMOTION:sad]"
+
+    async def _summarize_claude_code(self, system: str, user: str) -> str:
+        try:
+            return await self._run_claude_code(user, system, timeout=25)
+        except Exception as error:
+            raise RuntimeError(f"claude_code summarize failed: {error}") from error
+
+    async def _describe_claude_code(self, image_b64: str, user: str) -> str:
+        """이미지를 stdin의 content block으로 직접 넣는다 — 디스크를 거치지 않으므로
+        "캡처는 어디에도 저장하지 않는다"는 관전 모드의 프라이버시 계약이 그대로
+        지켜지고, 도구가 0개라 화면 속 텍스트가 파일을 읽히도록 유도할 수도 없다."""
+        try:
+            return await self._run_claude_code(
+                user, self.SPECTATE_SYSTEM, timeout=25, image_b64=image_b64
+            )
+        except Exception as error:
+            raise RuntimeError(f"claude_code vision failed: {error}") from error
+
     # 고정 section 순서(Codex NICE-TO-HAVE 3단계 round 1). dict 삽입순서에
     # 기대지 않고 항상 같은 순서로 직렬화 → 테스트와 프롬프트 안정성.
     _CONTEXT_SECTION_ORDER = ("기억", "파일", "웹")
@@ -417,6 +654,8 @@ class ClaudeService:
             reply = await self._chat_claude(message, history, memory_turns, blocks)
         elif active_mode == "groq":
             reply = await self._chat_groq(message, history, memory_turns, blocks)
+        elif active_mode == "claude_code":
+            reply = await self._chat_claude_code(message, history, memory_turns, blocks)
         else:
             reply = self._build_unavailable_reply(requested_mode)
 
@@ -462,6 +701,9 @@ class ClaudeService:
         elif active_mode == "local":
             # ponytail: local generate() is blocking, no token stream — one-shot.
             yield await self._chat_local(message, history, memory_turns, blocks)
+        elif active_mode == "claude_code":
+            # ponytail: CLI는 프로세스가 끝나야 JSON이 나온다 — one-shot.
+            yield await self._chat_claude_code(message, history, memory_turns, blocks)
         else:
             yield self._build_unavailable_reply(requested_mode)
 
@@ -583,6 +825,8 @@ class ClaudeService:
             return await self._summarize_hf_api(summary_system, user_payload)
         if active_mode == "local":
             return await self._summarize_local(summary_system, user_payload)
+        if active_mode == "claude_code":
+            return await self._summarize_claude_code(summary_system, user_payload)
         raise RuntimeError(f"unsupported mode for summarization: {active_mode}")
 
     # J단계 — 행동 디렉터. 채팅과 분리된 경량 단발 호출(캐릭터 롤플레이·감정태그
@@ -630,6 +874,8 @@ class ClaudeService:
             return await self._summarize_hf_api(self.DIRECTOR_SYSTEM, payload)
         if active_mode == "local":
             return await self._summarize_local(self.DIRECTOR_SYSTEM, payload)
+        if active_mode == "claude_code":
+            return await self._summarize_claude_code(self.DIRECTOR_SYSTEM, payload)
         raise RuntimeError(f"unsupported mode for director: {active_mode}")
 
     # M2 관전 모드 — 사용자가 고른 창 한 장을 보고 "지금 뭐가 벌어지나"를 읽는다.
@@ -672,6 +918,9 @@ class ClaudeService:
             return CLAUDE_MODEL or None
         if mode == "groq":
             return GROQ_VISION_MODEL or None
+        if mode == "claude_code":
+            # CLI가 모델을 고르므로 이름은 게이트 통과용 라벨일 뿐이다.
+            return CLAUDE_CODE_MODEL or "claude-code"
         return None
 
     async def describe_screen(
@@ -695,6 +944,8 @@ class ClaudeService:
             return await self._describe_claude(model, image_b64, payload)
         if active_mode == "groq":
             return await self._describe_groq(model, image_b64, payload)
+        if active_mode == "claude_code":
+            return await self._describe_claude_code(image_b64, payload)
         return None
 
     async def _describe_claude(self, model: str, image_b64: str, user: str) -> str:

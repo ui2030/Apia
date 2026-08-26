@@ -526,7 +526,12 @@ function getAutoBehaviorConfig() {
 const behaviorDirector = createDirectorRunner({
   call: typeof window !== 'undefined' && window.api?.directorDecide
     ? (ctx) => window.api.directorDecide(ctx)
-    : null
+    : null,
+  // 러너 타임아웃이 main의 IPC 예산보다 짧으면 백엔드가 정상 응답 중인데도
+  // 여기서 먼저 끊어져 항상 실패로 보인다. main 쪽 상한(claude_code 30s)보다
+  // 넉넉하게 잡아 판정은 main이 하게 둔다. behaviorDirector.js의 기본값은
+  // 그대로 두고 이 와이어링에서만 올린다.
+  timeoutMs: 35000
 })
 
 function runBehaviorDirector() {
@@ -573,7 +578,8 @@ const spectateRunner = createDirectorRunner({
   isSkipResult: isSpectateSkip,
   minIntervalMs: 25000,
   jitterMs: 15000,
-  timeoutMs: 12000
+  // 디렉터와 같은 이유 — main의 관전 IPC 상한(claude_code 30s)보다 뒤에 끊긴다.
+  timeoutMs: 35000
 })
 
 // 러너는 관측을 캐시하므로(current()), 새 객체가 나왔을 때만 반응한다.

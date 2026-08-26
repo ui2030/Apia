@@ -82,7 +82,7 @@ def _read_int(*names: str, default: int) -> int:
         return default
 
 
-# Supported modes: auto, local, hf_api, claude, groq
+# Supported modes: auto, local, hf_api, claude, groq, claude_code
 AI_MODE = _read_env("APIA_AI_MODE", "AI_MODE", default="auto")
 DEFAULT_MEMORY_TURNS = _read_int("APIA_DEFAULT_MEMORY_TURNS", default=10)
 
@@ -101,6 +101,16 @@ GROQ_MODEL = _read_env("APIA_GROQ_MODEL", "GROQ_MODEL", default="llama-3.3-70b-v
 GROQ_VISION_MODEL = _read_env(
     "APIA_GROQ_VISION_MODEL", default="meta-llama/llama-4-scout-17b-16e-instruct"
 )
+
+# ── claude_code 모드 ────────────────────────────────────────────────────────
+# 로컬에 설치된 Claude Code CLI를 구독 로그인 상태 그대로 빌려 쓰는 모드.
+# API 키가 없어도 되지만 그만큼 사용자의 구독 사용량을 직접 태우므로 **명시 선택
+# 전용**이다 — AUTO_MODE_PRIORITY 기본값에 절대 넣지 않는다(auto가 몰래 고르면
+# 사용자가 모르는 사이 구독 한도를 쓴다).
+# 빈 문자열이면 CLI 기본 모델(--model 인자 자체를 생략).
+CLAUDE_CODE_MODEL = _read_env("APIA_CLAUDE_CODE_MODEL", default="")
+# 빈 문자열이면 PATH에서 `claude`를 찾는다(shutil.which가 Windows의 .cmd/PATHEXT를 처리).
+CLAUDE_CODE_BIN = _read_env("APIA_CLAUDE_CODE_BIN", default="")
 
 AUTO_MODE_PRIORITY = tuple(
     item.strip()

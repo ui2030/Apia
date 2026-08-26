@@ -112,6 +112,61 @@ describe('normalize', () => {
     expect(repo.normalize({ aiMode: 'claude' }).aiMode).toBe('claude')
   })
 
+  it('accepts claude_code as an explicit aiMode', () => {
+    const repo = createRepo()
+    expect(repo.normalize({ aiMode: 'claude_code' }).aiMode).toBe('claude_code')
+  })
+
+  it("defaults per-role ai modes to '' (follow the global aiMode)", () => {
+    const repo = createRepo()
+    const settings = repo.normalize()
+    expect(settings.aiModeDirector).toBe('')
+    expect(settings.aiModeSpectate).toBe('')
+  })
+
+  it('keeps a valid per-role ai mode', () => {
+    const repo = createRepo()
+    const settings = repo.normalize({ aiModeDirector: 'groq', aiModeSpectate: 'claude_code' })
+    expect(settings.aiModeDirector).toBe('groq')
+    expect(settings.aiModeSpectate).toBe('claude_code')
+  })
+
+  it("coerces an invalid per-role ai mode to ''", () => {
+    const repo = createRepo()
+    const settings = repo.normalize({ aiModeDirector: 'gpt5', aiModeSpectate: 42 })
+    expect(settings.aiModeDirector).toBe('')
+    expect(settings.aiModeSpectate).toBe('')
+  })
+
+  // 관전은 화면을 봐야 하므로 텍스트 전용 모델은 UI에 안 보인다. 손으로 고친
+  // settings.json으로는 들어올 수 있으니 읽는 경계에서 눕힌다.
+  it("coerces a text-only aiModeSpectate to '' but keeps it for the director", () => {
+    const repo = createRepo()
+    for (const textOnly of ['local', 'hf_api']) {
+      const settings = repo.normalize({
+        aiModeDirector: textOnly,
+        aiModeSpectate: textOnly
+      })
+      expect(settings.aiModeSpectate).toBe('')
+      expect(settings.aiModeDirector).toBe(textOnly)
+    }
+  })
+
+  it('keeps every vision-capable mode for aiModeSpectate', () => {
+    const repo = createRepo()
+    for (const mode of ['auto', 'claude', 'groq', 'claude_code']) {
+      expect(repo.normalize({ aiModeSpectate: mode }).aiModeSpectate).toBe(mode)
+    }
+  })
+
+  it('does not force per-role local to auto when the packaged backend forces it', () => {
+    const repo = createRepo({ shouldForceAutoAiMode: () => true })
+    expect(repo.normalize({ aiMode: 'local', aiModeDirector: 'local' })).toMatchObject({
+      aiMode: 'auto',
+      aiModeDirector: 'local'
+    })
+  })
+
   it('coerces non-array models to []', () => {
     const repo = createRepo()
     expect(repo.normalize({ models: 'broken' }).models).toEqual([])

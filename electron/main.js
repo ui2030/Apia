@@ -301,6 +301,23 @@ ipcMain.handle('check-backend', async () => {
   return { ok: Boolean(started && (await backend.isHealthy(1200))) }
 })
 
+// Local LLM (Qwen on the user's PC) can spend ~47s just loading the model on
+// the first call, before any generation — a flat 30s timed out the very first
+// chat ("Request timed out after 30000ms"). Give local a generous budget;
+// cloud/auto stays tight since a hung request there should fail fast.
+// claude_code는 CLI 프로세스를 새로 띄우고(부팅만 수 초) 도구 없는 단발이라도
+// 왕복이 길어서 같은 관대한 버킷에 넣는다.
+const SLOW_CHAT_MODES = new Set(['local', 'claude_code'])
+const chatTimeoutFor = (mode) => (SLOW_CHAT_MODES.has(mode) ? 180000 : 30000)
+
+// 역할별(디렉터/관전) 모델. ''이면 대화와 같은 모델을 쓴다.
+const roleAiMode = (settings, key) => settings[key] || settings.aiMode
+
+// 디렉터/관전은 원래 짧은 타임아웃(9s/15s)으로 돈다 — 실패해도 규칙기반으로
+// 조용히 넘어가는 보조 호출이라 오래 붙잡을 이유가 없다. claude_code만 CLI
+// 기동 비용 때문에 그 안에 못 들어와서 별도 예산을 준다.
+const CLAUDE_CODE_AUX_TIMEOUT = 30000
+
 ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
   try {
     await backend.ensureAvailableForRequest()
@@ -311,11 +328,7 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
     const resolvedUseWeb = typeof useWeb === 'boolean'
       ? useWeb
       : settings.useWebDefault === true
-    // Local LLM (Qwen on the user's PC) can spend ~47s just loading the model on
-    // the first call, before any generation — a flat 30s timed out the very first
-    // chat ("Request timed out after 30000ms"). Give local a generous budget;
-    // cloud/auto stays tight since a hung request there should fail fast.
-    const chatTimeout = settings.aiMode === 'local' ? 180000 : 30000
+    const chatTimeout = chatTimeoutFor(settings.aiMode)
     return await requestBackendJson('/chat', {
       method: 'POST',
       timeout: chatTimeout,
@@ -384,7 +397,7 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
 
   const settings = loadSettings()
   const resolvedUseWeb = typeof useWeb === 'boolean' ? useWeb : settings.useWebDefault === true
-  const chatTimeout = settings.aiMode === 'local' ? 180000 : 30000
+  const chatTimeout = chatTimeoutFor(settings.aiMode)
 
   // Fire the SSE read detached from the invoke return so the renderer gets its
   // requestId immediately and can start filtering frames.
@@ -452,10 +465,11 @@ ipcMain.handle('director:decide', async (e, context) => {
   try {
     await backend.ensureAvailableForRequest()
     const settings = loadSettings()
+    const aiMode = roleAiMode(settings, 'aiModeDirector')
     const r = await requestBackendJson('/director', {
       method: 'POST',
-      timeout: 9000,
-      body: { context: context || {}, ai_mode: settings.aiMode }
+      timeout: aiMode === 'claude_code' ? CLAUDE_CODE_AUX_TIMEOUT : 9000,
+      body: { context: context || {}, ai_mode: aiMode }
     })
     return (r && typeof r.raw === 'string') ? r.raw : null
   } catch {
@@ -557,22 +571,28 @@ ipcMain.handle('spectate:tick', async (e, context) => {
   if (shot.status !== 'ok') return shot // no-source | no-change
 
   const settings = loadSettings()
-  // 로컬 LLM 강제 비활성 — 관전은 사용자가 게임/영상을 돌리는 중에 도는 기능이라
-  // 7B 로컬 모델이 VRAM을 같이 먹으면 둘 다 죽는다. 사용자 설정은 건드리지 않고
-  // 이 호출만 auto로 우회한다(되돌리기 곤란한 설정 변경 금지).
-  const aiMode = settings.aiMode === 'local' ? 'auto' : settings.aiMode
+  // 관전 전용 모델을 명시했으면 그대로 쓴다 — 사용자가 관전 드롭다운에서 고른
+  // 것은 이미 비전 가능한 모델뿐이라 우회할 이유가 없다.
+  // 미지정('')이면 예전 그대로: 전역 aiMode를 쓰되 로컬 LLM만 강제 비활성한다 —
+  // 관전은 사용자가 게임/영상을 돌리는 중에 도는 기능이라 7B 로컬 모델이 VRAM을
+  // 같이 먹으면 둘 다 죽는다. 사용자 설정은 건드리지 않고 이 호출만 auto로
+  // 우회한다(되돌리기 곤란한 설정 변경 금지).
+  const aiMode = settings.aiModeSpectate
+    || (settings.aiMode === 'local' ? 'auto' : settings.aiMode)
 
   try {
     await backend.ensureAvailableForRequest()
     const r = await requestBackendJson('/spectate', {
       method: 'POST',
-      timeout: 15000,
+      timeout: aiMode === 'claude_code' ? CLAUDE_CODE_AUX_TIMEOUT : 15000,
       body: { image_b64: shot.dataUrl, context: context || {}, ai_mode: aiMode }
     })
     if (!r || typeof r.raw !== 'string') return { status: 'no-vision' }
     // diff는 로그용 — 첫 프레임의 Infinity는 JSON에서 null이 되므로 -1로 눕힌다.
     const diff = Number.isFinite(shot.diff) ? shot.diff : -1
-    return { status: 'ok', raw: r.raw, diff, localBypassed: settings.aiMode === 'local' }
+    // 관전 전용 모델을 고른 경우엔 '우회'가 아니라 사용자의 명시 선택이다.
+    const localBypassed = !settings.aiModeSpectate && settings.aiMode === 'local'
+    return { status: 'ok', raw: r.raw, diff, localBypassed }
   } catch (error) {
     logWarn('[SPECTATE_VLM_FAIL]', error?.message || error)
     return { status: 'error', error: 'vlm call failed' }

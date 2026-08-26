@@ -9,10 +9,14 @@
 import { describe, it, expect } from 'vitest'
 import {
   SettingsSchema,
+  aiModeSchema,
   WorldDocumentSchema,
   CharacterEntrySchema,
   CharacterRegistrySchema
 } from '../electron/schemas.js'
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { VALID_AI_MODES } = require('../electron/services/settingsAggregate')
 
 // Mirror of SETTINGS_DEFAULTS in electron/main.js. If the defaults change,
 // this constant should change too — the test is here to catch *schema* drift
@@ -51,6 +55,23 @@ describe('SettingsSchema', () => {
     const bad = { ...DEFAULT_SETTINGS, aiMode: 'gpt5' }
     const parsed = SettingsSchema.safeParse(bad)
     expect(parsed.success).toBe(false)
+  })
+
+  // 두 목록이 갈라지면 스키마는 통과하는데 normalize가 기본값으로 눕히는(또는
+  // 그 반대) 조용한 버그가 난다. 새 provider를 한쪽에만 추가하면 여기서 터진다.
+  it('keeps aiMode enum and VALID_AI_MODES in sync', () => {
+    expect([...VALID_AI_MODES].sort()).toEqual([...aiModeSchema.options].sort())
+  })
+
+  it('accepts claude_code as an aiMode', () => {
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, aiMode: 'claude_code' }).success).toBe(true)
+  })
+
+  it('accepts empty-string and valid per-role ai modes, rejects junk', () => {
+    const ok = { ...DEFAULT_SETTINGS, aiModeDirector: '', aiModeSpectate: 'claude_code' }
+    expect(SettingsSchema.safeParse(ok).success).toBe(true)
+    const bad = { ...DEFAULT_SETTINGS, aiModeDirector: 'gpt5' }
+    expect(SettingsSchema.safeParse(bad).success).toBe(false)
   })
 
   it('rejects out-of-range memoryTurns', () => {
