@@ -28,6 +28,8 @@ from ai_config import (
     CLAUDE_CODE_MODEL,
     GROQ_MODEL,
     GROQ_VISION_MODEL,
+    OLLAMA_BASE_URL,
+    OLLAMA_VLM_MODEL,
     SYSTEM_PROMPT,
     MAX_NEW_TOKENS,
     TEMPERATURE,
@@ -78,7 +80,9 @@ class ClaudeService:
             print(f"[AI] loaded env file: {LOADED_ENV_FILE}")
         self.default_mode = AI_MODE
         self.mode = AI_MODE
-        self.valid_modes = {"auto", "local", "hf_api", "claude", "groq", "claude_code"}
+        self.valid_modes = {
+            "auto", "local", "hf_api", "claude", "groq", "claude_code", "ollama_vlm"
+        }
         self.auto_mode_priority = [
             mode for mode in AUTO_MODE_PRIORITY if mode in self.valid_modes and mode != "auto"
         ] or ["groq", "claude", "hf_api", "local"]
@@ -104,6 +108,9 @@ class ClaudeService:
         self._groq = None
         self._claude_code_bin: Optional[str] = None
         self._claude_code_cwd: Optional[str] = None
+        # ollama_vlm 가용성 프로브 캐시: (monotonic 시각, 결과). 참고용이라
+        # TTL이 짧다 — `ollama pull` 후 앱 재시작 없이 회복되어야 한다.
+        self._ollama_probe: Optional[Tuple[float, bool]] = None
 
         # 실제 provider 초기화는 첫 /chat 요청 또는 /warmup 시 `ensure_mode`가 수행.
         # 예전엔 여기서 바로 초기화해서 local 모드일 때 서버 기동이 블로킹되고
@@ -130,6 +137,11 @@ class ClaudeService:
         if mode == "claude_code":
             # 키가 아니라 **CLI 바이너리 존재**가 유일한 전제조건 (로그인은 CLI가 관리).
             return bool(self._resolve_claude_code_bin())
+        if mode == "ollama_vlm":
+            # ponytail: 여기선 네트워크를 치지 않는다 — 이 함수는 동기이고 auto 선택
+            # 경로에서도 불린다. Ollama가 실제로 떠 있는지는 probe_ollama_vlm과
+            # 본 호출의 예외 처리가 본다.
+            return self._module_available("httpx") and bool(OLLAMA_VLM_MODEL)
         return False
 
     @staticmethod
@@ -190,6 +202,12 @@ class ClaudeService:
             self._init_groq()
         elif mode == "claude_code":
             self._init_claude_code()
+        elif mode == "ollama_vlm":
+            # 붙잡을 클라이언트도 로드할 모델도 없다 — 호출마다 httpx로 로컬
+            # 서버를 친다. 여기서 프로브로 실패시키면 안 된다: 명시 선택 모드의
+            # init 실패는 _ensure_mode를 클라우드 provider로 폴백시켜, 로컬을
+            # 고른 사용자가 모르는 사이 API를 쓰게 된다.
+            print(f"[AI] ollama_vlm ready (model={OLLAMA_VLM_MODEL} at {OLLAMA_BASE_URL})")
         else:
             self.mode = "fallback"
 
@@ -272,10 +290,15 @@ class ClaudeService:
 
         AUTO_MODE_PRIORITY 필터를 안 거치는 게 의도적: priority는 auto의 *선택* 기준
         이지 "사용 가능한 provider 목록"이 아니다. priority에서 빠진 mode도 사용자가
-        명시 선택하면 동작하므로 UI엔 둘 다 보여야 한다."""
+        명시 선택하면 동작하므로 UI엔 둘 다 보여야 한다.
+
+        단 **대화 provider**만 센다. ollama_vlm은 관전 전용 비전 모드라 여기 끼면
+        키가 하나도 없는 사용자에게도 목록이 비지 않아서, 설정 창의 "provider 없음"
+        안내가 사라지고 main.py가 summarize_fn을 물려 MemoryService의 '비활성' 경로도
+        막힌다."""
         return sorted([
             mode for mode in self.valid_modes
-            if mode != "auto" and self._mode_has_prereqs(mode)
+            if mode not in ("auto", "ollama_vlm") and self._mode_has_prereqs(mode)
         ])
 
     def resolve_auto_target(self) -> Optional[str]:
@@ -972,6 +995,8 @@ class ClaudeService:
         if mode == "claude_code":
             # CLI가 모델을 고르므로 이름은 게이트 통과용 라벨일 뿐이다.
             return CLAUDE_CODE_MODEL or "claude-code"
+        if mode == "ollama_vlm":
+            return OLLAMA_VLM_MODEL or None
         return None
 
     async def describe_screen(
@@ -997,6 +1022,8 @@ class ClaudeService:
             return await self._describe_groq(model, image_b64, payload)
         if active_mode == "claude_code":
             return await self._describe_claude_code(image_b64, payload)
+        if active_mode == "ollama_vlm":
+            return await self._describe_ollama_vlm(model, image_b64, payload)
         return None
 
     async def _describe_claude(self, model: str, image_b64: str, user: str) -> str:
@@ -1054,6 +1081,80 @@ class ClaudeService:
             return await asyncio.to_thread(_call)
         except Exception as error:
             raise RuntimeError(f"groq vision failed: {error}") from error
+
+    # 콜드 로드(모델을 VRAM에 처음 올리는 시간)가 십수 초까지 가므로 클라우드보다
+    # 후하게 준다. 이 상한을 넘으면 electron 쪽 IPC 타임아웃이 먼저 끊는다.
+    _OLLAMA_TIMEOUT_SEC = 45.0
+    # 프로브 캐시 수명. 짧게 두는 이유는 `ollama pull` 직후 앱 재시작 없이 회복되게
+    # 하려는 것 — 관전 tick 자체가 25초 주기라 이보다 길면 한 사이클을 헛돈다.
+    _OLLAMA_PROBE_TTL_SEC = 20.0
+
+    async def probe_ollama_vlm(self) -> bool:
+        """`GET /api/tags`로 모델이 실제로 pull 되어 있는지 본다. **참고용**이다 —
+        게이트가 아니라 실패 로그를 사람이 읽을 수 있게 만드는 용도.
+
+        프로브를 게이트로 쓰면 프로브 한 번의 오탐이 관전을 영영 침묵시킨다. 진짜
+        방어선은 `_describe_ollama_vlm`의 예외 처리."""
+        now = time.monotonic()
+        if self._ollama_probe and now - self._ollama_probe[0] < self._OLLAMA_PROBE_TTL_SEC:
+            return self._ollama_probe[1]
+
+        found = False
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                response = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
+                models = (response.json() or {}).get("models") or []
+            names = {str(item.get("name", "")) for item in models}
+            # ollama는 태그 없는 이름을 `:latest`로 저장한다.
+            found = OLLAMA_VLM_MODEL in names or f"{OLLAMA_VLM_MODEL}:latest" in names
+        except Exception as error:  # noqa: BLE001
+            print(f"[AI] ollama probe failed: {type(error).__name__}: {error}")
+
+        self._ollama_probe = (now, found)
+        return found
+
+    async def _describe_ollama_vlm(self, model: str, image_b64: str, user: str) -> str:
+        """로컬 Ollama의 비전 모델로 화면 한 장을 읽는다.
+
+        `images`엔 **base64 원형**만 넣는다 — `data:image/jpeg;base64,` 접두사를
+        붙이면 Ollama가 그대로 디코드하려다 실패한다(클라우드 OpenAI 호환 경로와
+        다른 점).
+        """
+        import httpx
+
+        payload = {
+            "model": model,
+            # 시스템 역할을 따로 두지 않고 한 user 메시지에 합친다 — 이미지가 붙은
+            # 메시지와 지시문이 떨어져 있으면 작은 VLM이 지시를 흘리는 일이 잦다.
+            "messages": [{
+                "role": "user",
+                "content": f"{self.SPECTATE_SYSTEM}\n\n{user}",
+                "images": [image_b64],
+            }],
+            "stream": False,
+            "options": {"num_predict": 160},
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self._OLLAMA_TIMEOUT_SEC) as client:
+                response = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
+                response.raise_for_status()
+                content = ((response.json() or {}).get("message") or {}).get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise RuntimeError("empty content")
+            return content.strip()
+        except Exception as error:  # noqa: BLE001
+            # 연결 거부·모델 없음(404)·서버 오류·비정형 응답·타임아웃이 전부 여기로
+            # 모인다. 클라우드 비전과 같은 계약: RuntimeError → routers.spectate가
+            # 흡수 → raw=None → 클라이언트는 그 tick만 쉰다.
+            # 로그는 콘솔 코드페이지를 타므로 영어로 남긴다(한글이면 mojibake).
+            hint = "" if await self.probe_ollama_vlm() else (
+                f" (hint: '{OLLAMA_VLM_MODEL}' not found at {OLLAMA_BASE_URL}; "
+                f"is Ollama running? try `ollama pull {OLLAMA_VLM_MODEL}`)"
+            )
+            raise RuntimeError(f"ollama_vlm vision failed: {error}{hint}") from error
 
     async def _summarize_claude(self, system: str, user: str) -> str:
         try:

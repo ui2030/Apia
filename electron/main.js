@@ -585,7 +585,11 @@ ipcMain.handle('spectate:tick', async (e, context) => {
     await backend.ensureAvailableForRequest()
     const r = await requestBackendJson('/spectate', {
       method: 'POST',
-      timeout: aiMode === 'claude_code' ? CLAUDE_CODE_AUX_TIMEOUT : 15000,
+      // ollama_vlm은 첫 호출에 모델 콜드 로드가 붙어 15s를 넘길 수 있다 —
+      // claude_code와 같은 상한을 준다(러너의 35s보다는 여전히 앞에서 끊긴다).
+      timeout: (aiMode === 'claude_code' || aiMode === 'ollama_vlm')
+        ? CLAUDE_CODE_AUX_TIMEOUT
+        : 15000,
       body: { image_b64: shot.dataUrl, context: context || {}, ai_mode: aiMode }
     })
     if (!r || typeof r.raw !== 'string') return { status: 'no-vision' }

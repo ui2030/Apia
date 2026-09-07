@@ -74,6 +74,14 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.safeParse(bad).success).toBe(false)
   })
 
+  // 관전 전용 로컬 비전 모드. aiMode enum에 넣으면 대화·디렉터에도 새므로
+  // 관전 필드에서만 통과해야 한다.
+  it('accepts ollama_vlm for aiModeSpectate only', () => {
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, aiModeSpectate: 'ollama_vlm' }).success).toBe(true)
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, aiModeDirector: 'ollama_vlm' }).success).toBe(false)
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, aiMode: 'ollama_vlm' }).success).toBe(false)
+  })
+
   it('rejects out-of-range memoryTurns', () => {
     const bad = { ...DEFAULT_SETTINGS, memoryTurns: 100 }
     expect(SettingsSchema.safeParse(bad).success).toBe(false)

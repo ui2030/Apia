@@ -82,7 +82,8 @@ def _read_int(*names: str, default: int) -> int:
         return default
 
 
-# Supported modes: auto, local, hf_api, claude, groq, claude_code
+# Supported modes: auto, local, hf_api, claude, groq, claude_code, ollama_vlm
+# (ollama_vlm은 관전 전용 비전 모드 — 채팅/요약 경로는 지원하지 않는다)
 AI_MODE = _read_env("APIA_AI_MODE", "AI_MODE", default="auto")
 DEFAULT_MEMORY_TURNS = _read_int("APIA_DEFAULT_MEMORY_TURNS", default=10)
 
@@ -111,6 +112,16 @@ GROQ_VISION_MODEL = _read_env(
 CLAUDE_CODE_MODEL = _read_env("APIA_CLAUDE_CODE_MODEL", default="")
 # 빈 문자열이면 PATH에서 `claude`를 찾는다(shutil.which가 Windows의 .cmd/PATHEXT를 처리).
 CLAUDE_CODE_BIN = _read_env("APIA_CLAUDE_CODE_BIN", default="")
+
+# ── ollama_vlm 모드 (관전 전용) ─────────────────────────────────────────────
+# 로컬에 설치된 Ollama의 비전 모델을 HTTP로 부른다. 키가 없고 화면 이미지가 PC를
+# 떠나지 않는 대신 첫 호출은 모델 콜드 로드(수 초~십수 초)가 붙는다.
+# claude_code와 같은 이유로 **명시 선택 전용** — AUTO_MODE_PRIORITY에 넣지 않는다
+# (auto가 몰래 고르면 관전이 로컬 VRAM을 물고 게임과 다툰다).
+OLLAMA_BASE_URL = _read_env(
+    "APIA_OLLAMA_BASE_URL", default="http://localhost:11434"
+).rstrip("/")
+OLLAMA_VLM_MODEL = _read_env("APIA_OLLAMA_VLM_MODEL", default="qwen3-vl:4b-instruct")
 
 AUTO_MODE_PRIORITY = tuple(
     item.strip()

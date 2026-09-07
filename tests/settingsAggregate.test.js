@@ -16,6 +16,7 @@ import { join } from 'node:path'
 const {
   SettingsRepository,
   SETTINGS_DEFAULTS,
+  VISION_AI_MODES,
   BACKEND_ENV_EXAMPLE_FILENAME
 } = require('../electron/services/settingsAggregate')
 
@@ -154,9 +155,32 @@ describe('normalize', () => {
 
   it('keeps every vision-capable mode for aiModeSpectate', () => {
     const repo = createRepo()
-    for (const mode of ['auto', 'claude', 'groq', 'claude_code']) {
+    for (const mode of ['auto', 'claude', 'groq', 'claude_code', 'ollama_vlm']) {
       expect(repo.normalize({ aiModeSpectate: mode }).aiModeSpectate).toBe(mode)
     }
+  })
+
+  // 드롭다운이 normalize가 거부할 값을 제시하면 사용자는 "골랐는데 안 걸린다"를
+  // 겪는다(조용히 ''로 눕는다). 두 목록은 같이 움직여야 한다.
+  it('offers only vision-capable modes in the spectate dropdown', async () => {
+    const html = await readFile(new URL('../settings.html', import.meta.url), 'utf-8')
+    const select = html.match(/<select id="ai-mode-spectate">([\s\S]*?)<\/select>/)
+    expect(select).toBeTruthy()
+    const values = [...select[1].matchAll(/value="([^"]*)"/g)].map(m => m[1])
+    expect(values).toContain('ollama_vlm')
+    for (const value of values) {
+      if (value === '') continue // '기본(대화와 동일)'
+      expect(VISION_AI_MODES.has(value)).toBe(true)
+    }
+  })
+
+  // 로컬 Ollama VLM은 이미지 전용 경로다 — 대화/디렉터로 새면 백엔드가
+  // "unsupported mode"로 떨어뜨리므로 읽는 경계에서 눕힌다.
+  it('accepts ollama_vlm only for the spectate role', () => {
+    const repo = createRepo()
+    const settings = repo.normalize({ aiMode: 'ollama_vlm', aiModeDirector: 'ollama_vlm' })
+    expect(settings.aiMode).toBe('auto')
+    expect(settings.aiModeDirector).toBe('')
   })
 
   it('does not force per-role local to auto when the packaged backend forces it', () => {

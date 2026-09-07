@@ -25,7 +25,9 @@ const VALID_AI_MODES = new Set(aiModeSchema.options)
 // 전용(local/hf_api)을 고르면 백엔드 vision_model_for가 None을 돌려줘 관전이
 // 영영 조용해진다 — 설정 창 드롭다운엔 애초에 안 보이지만, 손으로 고친
 // settings.json에서 들어올 수 있으므로 읽는 경계에서 막는다.
-const VISION_AI_MODES = new Set(['auto', 'claude', 'groq', 'claude_code'])
+// ollama_vlm은 관전에서만 유효한 로컬 비전 모드라 VALID_AI_MODES(대화·디렉터용
+// enum)엔 없다 — 그래서 이 집합만 aiModeSchema.options의 부분집합이 아니다.
+const VISION_AI_MODES = new Set(['auto', 'claude', 'groq', 'claude_code', 'ollama_vlm'])
 
 // 역할별 모델 필드('' = 대화와 동일)와 각각이 허용하는 값의 집합.
 const ROLE_AI_MODES = Object.freeze({
@@ -86,6 +88,16 @@ APIA_AI_MODE=auto
 # 않으므로, 쓰려면 설정 창에서 직접 고르세요.
 # APIA_CLAUDE_CODE_BIN=              # 비우면 PATH에서 claude를 찾음
 # APIA_CLAUDE_CODE_MODEL=            # 비우면 CLI 기본 모델
+
+# === ollama_vlm 모드 (관전 전용 — 로컬 Ollama로 화면을 봅니다) ===
+# 화면 이미지가 PC 밖으로 나가지 않고 키도 필요 없습니다. 준비물:
+#   1) Ollama 설치 후 실행 (https://ollama.com)
+#   2) ollama pull qwen3-vl:4b-instruct
+# 설정 창의 "관전 코멘트 모델"에서 직접 고르세요(auto는 이 모드를 고르지 않습니다).
+# 첫 호출은 모델을 메모리에 올리느라 10초 이상 걸릴 수 있고, 그 tick은 조용히
+# 건너뜁니다 — 두 번째 호출부터 빨라집니다.
+# APIA_OLLAMA_BASE_URL=http://localhost:11434
+# APIA_OLLAMA_VLM_MODEL=qwen3-vl:4b-instruct
 
 # === step 2-4 (장기 기억 / 파일 검색 / 웹 검색) ===
 # APIA_MEMORY_ENABLED=true

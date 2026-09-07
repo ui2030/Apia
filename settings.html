@@ -386,7 +386,7 @@
     <div class="row">
       <div>
         <div class="row-label">관전 코멘트 모델</div>
-        <div class="row-sub">화면을 봐야 하므로 이미지를 읽을 수 있는 모델만 고를 수 있어요</div>
+        <div class="row-sub">화면을 봐야 하므로 이미지를 읽을 수 있는 모델만 고를 수 있어요 · 로컬 VLM은 Ollama 설치 + <code>ollama pull qwen3-vl:4b-instruct</code>가 필요해요</div>
       </div>
       <select id="ai-mode-spectate">
         <option value="">기본(대화와 동일)</option>
@@ -394,6 +394,7 @@
         <option value="groq">Groq API</option>
         <option value="claude">Claude API</option>
         <option value="claude_code">Claude Code (구독 로그인)</option>
+        <option value="ollama_vlm">로컬 VLM (Ollama)</option>
       </select>
     </div>
 

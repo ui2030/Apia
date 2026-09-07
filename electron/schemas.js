@@ -27,6 +27,11 @@ const aiModeSchema = z.enum(['auto', 'local', 'hf_api', 'claude', 'groq', 'claud
 // 알 수 없는 값은 settingsAggregate.normalize()가 ''로 눕힌다.
 const roleAiModeSchema = z.union([z.literal(''), aiModeSchema])
 
+// 관전 전용 비전 모드 — 로컬 Ollama VLM. 대화·디렉터는 텍스트 호출이라 이 모드가
+// 의미가 없어(백엔드도 chat/summarize를 지원하지 않는다) aiMode enum엔 넣지 않고
+// 관전 필드에서만 유효하게 둔다.
+const spectateAiModeSchema = z.union([roleAiModeSchema, z.literal('ollama_vlm')])
+
 // windowAnchor: optional anchor point used to restore the main overlay onto
 // the same display across runs. Only x/y are persisted — the overlay is
 // non-resizable and always sized to the chosen display's workArea, so a
@@ -62,7 +67,7 @@ const SettingsSchema = z.object({
   // 역할별 모델 — 행동 디렉터 / 관전 코멘트. optional: 구버전 settings.json은
   // SETTINGS_DEFAULTS의 ''로 하이드레이트된다.
   aiModeDirector: roleAiModeSchema.optional(),
-  aiModeSpectate: roleAiModeSchema.optional()
+  aiModeSpectate: spectateAiModeSchema.optional()
 }).passthrough() // tolerate forward-compatible extra keys, but enforce known ones
 
 // ── World (apia-world.json) ──────────────────────────────────────────────
@@ -245,6 +250,7 @@ module.exports = {
   CURRENT_REGISTRY_VERSION,
   aiModeSchema,
   roleAiModeSchema,
+  spectateAiModeSchema,
   worldTypeSchema,
   parseCharacterEntries,
   parseWorldObjects
