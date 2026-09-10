@@ -32,6 +32,11 @@ const roleAiModeSchema = z.union([z.literal(''), aiModeSchema])
 // 관전 필드에서만 유효하게 둔다.
 const spectateAiModeSchema = z.union([roleAiModeSchema, z.literal('ollama_vlm')])
 
+// TTS 엔진 — 'default'는 기존 체인(edge→pyttsx3→silent). 'cosyvoice'는 사용자가
+// 직접 고른 경우에만 타는 로컬 음성 복제 엔진이고, 백엔드 구성이 안 됐으면
+// 조용히 기존 체인으로 폴백한다.
+const ttsEngineSchema = z.enum(['default', 'cosyvoice'])
+
 // windowAnchor: optional anchor point used to restore the main overlay onto
 // the same display across runs. Only x/y are persisted — the overlay is
 // non-resizable and always sized to the chosen display's workArea, so a
@@ -67,7 +72,14 @@ const SettingsSchema = z.object({
   // 역할별 모델 — 행동 디렉터 / 관전 코멘트. optional: 구버전 settings.json은
   // SETTINGS_DEFAULTS의 ''로 하이드레이트된다.
   aiModeDirector: roleAiModeSchema.optional(),
-  aiModeSpectate: spectateAiModeSchema.optional()
+  aiModeSpectate: spectateAiModeSchema.optional(),
+  // TTS 엔진. 'default' = 기존 체인(edge→pyttsx3→silent), 'cosyvoice' = 로컬
+  // 음성 복제. optional: 구버전 settings.json은 'default'로 하이드레이트.
+  ttsEngine: ttsEngineSchema.optional(),
+  // 참조 음성의 원본 파일명 — 표시 전용. 실제 wav는 backend-data/cosyvoice/
+  // prompt.wav 한 곳에 있고(백엔드가 그 규약 경로를 읽는다) 경로를 설정에
+  // 중복 저장하지 않는다.
+  cosyvoicePromptName: z.string().nullable().optional()
 }).passthrough() // tolerate forward-compatible extra keys, but enforce known ones
 
 // ── World (apia-world.json) ──────────────────────────────────────────────
@@ -251,6 +263,7 @@ module.exports = {
   aiModeSchema,
   roleAiModeSchema,
   spectateAiModeSchema,
+  ttsEngineSchema,
   worldTypeSchema,
   parseCharacterEntries,
   parseWorldObjects

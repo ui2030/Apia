@@ -17,7 +17,8 @@ const {
   SettingsRepository,
   SETTINGS_DEFAULTS,
   VISION_AI_MODES,
-  BACKEND_ENV_EXAMPLE_FILENAME
+  BACKEND_ENV_EXAMPLE_FILENAME,
+  BACKEND_ENV_EXAMPLE_CONTENT
 } = require('../electron/services/settingsAggregate')
 
 let tmpDir
@@ -189,6 +190,64 @@ describe('normalize', () => {
       aiMode: 'auto',
       aiModeDirector: 'local'
     })
+  })
+
+  // ── TTS 엔진 (opt-in cosyvoice) ────────────────────────────────────────
+  // 기본값이 'default'가 아니면 모든 사용자의 목소리가 바뀐다 — 기본 체인 무변이
+  // 이 기능의 전제라서 기본값 자체를 테스트로 고정한다.
+  it("defaults ttsEngine to 'default' (기존 edge 체인)", () => {
+    const repo = createRepo()
+    expect(repo.normalize().ttsEngine).toBe('default')
+    expect(repo.normalize().cosyvoicePromptName).toBeNull()
+  })
+
+  it('keeps a valid ttsEngine', () => {
+    const repo = createRepo()
+    expect(repo.normalize({ ttsEngine: 'cosyvoice' }).ttsEngine).toBe('cosyvoice')
+  })
+
+  it("coerces an unknown ttsEngine to 'default'", () => {
+    const repo = createRepo()
+    for (const bad of ['piper', '', 42, null]) {
+      expect(repo.normalize({ ttsEngine: bad }).ttsEngine).toBe('default')
+    }
+  })
+
+  it('coerces a non-string cosyvoicePromptName to null and caps its length', () => {
+    const repo = createRepo()
+    expect(repo.normalize({ cosyvoicePromptName: 42 }).cosyvoicePromptName).toBeNull()
+    expect(repo.normalize({ cosyvoicePromptName: '' }).cosyvoicePromptName).toBeNull()
+    expect(repo.normalize({ cosyvoicePromptName: 'x'.repeat(500) }).cosyvoicePromptName)
+      .toHaveLength(120)
+  })
+
+  it('offers only known engines in the tts-engine dropdown', async () => {
+    const html = await readFile(new URL('../settings.html', import.meta.url), 'utf-8')
+    const select = html.match(/<select id="tts-engine">([\s\S]*?)<\/select>/)
+    expect(select).toBeTruthy()
+    const values = [...select[1].matchAll(/value="([^"]*)"/g)].map(m => m[1])
+    expect(values).toEqual(['default', 'cosyvoice'])
+  })
+
+  // 저장 화이트리스트에 빠지면 사용자가 고른 엔진이 저장 한 번에 되돌아간다.
+  it('includes the tts engine fields in the settings save whitelist', async () => {
+    const html = await readFile(new URL('../settings.html', import.meta.url), 'utf-8')
+    expect(html).toMatch(/ttsEngine:\s*document\.getElementById\('tts-engine'\)\.value/)
+    expect(html).toMatch(/^\s*cosyvoicePromptName,$/m)
+  })
+
+  it('documents the cosyvoice knobs in backend.env.example', () => {
+    for (const knob of [
+      'APIA_COSYVOICE_PYTHON',
+      'APIA_COSYVOICE_REPO',
+      'APIA_COSYVOICE_MODEL_DIR',
+      'APIA_COSYVOICE_PROMPT_WAV',
+      'APIA_COSYVOICE_IDLE_UNLOAD_MIN'
+    ]) {
+      expect(BACKEND_ENV_EXAMPLE_CONTENT).toContain(knob)
+    }
+    // 한국어 참조가 필수인 이유(중국어 참조 = 발음 오염)를 반드시 안내한다.
+    expect(BACKEND_ENV_EXAMPLE_CONTENT).toContain('한국어')
   })
 
   it('coerces non-array models to []', () => {

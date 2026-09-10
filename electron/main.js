@@ -615,10 +615,17 @@ ipcMain.handle('tts', async (e, { text, voice_id }) => {
 
     // I단계 — 엔진에 따라 mp3(edge)/wav(pyttsx3)가 오므로 Content-Type을
     // 렌더러까지 흘린다. 렌더러는 이걸 Blob type으로 쓴다.
+    //
+    // cosyvoice는 첫 발화에서 모델을 GPU에 올린다(실측 ~20s + 합성). 30s로는
+    // 콜드 스타트가 통째로 타임아웃 나므로 이 엔진만 상한을 늘린다 — 백엔드는
+    // 어차피 실패 시 기본 목소리로 폴백하니 늘려도 무음이 되지 않는다.
+    // 240s = 백엔드 최악 경로(모델 로드 타임아웃 180s + 청크 30s + 폴백 합성)보다
+    // 커야 IPC가 먼저 끊기지 않고 폴백 오디오라도 받는다.
+    const engine = settings.ttsEngine === 'cosyvoice' ? 'cosyvoice' : null
     const response = await requestBackend('/tts', {
       method: 'POST',
-      timeout: 30000,
-      body: { text, voice_id: voice_id ?? settings.voiceId ?? null }
+      timeout: engine ? 240000 : 30000,
+      body: { text, voice_id: voice_id ?? settings.voiceId ?? null, engine }
     })
     const audio = Buffer.from(await response.arrayBuffer())
     return {
@@ -950,6 +957,21 @@ ipcMain.handle('settings:moveToDisplay', async (e, payload) => {
   repositionCornerWindow() // 핫코너도 캐릭터를 따라간다
   logInfo('[DISPLAY_MOVE]', { displayId, landed: main.getBounds() })
   return { ok: true }
+})
+
+// CosyVoice 참조 음성 저장. 렌더러가 이미 22.05kHz mono WAV로 정규화해서
+// 보내므로(음성 복제 업로드와 같은 헬퍼) 여기선 규약 경로에 쓰기만 한다.
+// 백엔드는 이 경로를 직접 읽는다 — 설정에 경로를 따로 저장하지 않는다.
+ipcMain.handle('cosyvoice-set-prompt', async (_event, { wavBase64 }) => {
+  try {
+    const dir = path.join(settingsRepo.getDataDir(), 'cosyvoice')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'prompt.wav'), Buffer.from(String(wavBase64 || ''), 'base64'))
+    return { ok: true }
+  } catch (error) {
+    logWarn('[COSYVOICE_PROMPT_WRITE_FAIL]', error)
+    return { ok: false, error: error?.message || String(error) }
+  }
 })
 
 // Opens the user-data/backend-data directory in the OS file manager so the

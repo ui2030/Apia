@@ -98,6 +98,9 @@ class VoiceItem(BaseModel):
 class VoicesResponse(BaseModel):
     voices: List[VoiceItem]
     unsupported_custom_voices: List[VoiceItem]
+    # CosyVoice 엔진의 경로 구성이 검증됐는지. 설정 UI가 이걸로 드롭다운
+    # 선택지를 활성/비활성한다 — 고를 수는 있는데 늘 폴백하는 상태를 막는다.
+    cosyvoice_ready: bool = False
 
 
 # ── /warmup ────────────────────────────────────────────────────────────────
@@ -159,6 +162,9 @@ class WarmupStatusResponse(BaseModel):
 class TTSRequest(BaseModel):
     text: str
     voice_id: Optional[str] = None
+    # opt-in 엔진 선택. None/"default" = 기존 체인(edge→pyttsx3→silent).
+    # "cosyvoice" = 로컬 CosyVoice3 음성 복제(실패 시 기존 체인으로 폴백).
+    engine: Optional[str] = None
 
 
 # ── /stt ───────────────────────────────────────────────────────────────────

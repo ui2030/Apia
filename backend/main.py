@@ -125,6 +125,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # CosyVoice 워커는 별도 프로세스라 백엔드가 죽어도 살아남아 VRAM을 붙든다.
+        # 안 떠 있으면 no-op.
+        from services import cosyvoice_service as cosy
+
+        await cosy.kill()
         await store_service.close()
 
 

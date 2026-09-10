@@ -122,6 +122,10 @@ async def warmup_status(request: Request):
     # (ensure_mode 쪽 검사는 target이 local이면 건너뛰므로 local 전용 사용자는
     # 이 경로가 유일한 회수 지점이다).
     await claude.maybe_unload_idle_local()
+    # 같은 이유로 CosyVoice 워커도 여기서 회수한다(VRAM 4GB대 상주).
+    from services import cosyvoice_service as cosy
+
+    await cosy.maybe_unload_idle()
 
     auto_target = claude.resolve_auto_target()
     available = claude.list_available_modes()

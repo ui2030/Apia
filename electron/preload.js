@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('api', {
   voiceCloneProgress: (jobId) => ipcRenderer.invoke('voice-clone-progress', jobId),
   voiceClonePreview: (voiceId) => ipcRenderer.invoke('voice-clone-preview', voiceId),
   voiceCloneDelete: (voiceId) => ipcRenderer.invoke('voice-clone-delete', voiceId),
+  // CosyVoice 엔진의 참조(캐릭터) 음성 — 정규화된 WAV를 backend-data에 쓴다.
+  cosyvoiceSetPrompt: (wavBase64) => ipcRenderer.invoke('cosyvoice-set-prompt', { wavBase64 }),
   warmup: () => ipcRenderer.invoke('warmup'),
   getWarmupStatus: () => ipcRenderer.invoke('warmup:status'),
   loadWorld: () => ipcRenderer.invoke('load-world'),

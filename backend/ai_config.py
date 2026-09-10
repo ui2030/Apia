@@ -136,6 +136,19 @@ AUTO_MODE_PRIORITY = tuple(
 # 쓰고 몇 시간 방치되는 게 이 앱의 보통 사용 패턴이다. 분 단위, 0이면 비활성.
 LOCAL_IDLE_UNLOAD_MIN = _read_int("APIA_LOCAL_IDLE_UNLOAD_MIN", default=30)
 
+# ── cosyvoice TTS 엔진 (opt-in) ─────────────────────────────────────────────
+# 로컬 CosyVoice3로 캐릭터 목소리를 복제해 말하는 TTS 엔진. 기본 체인
+# (edge→pyttsx3→silent)은 건드리지 않고, 설정에서 명시 선택했을 때만 탄다.
+# 경로가 하나라도 비었거나 존재하지 않으면 엔진은 조용히 비활성 = 기본 폴백.
+COSYVOICE_PYTHON = _read_env("APIA_COSYVOICE_PYTHON", default="")
+COSYVOICE_REPO = _read_env("APIA_COSYVOICE_REPO", default="")
+COSYVOICE_MODEL_DIR = _read_env("APIA_COSYVOICE_MODEL_DIR", default="")
+# 참조(캐릭터) 음성. 비우면 DATA_DIR/cosyvoice/prompt.wav → 없으면 edge로
+# 한국어 기본 참조를 한 번 만들어 캐시한다(cosyvoice_service 참조).
+COSYVOICE_PROMPT_WAV = _read_env("APIA_COSYVOICE_PROMPT_WAV", default="")
+# local LLM과 같은 이유 — 0.5B라도 VRAM 4GB대를 상주로 문다. 분 단위, 0이면 비활성.
+COSYVOICE_IDLE_UNLOAD_MIN = _read_int("APIA_COSYVOICE_IDLE_UNLOAD_MIN", default=30)
+
 MAX_NEW_TOKENS = _read_int("APIA_MAX_NEW_TOKENS", default=512)
 TEMPERATURE = float(_read_env("APIA_TEMPERATURE", default="0.7"))
 TOP_P = float(_read_env("APIA_TOP_P", default="0.9"))

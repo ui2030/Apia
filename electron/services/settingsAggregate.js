@@ -15,7 +15,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const { SettingsSchema, aiModeSchema } = require('../schemas')
+const { SettingsSchema, aiModeSchema, ttsEngineSchema } = require('../schemas')
 const { normalizeAnchor } = require('./windowBoundsPolicy')
 
 // schemas.js의 aiMode enum이 단일 출처 — 여기서 다시 나열하면 둘이 갈라진다.
@@ -28,6 +28,9 @@ const VALID_AI_MODES = new Set(aiModeSchema.options)
 // ollama_vlm은 관전에서만 유효한 로컬 비전 모드라 VALID_AI_MODES(대화·디렉터용
 // enum)엔 없다 — 그래서 이 집합만 aiModeSchema.options의 부분집합이 아니다.
 const VISION_AI_MODES = new Set(['auto', 'claude', 'groq', 'claude_code', 'ollama_vlm'])
+
+// TTS 엔진 — schemas.js가 단일 출처. 모르는 값은 'default'(기존 체인)로 눕힌다.
+const VALID_TTS_ENGINES = new Set(ttsEngineSchema.options)
 
 // 역할별 모델 필드('' = 대화와 동일)와 각각이 허용하는 값의 집합.
 const ROLE_AI_MODES = Object.freeze({
@@ -49,6 +52,12 @@ const SETTINGS_DEFAULTS = Object.freeze({
   memoryTurns: 10,
   ttsEnabled: true,
   voiceId: null,
+  // opt-in TTS 엔진. 'default'가 기존 체인(edge→pyttsx3→silent) — 기본값을
+  // 바꾸면 모든 사용자의 목소리가 바뀌므로 절대 'cosyvoice'로 두지 않는다.
+  ttsEngine: 'default',
+  // CosyVoice 참조 음성의 원본 파일명(표시 전용). wav 자체는
+  // backend-data/cosyvoice/prompt.wav 규약 경로에 있다.
+  cosyvoicePromptName: null,
   windowAnchor: null,
   // Step 4: if true, every /chat request defaults to use_web=true so the
   // assistant tries a web search before answering. Per-message override
@@ -98,6 +107,25 @@ APIA_AI_MODE=auto
 # 건너뜁니다 — 두 번째 호출부터 빨라집니다.
 # APIA_OLLAMA_BASE_URL=http://localhost:11434
 # APIA_OLLAMA_VLM_MODEL=qwen3-vl:4b-instruct
+
+# === CosyVoice TTS 엔진 (선택 — 로컬에서 캐릭터 목소리를 복제해 말합니다) ===
+# 설정 창의 "TTS 엔진"에서 CosyVoice를 골라야 동작하고, 아래 경로가 하나라도
+# 없으면 조용히 기본 목소리(edge)로 말합니다. 준비물:
+#   1) CosyVoice 저장소 + Fun-CosyVoice3-0.5B 모델을 내려받은 폴더
+#   2) 그 폴더용 파이썬 가상환경(torch/torchaudio 포함) — 백엔드 환경과 별개입니다
+# 첫 요청은 모델을 GPU에 올리느라 20초 이상 걸리고(그 뒤로는 문장당 1~3초),
+# 켜져 있는 동안 VRAM을 약 4.2GB 씁니다. 아무것도 말하지 않은 채
+# APIA_COSYVOICE_IDLE_UNLOAD_MIN분이 지나면 자동으로 반납합니다.
+# APIA_COSYVOICE_PYTHON=C:\\Users\\<사용자>\\Documents\\cosyvoice3-exp\\venv\\Scripts\\python.exe
+# APIA_COSYVOICE_REPO=C:\\Users\\<사용자>\\Documents\\cosyvoice3-exp\\CosyVoice
+# APIA_COSYVOICE_MODEL_DIR=pretrained_models/Fun-CosyVoice3-0.5B
+# 참조 음성(캐릭터 목소리). 비우면 설정 창에서 올린 파일
+# (backend-data/cosyvoice/prompt.wav)을 쓰고, 그것도 없으면 한국어 기본 참조를
+# 한 번 자동 생성해 캐시합니다.
+# **반드시 한국어 음성을 쓰세요.** 중국어 참조를 주면 중국어 발음이 섞여
+# 한국어가 오염됩니다(실측: "뭐" → "모").
+# APIA_COSYVOICE_PROMPT_WAV=
+# APIA_COSYVOICE_IDLE_UNLOAD_MIN=30
 
 # === step 2-4 (장기 기억 / 파일 검색 / 웹 검색) ===
 # APIA_MEMORY_ENABLED=true
@@ -184,6 +212,13 @@ class SettingsRepository {
     settings.useWallpaperMode = settings.useWallpaperMode !== false
     settings.models = Array.isArray(settings.models) ? settings.models : []
     settings.voiceId = typeof settings.voiceId === 'string' && settings.voiceId ? settings.voiceId : null
+    if (!VALID_TTS_ENGINES.has(settings.ttsEngine)) {
+      settings.ttsEngine = SETTINGS_DEFAULTS.ttsEngine
+    }
+    settings.cosyvoicePromptName =
+      typeof settings.cosyvoicePromptName === 'string' && settings.cosyvoicePromptName
+        ? settings.cosyvoicePromptName.slice(0, 120)
+        : null
     // Anchor: normalize through the policy module — non-finite, missing, or
     // malformed payloads degrade to `null`, which tells WindowManager to
     // fall back to the primary display.

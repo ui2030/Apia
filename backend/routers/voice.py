@@ -99,6 +99,10 @@ async def list_voices():
         }
         for v in vm.list_voices()
     ]
+    from services import cosyvoice_service as cosy
+
+    cosyvoice_ready = cosy.is_configured()
+
     if _clone_available():
         # 정렬: edge(기본 후보) → custom(명시 적용 대상) → system
         engine_voices = tts.list_voices()
@@ -107,11 +111,13 @@ async def list_voices():
         return {
             "voices": edge + custom + rest,
             "unsupported_custom_voices": [],
+            "cosyvoice_ready": cosyvoice_ready,
         }
     # seed-vc 비가용(패키징 exe 등) — custom은 선택 불가 목록으로 강등
     return {
         "voices": tts.list_voices(),
         "unsupported_custom_voices": custom,
+        "cosyvoice_ready": cosyvoice_ready,
     }
 
 

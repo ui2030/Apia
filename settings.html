@@ -517,6 +517,28 @@
     </div>
 
     <div class="row">
+      <div class="row-label">TTS 엔진</div>
+      <select id="tts-engine">
+        <option value="default">기본 (인터넷 음성)</option>
+        <option value="cosyvoice">CosyVoice (로컬 · 캐릭터 목소리)</option>
+      </select>
+    </div>
+    <div class="helper-text" id="tts-engine-hint" hidden></div>
+
+    <!-- CosyVoice 참조 음성 — 엔진을 골랐을 때만 보인다 -->
+    <div class="row" id="cosyvoice-prompt-row" hidden style="flex-direction:column; align-items:stretch; gap:6px;">
+      <div>
+        <div class="row-label">캐릭터 목소리</div>
+        <div class="row-sub">한국어 음성 파일(3초 이상)을 올리면 그 목소리로 말해요. 안 올리면 기본 한국어 목소리를 참조로 씁니다. 중국어·영어 음성은 발음이 섞이니 피해 주세요.</div>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="file" id="cosyvoice-prompt-file" accept="audio/*" hidden>
+        <button type="button" class="btn btn-ghost" id="cosyvoice-prompt-pick">파일 선택</button>
+        <div id="cosyvoice-prompt-label" class="helper-text" style="flex:1; min-width:0;"></div>
+      </div>
+    </div>
+
+    <div class="row">
       <div class="row-label">현재 목소리</div>
       <select id="voice-select">
         <option value="">기본 목소리</option>
@@ -1237,6 +1259,9 @@ function applyToUI() {
   document.getElementById('memory-turns').value = settings.memoryTurns || 10
   document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '턴'
   document.getElementById('tts-enabled').checked = settings.ttsEnabled !== false
+  document.getElementById('tts-engine').value = settings.ttsEngine || 'default'
+  cosyvoicePromptName = settings.cosyvoicePromptName || null
+  updateCosyvoiceRow()
   document.getElementById('use-web-default-toggle').checked = settings.useWebDefault === true
   document.getElementById('use-wallpaper-mode').checked = settings.useWallpaperMode !== false
 }
@@ -1443,9 +1468,53 @@ async function refreshProviderStatus() {
   renderProviderHint(status)
 }
 
+// ── CosyVoice 엔진 ───────────────────────────────────────────────────────
+// 백엔드 경로 구성이 검증됐을 때만 드롭다운에서 고를 수 있다 — 고를 수는 있는데
+// 늘 기본 목소리로 폴백하는 "왜 안 되지" 상태를 만들지 않는다.
+let cosyvoiceReady = false
+let cosyvoicePromptName = null
+
+function updateCosyvoiceRow() {
+  const engineSel = document.getElementById('tts-engine')
+  const option = engineSel?.querySelector('option[value="cosyvoice"]')
+  const hint = document.getElementById('tts-engine-hint')
+  if (option) option.disabled = !cosyvoiceReady
+  if (hint) {
+    hint.hidden = cosyvoiceReady
+    hint.textContent = 'CosyVoice는 backend.env에 경로를 설정해야 쓸 수 있어요 (backend.env.example 참고).'
+  }
+  const row = document.getElementById('cosyvoice-prompt-row')
+  if (row) row.hidden = engineSel?.value !== 'cosyvoice'
+  const label = document.getElementById('cosyvoice-prompt-label')
+  if (label) {
+    label.textContent = cosyvoicePromptName
+      ? `선택됨: ${cosyvoicePromptName}`
+      : '아직 없음 — 기본 한국어 목소리를 참조로 씁니다'
+  }
+}
+
+async function pickCosyvoicePrompt(file) {
+  const label = document.getElementById('cosyvoice-prompt-label')
+  if (!file) return
+  try {
+    label.textContent = '변환 중…'
+    // 음성 복제 업로드와 같은 정규화(22.05kHz mono WAV). CosyVoice는 3초면
+    // 충분해서 하한만 낮춘다.
+    const wavBase64 = await fileToCloneWavBase64(file, 3)
+    const res = await window.api.cosyvoiceSetPrompt(wavBase64)
+    if (!res?.ok) throw new Error(res?.error || '저장에 실패했어요')
+    cosyvoicePromptName = file.name
+    updateCosyvoiceRow()
+  } catch (error) {
+    label.textContent = `❌ ${error?.message || error}`
+  }
+}
+
 async function loadVoices() {
   try {
     const d = await window.api.getVoices()
+    cosyvoiceReady = d?.cosyvoice_ready === true
+    updateCosyvoiceRow()
     const sel = document.getElementById('voice-select')
     sel.innerHTML = '<option value="">기본 목소리</option>'
     if (sel.firstElementChild) sel.firstElementChild.textContent = 'Default Voice'
@@ -1477,7 +1546,7 @@ const VOICE_CLONE_STATUS_LABELS = {
   error: '실패했어요'
 }
 
-async function fileToCloneWavBase64(file) {
+async function fileToCloneWavBase64(file, minSec = 5) {
   const arrayBuf = await file.arrayBuffer()
   const probe = new AudioContext()
   let decoded
@@ -1486,7 +1555,7 @@ async function fileToCloneWavBase64(file) {
   } finally {
     probe.close().catch(() => {})
   }
-  if (decoded.duration < 5) throw new Error(`음성이 너무 짧아요 (${decoded.duration.toFixed(1)}초). 5초 이상 필요해요.`)
+  if (decoded.duration < minSec) throw new Error(`음성이 너무 짧아요 (${decoded.duration.toFixed(1)}초). ${minSec}초 이상 필요해요.`)
   if (decoded.duration > 120) throw new Error(`음성이 너무 길어요 (${Math.round(decoded.duration)}초). 2분 이하로 잘라 주세요.`)
 
   const frames = Math.ceil(decoded.duration * VOICE_CLONE_TARGET_SR)
@@ -1622,6 +1691,13 @@ document.getElementById('voice-clone-file').addEventListener('change', (e) => {
   document.getElementById('voice-clone-start').disabled = !file
 })
 document.getElementById('voice-clone-start').addEventListener('click', startVoiceClone)
+document.getElementById('tts-engine').addEventListener('change', updateCosyvoiceRow)
+document.getElementById('cosyvoice-prompt-pick').addEventListener('click', () => {
+  document.getElementById('cosyvoice-prompt-file').click()
+})
+document.getElementById('cosyvoice-prompt-file').addEventListener('change', (e) => {
+  pickCosyvoicePrompt(e.target.files?.[0])
+})
 document.getElementById('voice-select').addEventListener('change', updateCustomVoiceActions)
 document.getElementById('voice-clone-preview-btn').addEventListener('click', playClonePreview)
 document.getElementById('voice-clone-delete-btn').addEventListener('click', deleteCloneVoice)
@@ -1665,6 +1741,8 @@ async function save() {
     aiModeSpectate: document.getElementById('ai-mode-spectate').value,
     memoryTurns: parseInt(document.getElementById('memory-turns').value, 10),
     ttsEnabled: document.getElementById('tts-enabled').checked,
+    ttsEngine: document.getElementById('tts-engine').value,
+    cosyvoicePromptName,
     voiceId: document.getElementById('voice-select').value,
     useWebDefault: document.getElementById('use-web-default-toggle').checked,
     useWallpaperMode: document.getElementById('use-wallpaper-mode').checked,

@@ -113,14 +113,72 @@ class TTSService:
             print(f"[TTS] unknown edge voice '{voice_id}', using {DEFAULT_EDGE_VOICE}")
         return DEFAULT_EDGE_VOICE
 
-    async def synthesize(self, text: str, voice_id: str = None) -> tuple[bytes, str, bool]:
+    async def synthesize(
+        self, text: str, voice_id: str = None, engine: str = None
+    ) -> tuple[bytes, str, bool]:
         """(audio, mime, fallback) — fallback=True는 "요청한 음성이 아닌
         대체 음성으로 말했다"는 뜻 (custom 변환 실패/미준비). 라우터가
         X-Apia-Tts-Fallback 헤더로 흘려 프런트가 정직하게 안내한다."""
+        if engine == "cosyvoice":
+            return await self._synthesize_cosyvoice(text)
         if voice_id and str(voice_id).startswith("custom:"):
             return await self._synthesize_custom(text, str(voice_id))
         audio, mime = await self.synthesize_base(text, voice_id)
         return audio, mime, False
+
+    async def _synthesize_cosyvoice(self, text: str) -> tuple[bytes, str, bool]:
+        """opt-in 엔진. 설정에서 명시 선택한 경우에만 불린다.
+
+        어떤 실패(구성 미비·워커 크래시·타임아웃·비정형 응답)든 기본 체인으로
+        폴백하고 fallback=True를 돌려준다 — /tts는 500을 내지 않는다.
+        """
+        from services import cosyvoice_service as cosy
+
+        error = cosy.config_error()
+        if error:
+            print(f"[TTS] cosyvoice unavailable: {error}")
+            audio, mime = await self.synthesize_base(text)
+            return audio, mime, True
+
+        try:
+            prompt_wav = await self._ensure_cosyvoice_prompt()
+            audio, mime = await cosy.synthesize(
+                text, prompt_wav, cosy.prompt_text_for(prompt_wav)
+            )
+            return audio, mime, False
+        except Exception as error:
+            print(f"[TTS] cosyvoice failed, falling back: {type(error).__name__}: {error}")
+            audio, mime = await self.synthesize_base(text)
+            return audio, mime, True
+
+    async def _ensure_cosyvoice_prompt(self):
+        """참조(캐릭터) 음성 경로. 없으면 edge 한국어 음성으로 한 번 만들어 캐시한다.
+
+        공개 repo에 음성 파일을 동봉할 수 없어(라이선스) 기본 참조는 로컬 생성이
+        유일한 방법이다. edge가 안 되면 참조가 없으므로 엔진도 못 쓴다 → 예외.
+        """
+        from services import cosyvoice_service as cosy
+
+        existing = cosy.resolve_prompt_wav()
+        if existing is not None:
+            return existing
+
+        data = await asyncio.wait_for(
+            self._synthesize_edge(cosy.DEFAULT_PROMPT_TEXT, DEFAULT_EDGE_VOICE),
+            timeout=EDGE_TIMEOUT_SEC,
+        )
+        wav, mime = await asyncio.to_thread(self._mp3_to_wav, data)
+        if mime != "audio/wav":
+            raise RuntimeError("cosyvoice: default reference needs wav decode support")
+
+        cosy.DEFAULT_PROMPT_WAV.parent.mkdir(parents=True, exist_ok=True)
+        cosy.DEFAULT_PROMPT_WAV.write_bytes(wav)
+        # transcript를 아는 참조라 sidecar를 남겨 zero-shot 경로를 쓴다.
+        cosy.DEFAULT_PROMPT_WAV.with_suffix(".txt").write_text(
+            cosy.DEFAULT_PROMPT_TEXT, encoding="utf-8"
+        )
+        print(f"[TTS] cosyvoice default reference generated: {cosy.DEFAULT_PROMPT_WAV}")
+        return cosy.DEFAULT_PROMPT_WAV
 
     async def _synthesize_custom(self, text: str, voice_id: str) -> tuple[bytes, str, bool]:
         """custom:<voice_dir> — Edge 합성 후 seed-vc로 음색 변환.
