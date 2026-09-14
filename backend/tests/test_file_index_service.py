@@ -232,6 +232,31 @@ async def test_index_folder_skips_noise_subdirs(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_index_folder_honors_max_files_cap_lazily(tmp_path: Path):
+    """cap을 넘으면 멈춘다 — 그리고 walk 자체가 cap+1에서 끊긴다.
+
+    os.walk을 워커 스레드로 옮길 때 트리 전체를 list()로 물질화하면 이 지연
+    컷오프가 사라진다. 두 단언(인덱싱 수 + 수집 수)이 그걸 막는다.
+    """
+    svc, store, _ = await _make(tmp_path)
+    folder = tmp_path / "docs"
+    folder.mkdir()
+    for i in range(5):
+        (folder / f"f{i}.txt").write_text(f"apple {i}", encoding="utf-8")
+    svc._max_files_per_folder = 2
+    await svc.add_folder(str(folder))
+    result = await svc.index_folder(str(folder))
+    assert result.files_indexed == 2
+    assert result.files_seen == 3  # cap + 1에서 break
+    assert result.warnings.get("max_files_per_folder") == 1
+
+    files, warnings = svc._collect_files(folder, 2)
+    assert len(files) == 3  # 5개가 아니라 cap+1까지만 수집
+    assert warnings == {}
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_index_folder_rejected_when_not_in_allowlist(tmp_path: Path):
     svc, store, _ = await _make(tmp_path)
     folder = tmp_path / "secret"

@@ -1157,7 +1157,7 @@ class ClaudeService:
             raise RuntimeError(f"ollama_vlm vision failed: {error}{hint}") from error
 
     async def _summarize_claude(self, system: str, user: str) -> str:
-        try:
+        def _call():
             response = self._claude.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=MAX_NEW_TOKENS,
@@ -1166,6 +1166,9 @@ class ClaudeService:
                 messages=[{"role": "user", "content": user}],
             )
             return response.content[0].text.strip()
+
+        try:
+            return await asyncio.to_thread(_call)
         except Exception as error:
             raise RuntimeError(f"claude summarize failed: {error}") from error
 
@@ -1321,16 +1324,23 @@ class ClaudeService:
         memory_turns: Optional[int],
         context_blocks: Optional[dict] = None,
     ) -> str:
+        # 조립도 try 안에 둔다 — 여기서 터져도 500이 아니라 대화창 문구로 나가던
+        # 기존 동작을 유지하기 위해(to_thread 전환은 동작 무변경이 원칙).
         try:
             messages = self._build_messages(history, memory_turns)
             messages.append({"role": "user", "content": message})
-            response = self._claude.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=MAX_NEW_TOKENS,
-                system=self._build_system_prompt(context_blocks),
-                messages=messages
-            )
-            return response.content[0].text
+            system_prompt = self._build_system_prompt(context_blocks)
+
+            def _call():
+                response = self._claude.messages.create(
+                    model=CLAUDE_MODEL,
+                    max_tokens=MAX_NEW_TOKENS,
+                    system=system_prompt,
+                    messages=messages
+                )
+                return response.content[0].text
+
+            return await asyncio.to_thread(_call)
         except Exception as error:
             return f"Claude API error: {str(error)[:80]} [EMOTION:sad]"
 

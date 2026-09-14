@@ -102,8 +102,8 @@ class IndexResult:
     files_failed: int = 0
     warnings: dict = field(default_factory=dict)
 
-    def warn(self, key: str) -> None:
-        self.warnings[key] = self.warnings.get(key, 0) + 1
+    def warn(self, key: str, count: int = 1) -> None:
+        self.warnings[key] = self.warnings.get(key, 0) + count
 
 
 def is_path_under(child: Path, parent: Path) -> bool:
@@ -339,7 +339,17 @@ class FileIndexService:
 
         result = IndexResult(folder=str(resolved))
         async with self._folder_lock_for(str(resolved)):
-            for file_path in self._walk(resolved, result):
+            # os.walk은 블로킹 syscall이라 워커 스레드에서 돈다. 워커는
+            # IndexResult를 건드리지 않고 (파일목록, 경고카운트)만 돌려주고,
+            # 병합은 이벤트 루프에서 한다 (Codex MUST-FIX 2).
+            # cap+1까지만 모으므로 거대 트리를 통짜 물질화하지 않는다.
+            files, walk_warnings = await asyncio.to_thread(
+                self._collect_files, resolved, self._max_files_per_folder
+            )
+            for key, count in walk_warnings.items():
+                self._record_warn(result, key, count)
+
+            for file_path in files:
                 result.files_seen += 1
                 if result.files_seen > self._max_files_per_folder:
                     result.warn("max_files_per_folder")
@@ -474,7 +484,16 @@ class FileIndexService:
             self._folder_locks[key] = lock
         return lock
 
-    def _walk(self, root: Path, result: IndexResult):
+    def _collect_files(self, root: Path, cap: int) -> tuple[List[Path], dict[str, int]]:
+        """워커 스레드 전용. 공유 상태를 만지지 않고 (파일목록, 경고카운트)를 반환.
+
+        `cap + 1`개를 모으면 멈춘다 — 호출부의 지연 컷오프(files_seen > cap이면
+        max_files_per_folder 경고 후 break)를 그대로 재현하면서, 수십만 파일짜리
+        트리를 통째로 리스트에 올리지 않는다.
+        """
+        limit = max(0, cap) + 1
+        files: List[Path] = []
+        warnings: dict[str, int] = {}
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
             for name in filenames:
@@ -483,28 +502,33 @@ class FileIndexService:
                 full = Path(dirpath) / name
                 ext = full.suffix.lower()
                 if ext not in _SUPPORTED_TEXT_EXTS and ext not in _PDF_EXTS:
-                    self._record_warn(result, "unsupported_ext")
+                    warnings["unsupported_ext"] = warnings.get("unsupported_ext", 0) + 1
                     continue
                 # 보안 검증 (paranoid): walk 결과가 root 밖이면 (symlink 등) 거부.
                 if not is_path_under(full, root):
-                    self._record_warn(result, "outside_root")
+                    warnings["outside_root"] = warnings.get("outside_root", 0) + 1
                     continue
-                yield full
+                files.append(full)
+                if len(files) >= limit:
+                    return files, warnings
+        return files, warnings
 
-    def _record_warn(self, result: IndexResult, key: str) -> None:
-        result.warn(key)
-        self._lifetime_warnings[key] = self._lifetime_warnings.get(key, 0) + 1
+    def _record_warn(self, result: IndexResult, key: str, count: int = 1) -> None:
+        result.warn(key, count)
+        self._lifetime_warnings[key] = self._lifetime_warnings.get(key, 0) + count
 
     async def _reindex_file(self, path: Path, *, force: bool) -> tuple[bool, int]:
         """단일 파일 인덱싱. (indexed, n_chunks). 변경 없으면 (False, 0)."""
         ext = path.suffix.lower()
         if ext in _PDF_EXTS:
-            pages = _read_pdf_pages(path, self._max_file_bytes)
+            # 디스크 I/O + pypdf 파싱은 블로킹이라 워커 스레드로. 둘 다 순수 함수라
+            # 공유 상태를 만지지 않는다.
+            pages = await asyncio.to_thread(_read_pdf_pages, path, self._max_file_bytes)
             if pages is None:
                 return False, 0
             return await self._reindex_pdf(path, pages, force=force)
         if ext in _SUPPORTED_TEXT_EXTS:
-            text = _read_text_file(path, self._max_file_bytes)
+            text = await asyncio.to_thread(_read_text_file, path, self._max_file_bytes)
             if text is None:
                 return False, 0
             return await self._reindex_text(path, text, force=force)
