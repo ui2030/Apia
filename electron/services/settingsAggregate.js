@@ -178,6 +178,12 @@ class SettingsRepository {
     delete settings.activeModel
     delete settings.activeCharacter
 
+    // 개발자 로컬 엔진 플래그는 프로세스 환경(APIA_DEV_LOCAL_ENGINES)이 단일
+    // 출처다. get-settings 응답에만 얹혀 나가므로 저장 payload로 되돌아오면
+    // 안 되고, 스키마가 passthrough라 안 지우면 디스크에 눌러앉는다. 읽기·쓰기
+    // 양쪽이 normalize를 지나므로 여기 한 곳에서 지운다.
+    delete settings.devLocalEnginesEnabled
+
     if (!VALID_AI_MODES.has(settings.aiMode)) {
       settings.aiMode = SETTINGS_DEFAULTS.aiMode
     }

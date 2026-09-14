@@ -386,7 +386,7 @@
     <div class="row">
       <div>
         <div class="row-label">관전 코멘트 모델</div>
-        <div class="row-sub">화면을 봐야 하므로 이미지를 읽을 수 있는 모델만 고를 수 있어요 · 로컬 VLM은 Ollama 설치 + <code>ollama pull qwen3-vl:4b-instruct</code>가 필요해요</div>
+        <div class="row-sub">화면을 봐야 하므로 이미지를 읽을 수 있는 모델만 고를 수 있어요<span data-dev-local> · 로컬 VLM은 별도 준비가 필요해요(backend.env.example 참고)</span></div>
       </div>
       <select id="ai-mode-spectate">
         <option value="">기본(대화와 동일)</option>
@@ -394,7 +394,7 @@
         <option value="groq">Groq API</option>
         <option value="claude">Claude API</option>
         <option value="claude_code">Claude Code (구독 로그인)</option>
-        <option value="ollama_vlm">로컬 VLM (Ollama)</option>
+        <option value="ollama_vlm" data-dev-local>로컬 VLM (Ollama)</option>
       </select>
     </div>
 
@@ -516,17 +516,20 @@
       </label>
     </div>
 
-    <div class="row">
+    <!-- TTS 엔진 선택 + CosyVoice 참조 음성은 개발자 전용(data-dev-local).
+         APIA_DEV_LOCAL_ENGINES=1이 아니면 스크립트가 DOM에서 아예 제거한다 —
+         배포본에서 고를 수는 있는데 조용히 기본 목소리로 폴백하면 "고장"으로 읽힌다. -->
+    <div class="row" data-dev-local>
       <div class="row-label">TTS 엔진</div>
       <select id="tts-engine">
         <option value="default">기본 (인터넷 음성)</option>
         <option value="cosyvoice">CosyVoice (로컬 · 캐릭터 목소리)</option>
       </select>
     </div>
-    <div class="helper-text" id="tts-engine-hint" hidden></div>
+    <div class="helper-text" id="tts-engine-hint" data-dev-local hidden></div>
 
     <!-- CosyVoice 참조 음성 — 엔진을 골랐을 때만 보인다 -->
-    <div class="row" id="cosyvoice-prompt-row" hidden style="flex-direction:column; align-items:stretch; gap:6px;">
+    <div class="row" id="cosyvoice-prompt-row" data-dev-local hidden style="flex-direction:column; align-items:stretch; gap:6px;">
       <div>
         <div class="row-label">캐릭터 목소리</div>
         <div class="row-sub">한국어 음성 파일(3초 이상)을 올리면 그 목소리로 말해요. 안 올리면 기본 한국어 목소리를 참조로 씁니다. 중국어·영어 음성은 발음이 섞이니 피해 주세요.</div>
@@ -816,6 +819,13 @@ async function init() {
   }
 
   settings = await window.api.getSettings()
+
+  // 개발자 전용 로컬 엔진(관전 ollama_vlm · TTS CosyVoice) 게이트.
+  // 숨기지 않고 **제거**한다 — 나중에 도는 updateCosyvoiceRow/loadVoices가
+  // hidden을 다시 뒤집어 슬그머니 되살리는 일이 없다(제거된 노드는 못 되살린다).
+  if (settings.devLocalEnginesEnabled !== true) {
+    document.querySelectorAll('[data-dev-local]').forEach((el) => el.remove())
+  }
 
     // ── 관전 모드 ───────────────────────────────────────────────────────────
     // 창 목록은 열 때마다 새로 받는다(창은 계속 뜨고 닫힌다). 선택한 창 id는
@@ -1259,7 +1269,9 @@ function applyToUI() {
   document.getElementById('memory-turns').value = settings.memoryTurns || 10
   document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '턴'
   document.getElementById('tts-enabled').checked = settings.ttsEnabled !== false
-  document.getElementById('tts-engine').value = settings.ttsEngine || 'default'
+  // 개발자 게이트가 꺼진 배포본에선 이 select가 DOM에 없다.
+  const ttsEngineSel = document.getElementById('tts-engine')
+  if (ttsEngineSel) ttsEngineSel.value = settings.ttsEngine || 'default'
   cosyvoicePromptName = settings.cosyvoicePromptName || null
   updateCosyvoiceRow()
   document.getElementById('use-web-default-toggle').checked = settings.useWebDefault === true
@@ -1691,11 +1703,11 @@ document.getElementById('voice-clone-file').addEventListener('change', (e) => {
   document.getElementById('voice-clone-start').disabled = !file
 })
 document.getElementById('voice-clone-start').addEventListener('click', startVoiceClone)
-document.getElementById('tts-engine').addEventListener('change', updateCosyvoiceRow)
-document.getElementById('cosyvoice-prompt-pick').addEventListener('click', () => {
-  document.getElementById('cosyvoice-prompt-file').click()
+document.getElementById('tts-engine')?.addEventListener('change', updateCosyvoiceRow)
+document.getElementById('cosyvoice-prompt-pick')?.addEventListener('click', () => {
+  document.getElementById('cosyvoice-prompt-file')?.click()
 })
-document.getElementById('cosyvoice-prompt-file').addEventListener('change', (e) => {
+document.getElementById('cosyvoice-prompt-file')?.addEventListener('change', (e) => {
   pickCosyvoicePrompt(e.target.files?.[0])
 })
 document.getElementById('voice-select').addEventListener('change', updateCustomVoiceActions)
@@ -1738,14 +1750,32 @@ async function save() {
     autoBehavior: document.getElementById('auto-behavior').checked,
     aiMode: document.getElementById('ai-mode').value,
     aiModeDirector: document.getElementById('ai-mode-director').value,
-    aiModeSpectate: document.getElementById('ai-mode-spectate').value,
     memoryTurns: parseInt(document.getElementById('memory-turns').value, 10),
     ttsEnabled: document.getElementById('tts-enabled').checked,
-    ttsEngine: document.getElementById('tts-engine').value,
-    cosyvoicePromptName,
     voiceId: document.getElementById('voice-select').value,
     useWebDefault: document.getElementById('use-web-default-toggle').checked,
     useWallpaperMode: document.getElementById('use-wallpaper-mode').checked,
+  }
+
+  // 개발자 전용 로컬 엔진 필드는 게이트가 꺼지면 DOM에 없다. 그럴 땐 payload에서
+  // **아예 뺀다** — 메인은 patch(부분 갱신)라 빠진 필드는 디스크 값이 그대로 남고,
+  // 넣으면 개발자가 켜 둔 cosyvoice/ollama_vlm이 저장 한 번에 날아간다.
+  const ttsEngineSel = document.getElementById('tts-engine')
+  if (ttsEngineSel) {
+    saved.ttsEngine = ttsEngineSel.value
+    saved.cosyvoicePromptName = cosyvoicePromptName
+  }
+  // 관전 select는 남지만 ollama_vlm 옵션만 사라진다 — 저장된 값이 목록에 없으면
+  // value 대입이 조용히 실패해 ''가 되고, 그 ''를 저장하면 설정이 날아간다.
+  // 판정 기준은 "저장값이 지금 목록에 있는가" 하나다. 단순히 "''면 건너뛰기"로
+  // 하면 목록에 멀쩡히 있는 값(claude/groq…)을 기본으로 되돌리는 정상 조작까지
+  // 막힌다.
+  const spectateSel = document.getElementById('ai-mode-spectate')
+  const savedSpectate = settings.aiModeSpectate
+  const spectateGatedAway = !!savedSpectate
+    && !Array.from(spectateSel.options).some((option) => option.value === savedSpectate)
+  if (!spectateGatedAway) {
+    saved.aiModeSpectate = spectateSel.value
   }
 
   saveBusy.set('저장 중…')

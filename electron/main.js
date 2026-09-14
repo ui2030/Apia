@@ -876,7 +876,15 @@ ipcMain.handle('save-world', (e, data) => {
   return saveWorldDocument(WORLD_PATH, data, { warn: logWarn })
 })
 
-ipcMain.handle('get-settings', () => loadSettings())
+// 개발자 전용 로컬 엔진(관전 ollama_vlm / TTS cosyvoice) UI 노출 플래그.
+// **저장되는 설정이 아니다** — 프로세스 환경일 뿐이라 get-settings 응답에만 얹어
+// 보내고, 되돌아오는 저장 경로에서는 SettingsRepository.normalize가 지운다.
+const DEV_LOCAL_ENGINES_ENABLED = process.env.APIA_DEV_LOCAL_ENGINES === '1'
+
+ipcMain.handle('get-settings', () => ({
+  ...loadSettings(),
+  devLocalEnginesEnabled: DEV_LOCAL_ENGINES_ENABLED
+}))
 
 ipcMain.handle('save-settings', (e, data) => {
   const settings = patchSettings(data)

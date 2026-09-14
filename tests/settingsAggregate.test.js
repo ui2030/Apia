@@ -230,10 +230,14 @@ describe('normalize', () => {
   })
 
   // 저장 화이트리스트에 빠지면 사용자가 고른 엔진이 저장 한 번에 되돌아간다.
-  it('includes the tts engine fields in the settings save whitelist', async () => {
+  // 개발자 게이트가 들어오면서 이 두 필드는 **행이 DOM에 있을 때만** 실린다 —
+  // 무조건 실으면 게이트 off에서 'default'/null로 덮어쓴다.
+  it('includes the tts engine fields in the settings save whitelist (게이트 on일 때)', async () => {
     const html = await readFile(new URL('../settings.html', import.meta.url), 'utf-8')
-    expect(html).toMatch(/ttsEngine:\s*document\.getElementById\('tts-engine'\)\.value/)
-    expect(html).toMatch(/^\s*cosyvoicePromptName,$/m)
+    expect(html).toMatch(/if \(ttsEngineSel\) \{\s*saved\.ttsEngine = ttsEngineSel\.value\s*saved\.cosyvoicePromptName = cosyvoicePromptName/)
+    // 무조건 싣는 예전 형태가 되살아나면 회귀다.
+    expect(html).not.toMatch(/^\s*ttsEngine:\s*document\.getElementById/m)
+    expect(html).not.toMatch(/^\s*cosyvoicePromptName,$/m)
   })
 
   it('documents the cosyvoice knobs in backend.env.example', () => {
@@ -461,5 +465,79 @@ describe('ensureRuntimeFiles', () => {
       '[BACKEND_RUNTIME_FILES_WARN]',
       expect.any(Error)
     )
+  })
+})
+
+// ── 개발자 전용 로컬 엔진 게이트 (APIA_DEV_LOCAL_ENGINES) ──────────────────
+// 관전 ollama_vlm과 TTS CosyVoice는 개발자 PC의 준비물(Ollama 설치, 수제 venv)에
+// 기대는 선택지다. 배포본에서 고를 수 있으면 조용히 폴백하고 사용자는 "고장"으로
+// 읽는다 — 그래서 UI에서 통째로 숨긴다. 백엔드 능력·스키마는 그대로 둔다.
+describe('dev-only local engine gate', () => {
+  const readSettingsHtml = () =>
+    readFile(new URL('../settings.html', import.meta.url), 'utf-8')
+
+  it('never persists the devLocalEnginesEnabled flag', () => {
+    const repo = createRepo()
+    // get-settings 응답을 그대로 되돌려 보내는 최악의 경우에도 디스크에 남으면 안 된다.
+    const saved = repo.patch({ devLocalEnginesEnabled: true, charScale: 120 })
+    expect(saved).not.toHaveProperty('devLocalEnginesEnabled')
+    expect(saved.charScale).toBe(120)
+    expect(repo.load()).not.toHaveProperty('devLocalEnginesEnabled')
+  })
+
+  it('drops a devLocalEnginesEnabled key that already sits on disk', async () => {
+    await writeFile(settingsPath, JSON.stringify({ devLocalEnginesEnabled: true }), 'utf-8')
+    expect(createRepo().load()).not.toHaveProperty('devLocalEnginesEnabled')
+  })
+
+  it('keeps the schema permissive — gating is UI-only', () => {
+    const repo = createRepo()
+    expect(repo.normalize({ aiModeSpectate: 'ollama_vlm' }).aiModeSpectate).toBe('ollama_vlm')
+    expect(repo.normalize({ ttsEngine: 'cosyvoice' }).ttsEngine).toBe('cosyvoice')
+  })
+
+  it('marks every dev-only control with data-dev-local', async () => {
+    const html = await readSettingsHtml()
+    expect(html).toMatch(/<option value="ollama_vlm" data-dev-local>/)
+    expect(html).toMatch(/<div class="row" data-dev-local>\s*<div class="row-label">TTS 엔진<\/div>/)
+    expect(html).toMatch(/id="tts-engine-hint" data-dev-local/)
+    expect(html).toMatch(/id="cosyvoice-prompt-row" data-dev-local/)
+  })
+
+  it('removes (not hides) the dev-only controls unless the flag says otherwise', async () => {
+    const html = await readSettingsHtml()
+    // 제거여야 한다 — hidden으로 두면 나중에 도는 updateCosyvoiceRow/loadVoices가
+    // 다시 뒤집어 슬그머니 되살린다.
+    expect(html).toMatch(
+      /settings\.devLocalEnginesEnabled !== true\)[\s\S]{0,200}querySelectorAll\('\[data-dev-local\]'\)[\s\S]{0,60}\.remove\(\)/
+    )
+  })
+
+  it('preserves a stored spectate mode the dropdown cannot show', async () => {
+    const html = await readSettingsHtml()
+    // 게이트 off + 저장값 ollama_vlm → select.value가 ''로 떨어진다. 그 ''를
+    // 저장하면 개발자가 켜 둔 값이 날아가므로 payload에서 빼야 한다.
+    // 판정은 **옵션 목록에 저장값이 있는지**로만 한다.
+    expect(html).toMatch(
+      /spectateGatedAway = !!savedSpectate[\s\S]{0,160}spectateSel\.options[\s\S]{0,120}option\.value === savedSpectate/
+    )
+    expect(html).toMatch(/if \(!spectateGatedAway\) \{\s*saved\.aiModeSpectate = spectateSel\.value/)
+    expect(html).not.toMatch(/^\s*aiModeSpectate:\s*document\.getElementById/m)
+  })
+
+  // 회귀 방지: "값이 ''면 건너뛴다"는 순진한 가드는 목록에 멀쩡히 있는 값
+  // (claude/groq…)을 '기본(대화와 동일)'으로 되돌리는 정상 조작까지 막았다.
+  // 그 형태가 되살아나면 실패한다.
+  it('still lets a visible spectate mode be reset back to the default', async () => {
+    const html = await readSettingsHtml()
+    expect(html).not.toMatch(/spectateValue === '' && settings\.aiModeSpectate/)
+  })
+
+  it('never puts a terminal command in the settings UI', async () => {
+    const html = await readSettingsHtml()
+    // 모르는 프로그램 설치 + 터미널 명령 유도는 악성코드와 겉모습이 같다.
+    // 준비 방법은 backend.env.example에만 남긴다.
+    expect(html).not.toContain('ollama pull')
+    expect(BACKEND_ENV_EXAMPLE_CONTENT).toContain('ollama pull qwen3-vl:4b-instruct')
   })
 })
