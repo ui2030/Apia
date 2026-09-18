@@ -237,6 +237,7 @@ function setupUI() {
   settingsBtn?.addEventListener('click', () => window.api?.openSettings())
 
   chatInput?.addEventListener('keydown', e => {
+    window.api?.ledgerInputStart?.() // 계측 전용(눈치 원장) — 응답→입력 시작 지연
     // !e.isComposing — 한글 IME 조합 중 Enter는 확정용이라 전송하면 안 됨(task 4)
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(chatInput.value) }
   })

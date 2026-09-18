@@ -788,6 +788,35 @@
       <span class="row-sub" id="embedding-status-text" style="font-size:11px;">읽는 중…</span>
     </div>
   </div>
+
+  <div class="section" id="ledger-section">
+    <div class="section-title">눈치 원장 (계측 전용)</div>
+    <div class="helper-text" style="margin-bottom:8px;">
+      대화 화제별로 <b>반응이 편했는지</b>를 수치로만 적어 두는 관찰 기록입니다.
+      <b>대화 원문은 저장하지 않고</b> 화제 이름과 숫자만 남아요. 지금은 기록·열람만 하며
+      캐릭터의 말이나 화제 선택에 <b>전혀 반영되지 않습니다</b>.
+      분류는 내 PC의 로컬 모델로만 하고, 원시 기록은 90일 뒤 자동으로 지워집니다.
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">기록 상태</div>
+        <div class="row-sub" id="ledger-status">읽는 중…</div>
+      </div>
+      <div style="display:flex; gap:6px; flex:0 0 auto;">
+        <button type="button" class="btn btn-ghost" id="ledger-aggregate-btn" style="white-space:nowrap;">지금 집계</button>
+        <button type="button" class="btn btn-red" id="ledger-reset-btn" style="white-space:nowrap;">초기화</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="row-label">이벤트</div>
+      <span class="row-sub" id="ledger-events" style="font-size:11px;">—</span>
+    </div>
+
+    <div id="ledger-table" style="margin-top:6px;"></div>
+    <div class="row-sub" id="ledger-path" style="margin-top:8px; word-break:break-all;"></div>
+  </div>
 </div>
 
 <div class="footer">
@@ -909,6 +938,114 @@ async function init() {
   // actions without resetting the toggle/select values.
   await syncDataPanelEnvFromBackend()
   await refreshDataPanelStats()
+  bindLedgerPanel()
+}
+
+// ── 눈치 원장 열람 ──────────────────────────────────────────────────────────
+// 읽기 + 수동 라벨 + 삭제 + 초기화. 여기서 바꾼 값은 원장 파일에만 쓰이고
+// 캐릭터 동작에는 아무 영향이 없다(계측 전용).
+const LEDGER_GOLD_OPTIONS = [
+  ['', '라벨 없음'],
+  ['sensitive', '민감'],
+  ['neutral', '중립'],
+  ['joke_ok', '농담OK']
+]
+const LEDGER_STATE_TEXT = { pending: '판단 보류', neutral: '보통', frozen: '조심', thawed: '편함' }
+
+function renderLedger(state) {
+  const statusEl = document.getElementById('ledger-status')
+  const eventsEl = document.getElementById('ledger-events')
+  const tableEl = document.getElementById('ledger-table')
+  const pathEl = document.getElementById('ledger-path')
+  if (!statusEl || !tableEl) return
+
+  if (!state || state.error) {
+    statusEl.textContent = '원장을 읽지 못했어요' + (state?.error ? ' — ' + state.error : '')
+    tableEl.innerHTML = ''
+    return
+  }
+
+  const last = state.lastAggregatedAt
+    ? new Date(state.lastAggregatedAt).toLocaleString('ko-KR')
+    : '아직 없음'
+  statusEl.textContent = `원시 기록 ${state.rawCount}건 / ${state.rawDays}일 · 마지막 집계 ${last}`
+  if (eventsEl) {
+    const e = state.events || {}
+    eventsEl.textContent =
+      `강등 ${e.demote || 0} · 승급 ${e.promote || 0} · 오동결 ${e.falseFreeze || 0} · 오해빙 ${e.falseThaw || 0}`
+  }
+  if (pathEl) pathEl.textContent = state.path || ''
+
+  tableEl.innerHTML = ''
+  if (!state.topics || state.topics.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'row-sub'
+    empty.textContent = '아직 모인 기록이 없어요. 대화를 나누면 화제별로 쌓입니다.'
+    tableEl.appendChild(empty)
+    return
+  }
+
+  for (const t of state.topics) {
+    const row = document.createElement('div')
+    row.className = 'row'
+    row.style.gap = '8px'
+
+    const left = document.createElement('div')
+    left.style.flex = '1'
+    left.style.minWidth = '0'
+    const name = document.createElement('div')
+    name.className = 'row-label'
+    name.textContent = t.label
+    const sub = document.createElement('div')
+    sub.className = 'row-sub'
+    const scoreText = t.score == null ? '—' : t.score.toFixed(2)
+    sub.textContent = `점수 ${scoreText} · 증거 ${t.evidence}건 · ${LEDGER_STATE_TEXT[t.state] || t.state}`
+    left.appendChild(name)
+    left.appendChild(sub)
+
+    const select = document.createElement('select')
+    // select의 기본 width:100%가 좁은 설정 창에서 이름 칸을 한 글자로 눌러버린다.
+    select.style.cssText = 'width:auto; flex:0 0 auto; padding:4px 6px;'
+    for (const [value, label] of LEDGER_GOLD_OPTIONS) {
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.textContent = label
+      select.appendChild(opt)
+    }
+    select.value = t.goldLabel || ''
+    select.addEventListener('change', async () => {
+      renderLedger(await window.api?.ledger?.setGold?.(t.id, select.value || null))
+    })
+
+    const del = document.createElement('button')
+    del.type = 'button'
+    del.className = 'btn btn-red'
+    del.style.whiteSpace = 'nowrap'
+    del.textContent = '삭제'
+    del.addEventListener('click', async () => {
+      renderLedger(await window.api?.ledger?.removeTopic?.(t.id))
+    })
+
+    row.appendChild(left)
+    row.appendChild(select)
+    row.appendChild(del)
+    tableEl.appendChild(row)
+  }
+}
+
+function bindLedgerPanel() {
+  if (!window.api?.ledger) {
+    document.getElementById('ledger-section')?.remove()
+    return
+  }
+  document.getElementById('ledger-aggregate-btn')?.addEventListener('click', async () => {
+    renderLedger(await window.api.ledger.aggregate())
+  })
+  document.getElementById('ledger-reset-btn')?.addEventListener('click', async () => {
+    if (!confirm('눈치 원장의 기록을 전부 지울까요? 되돌릴 수 없습니다.')) return
+    renderLedger(await window.api.ledger.reset())
+  })
+  window.api.ledger.getState().then(renderLedger).catch(() => {})
 }
 
 async function loadCharacterRegistryIfAvailable() {

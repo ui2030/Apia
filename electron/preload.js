@@ -111,6 +111,17 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('spectate:fullscreen-hint', listener)
   },
 
+  // 눈치 원장(계측 전용). ledgerInputStart는 fire-and-forget — 채팅 입력 경로에
+  // 왕복을 얹지 않는다. 나머지는 설정 창의 열람/수정 표면.
+  ledgerInputStart: () => ipcRenderer.send('ledger:input-start'),
+  ledger: {
+    getState: () => ipcRenderer.invoke('ledger:getState'),
+    aggregate: () => ipcRenderer.invoke('ledger:aggregate'),
+    setGold: (topicId, label) => ipcRenderer.invoke('ledger:setGold', { topicId, label }),
+    removeTopic: (topicId) => ipcRenderer.invoke('ledger:removeTopic', { topicId }),
+    reset: () => ipcRenderer.invoke('ledger:reset')
+  },
+
   notifyCharacter: (payload) => ipcRenderer.invoke('character:notify', payload),
   onCharacterAction: (cb) => ipcRenderer.on('character:action', (_e, payload) => cb(payload)),
   chatHide: () => ipcRenderer.invoke('chat:hide'),

@@ -110,6 +110,7 @@ function bindUI() {
 
   sendBtn?.addEventListener('click', () => sendMessage(input?.value || ''))
   input?.addEventListener('keydown', (event) => {
+    window.api?.ledgerInputStart?.() // 계측 전용(눈치 원장) — 응답→입력 시작 지연
     if (event.key === 'Enter' && !event.isComposing) {
       event.preventDefault()
       sendMessage(input.value)

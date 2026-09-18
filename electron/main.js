@@ -59,6 +59,13 @@ const { saveWorldDocument } = require('./services/worldStore')
 const { BackendEnvRepository } = require('./services/backendEnvRepository')
 const { WindowManager } = require('./services/windowManager')
 const wallpaperMode = require('./services/wallpaperMode')
+const {
+  TOPIC_IDS: LEDGER_TOPIC_IDS,
+  dayKeyOf,
+  parseClassification,
+  createTopicLedger,
+  createExchangeTracker
+} = require('./services/topicLedger')
 
 const isDev = process.argv.includes('--dev')
 const CONFIGURED_BACKEND_URL = process.env.APIA_BACKEND_URL || DEFAULT_BACKEND_URL
@@ -263,6 +270,88 @@ const loadSettings = () => settingsRepo.load()
 // 그 사이 다른 곳에서 바뀐 값을 되돌린다.
 const patchSettings = (partial) => settingsRepo.patch(partial)
 
+// ── 눈치 원장 계측기 ────────────────────────────────────────────────────────
+//
+// 계측 전용. 채팅 두 표면(오버레이·벽지 채팅창)이 모두 통과하는 main의 IPC
+// 핸들러에 붙어 교환 단위 신호를 뽑는다. 수집도 분류도 대화를 막지 않는다 —
+// 분류는 promise로 떼어 두고, 다음 발화가 올 때 그제서야 신호를 확정한다.
+//
+// 저장 위치는 apia-world.json / apia-settings.json과 같은 userData
+// (Windows: %APPDATA%\Apia). OneDrive/Dropbox 같은 동기화 폴더가 아니다.
+const LEDGER_PATH = path.join(app.getPath('userData'), 'apia-topic-ledger.json')
+const ledger = createTopicLedger({ ledgerPath: LEDGER_PATH, log: { warn: logWarn } })
+
+// 화제 분류 — 로컬 provider 전용(백엔드가 강제). 백엔드가 꺼져 있거나 로컬
+// 모델이 없으면 그냥 null이고, 그 교환은 원장에 남지 않는다. 여기서
+// ensureAvailableForRequest를 부르지 않는 게 중요하다: 계측이 백엔드를
+// 깨우는 부수효과를 만들면 안 된다.
+async function classifyTopic(text) {
+  try {
+    const res = await requestBackendJson('/classify', {
+      method: 'POST',
+      timeout: 60000,
+      body: { text, topics: LEDGER_TOPIC_IDS }
+    })
+    return parseClassification(res?.raw, LEDGER_TOPIC_IDS)
+  } catch {
+    return null
+  }
+}
+
+const ledgerTracker = createExchangeTracker({
+  classify: classifyTopic,
+  onSignal: (signal) => {
+    try { ledger.recordSignal(signal) } catch (error) { logWarn('[LEDGER_SIGNAL_FAILED]', error?.message || error) }
+  }
+})
+
+// 응답 뒤 사용자가 처음 키를 누른 순간. 지연의 끝점은 '전송'이 아니라 '입력 시작'
+// 이라 두 채팅 표면의 keydown이 이걸 쏴 준다. send(fire-and-forget)라 렌더러는
+// 아무것도 기다리지 않는다.
+ipcMain.on('ledger:input-start', () => {
+  try { ledgerTracker.noteInputStart() } catch {}
+})
+
+// 열람 UI(설정 창) 표면. 읽기·수동 라벨·삭제·초기화뿐 — 캐릭터 행동과 연결 없음.
+ipcMain.handle('ledger:getState', () => {
+  try { return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+})
+ipcMain.handle('ledger:aggregate', () => {
+  try { ledger.aggregate(); return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+})
+ipcMain.handle('ledger:setGold', (e, { topicId, label } = {}) => {
+  try { ledger.setGoldLabel(topicId, label); return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+})
+ipcMain.handle('ledger:removeTopic', (e, { topicId } = {}) => {
+  try { ledger.removeTopic(topicId); return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+})
+ipcMain.handle('ledger:reset', () => {
+  try { ledger.reset(); return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+})
+
+// 일일 집계 잡 — 자정(날짜가 바뀌는 첫 정시 점검) 또는 앱 종료 시 1회.
+let ledgerDayKey = null
+let ledgerDailyTimer = null
+const LEDGER_DAILY_POLL_MS = 3600000
+
+function startLedgerDailyJob() {
+  if (ledgerDailyTimer) return
+  ledgerDayKey = dayKeyOf(Date.now())
+  ledgerDailyTimer = setInterval(() => {
+    const key = dayKeyOf(Date.now())
+    if (key === ledgerDayKey) return
+    ledgerDayKey = key
+    try { ledger.aggregate() } catch (error) { logWarn('[LEDGER_AGGREGATE_FAILED]', error?.message || error) }
+  }, LEDGER_DAILY_POLL_MS)
+}
+
+function stopLedgerDailyJob() {
+  if (ledgerDailyTimer) {
+    clearInterval(ledgerDailyTimer)
+    ledgerDailyTimer = null
+  }
+}
+
 // backend.env is a separate boundary from apia-settings.json — secrets,
 // line-oriented, must round-trip with the Python loader.
 const backendEnvRepo = new BackendEnvRepository({
@@ -320,6 +409,7 @@ const roleAiMode = (settings, key) => settings[key] || settings.aiMode
 const CLAUDE_CODE_AUX_TIMEOUT = 30000
 
 ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
+  ledgerTracker.noteUserMessage(message) // 계측 — 동기·비차단
   try {
     await backend.ensureAvailableForRequest()
     const settings = loadSettings()
@@ -330,7 +420,7 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
       ? useWeb
       : settings.useWebDefault === true
     const chatTimeout = chatTimeoutFor(settings.aiMode)
-    return await requestBackendJson('/chat', {
+    const reply = await requestBackendJson('/chat', {
       method: 'POST',
       timeout: chatTimeout,
       body: {
@@ -341,6 +431,8 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
       use_web: resolvedUseWeb
       }
     })
+    ledgerTracker.noteReplyDone()
+    return reply
   } catch (e) {
     return { error: e.message }
   }
@@ -381,6 +473,7 @@ async function* parseSSEFrames(body) {
 }
 
 ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) => {
+  ledgerTracker.noteUserMessage(message) // 계측 — 동기·비차단
   const sender = event.sender
   const wcId = sender.id
 
@@ -429,6 +522,7 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
         if (frame.type === 'delta') {
           sender.send('chat-stream-delta', { requestId, text: frame.text || '' })
         } else if (frame.type === 'final') {
+          ledgerTracker.noteReplyDone() // 계측 — 응답이 화면에 다 뜬 시점
           sender.send('chat-stream-done', {
             requestId,
             reply: frame.reply,
@@ -1272,6 +1366,8 @@ app.whenReady().then(async () => {
     startPresenceFeed()
   }
 
+  startLedgerDailyJob()
+
   // Phase F1: drop the main overlay into the Windows wallpaper layer (behind
   // desktop icons). Codex MUST-FIX: lazy + graceful — if the native module
   // isn't available (non-Windows, build missing), fall back to the existing
@@ -1332,10 +1428,13 @@ let presencePollTimer = null
 function startPresenceFeed() {
   if (presencePollTimer) return
   presencePollTimer = setInterval(() => {
-    const main = windows.getMain()
-    if (!main || main.isDestroyed()) return
     let idleSec
     try { idleSec = powerMonitor.getSystemIdleTime() } catch { return }
+    // 같은 유휴초 피드를 원장도 본다 — 응답 대기 중 부재가 관측되면 그 교환의
+    // 지연 신호를 무효화한다(자리를 비운 것은 회피가 아니다).
+    ledgerTracker.notePresence(idleSec)
+    const main = windows.getMain()
+    if (!main || main.isDestroyed()) return
     try { main.webContents.send('presence:idle', { idleSec }) } catch {}
   }, PRESENCE_POLL_MS)
   for (const name of ['suspend', 'resume', 'lock-screen', 'unlock-screen']) {
@@ -1888,6 +1987,13 @@ function shutdownOnce() {
     if (rewallpaperTimer) { clearTimeout(rewallpaperTimer); rewallpaperTimer = null }
     stopCursorFeed()
     stopPresenceFeed()
+    stopLedgerDailyJob()
+    // 종료 = 대화 종료. 확정 안 된 마지막 교환은 버리고(종료≠회피) 일일 집계를
+    // 한 번 돌려 원장을 최신 상태로 닫는다.
+    try {
+      ledgerTracker.endConversation()
+      ledger.aggregate()
+    } catch (error) { logWarn('[LEDGER_SHUTDOWN_WARN]', error?.message || error) }
     stopWallpaperHealthCheck()
     try { destroyCornerWindow() } catch {}
     // Phase F2: destroy chatWindow on real quit so it doesn't keep the process

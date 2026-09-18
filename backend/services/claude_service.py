@@ -952,6 +952,58 @@ class ClaudeService:
             return await self._summarize_claude_code(self.DIRECTOR_SYSTEM, payload)
         raise RuntimeError(f"unsupported mode for director: {active_mode}")
 
+    # 눈치 원장 계측기 — 사용자 발화 한 줄의 화제 분류. **로컬 provider 전용**이다:
+    # 계측용 부수 호출이 클라우드 API 요금이나 외부로 나가는 대화 사본을 만들면 안 된다.
+    # director와 같은 generic (system, user) 헬퍼를 재사용한다.
+    CLASSIFY_SYSTEM = (
+        "You label one chat message with the single best matching topic id from "
+        "a fixed list. Output ONLY a compact JSON object (no prose, no markdown): "
+        "{\"topic_id\": one id copied verbatim from the given list, "
+        "\"confidence\": number 0..1}. The message may be Korean or English. "
+        "Judge what the message is ABOUT, not its tone. If nothing in the list "
+        "fits, or the message is too short/ambiguous to tell, still pick the "
+        "closest id but set confidence below 0.5. Output ONLY the JSON."
+    )
+
+    def _ensure_local_no_fallback(self) -> bool:
+        """계측용(분류) 전용 local 준비 — **반드시 `_init_lock` 안에서** 호출한다.
+
+        `_ensure_mode('local')`을 쓰지 않는 이유: local prereqs는 있는데 init이
+        실패하는 경우 그 함수는 **다른 provider를 대신 init하고 self.mode를
+        바꾼다**(대화 상태 오염). 계측 호출은 성공하든 실패하든 self.mode를
+        건드리지 않아야 하므로, 여기서는 local init만 시도하고 mode를 복원한다.
+        """
+        if "local" in self._initialized_modes:
+            return True
+        prev_mode = self.mode
+        try:
+            return self._initialize_mode("local")  # 실패해도 내부에서 예외를 삼킨다
+        finally:
+            self.mode = prev_mode  # _initialize_mode의 mode 변이를 무조건 되돌린다
+
+    async def classify_topic(
+        self, text: str, topics: List[str]
+    ) -> str:
+        """화제 분류. local이 아니면 RuntimeError — 폴백으로 클라우드에 새지 않는다.
+
+        prereqs를 먼저 확인하는 이유: ensure_mode 계열은 local이 없으면 **다른
+        provider를 대신 init하고** self.mode를 바꾼다. 계측용 부수 호출이 대화용
+        provider 상태를 건드리면 안 되므로 여기서 미리 끊고, init 자체도 폴백
+        없는 `_ensure_local_no_fallback`으로만 한다.
+        """
+        if "local" not in self.list_available_modes():
+            raise RuntimeError("local provider unavailable for topic classification")
+        async with self._init_lock:
+            ok = await asyncio.to_thread(self._ensure_local_no_fallback)
+        if not ok:
+            raise RuntimeError("local provider init failed for topic classification")
+        payload = (
+            "Topic ids: " + json.dumps(topics, ensure_ascii=False)
+            + "\nMessage: " + (text or "")[:600]
+            + "\nJSON:"
+        )
+        return await self._summarize_local(self.CLASSIFY_SYSTEM, payload)
+
     # M2 관전 모드 — 사용자가 고른 창 한 장을 보고 "지금 뭐가 벌어지나"를 읽는다.
     # 방송이 아니라 옆에서 같이 보는 친구라 코멘트는 짧고 드물어야 한다. 흥미도가
     # 낮으면 **말하지 않는 것이 정답**이라고 명시적으로 지시한다 — 매 tick 떠들면

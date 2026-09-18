@@ -1,0 +1,291 @@
+{
+  "schema_version": 1,
+  "raw": {
+    "2026-01-05": [
+      {
+        "t": 1767571200000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": null,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571202000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": null,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571204000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571206000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571208000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571210000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571212000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571214000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571216000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571218000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571220000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571222000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571224000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571226000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": false,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571228000,
+        "topic_id": "game",
+        "conf": 0.88,
+        "reply_latency_ms": 1200,
+        "reply_len_ratio": 1,
+        "topic_shifted": true,
+        "engagement": 11.428571428571429
+      },
+      {
+        "t": 1767571230000,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571258800,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571287600,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571316400,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571345200,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571374000,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571402800,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571431600,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571460400,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571489200,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571518000,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571546800,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571575600,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      },
+      {
+        "t": 1767571604400,
+        "topic_id": "work",
+        "conf": 0.92,
+        "reply_latency_ms": 28000,
+        "reply_len_ratio": 0.22857142857142856,
+        "topic_shifted": false,
+        "engagement": 0
+      }
+    ]
+  },
+  "topics": {
+    "game": {
+      "score": 0.0375,
+      "evidence": 15,
+      "state": "thawed",
+      "goldLabel": null,
+      "updatedAt": 1767571228000
+    },
+    "work": {
+      "score": 0.6743386243386243,
+      "evidence": 14,
+      "state": "frozen",
+      "goldLabel": null,
+      "updatedAt": 1767571604400
+    }
+  },
+  "events": {
+    "demote": 1,
+    "promote": 1,
+    "falseFreeze": 0,
+    "falseThaw": 0
+  },
+  "lastAggregatedAt": 1767571662000
+}

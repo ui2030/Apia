@@ -52,6 +52,20 @@ class DirectorResponse(BaseModel):
     raw: Optional[str] = None
 
 
+class ClassifyRequest(BaseModel):
+    # 눈치 원장 계측기 — 사용자 발화 한 줄을 고정 화제 목록 중 하나로 분류.
+    # 화제 목록은 클라이언트(electron/services/topicLedger.js)가 단일 출처로
+    # 들고 있어서 요청마다 실려 온다. text는 프롬프트로만 흘러가고 버려진다.
+    text: str = ""
+    topics: List[str] = Field(default_factory=list)
+
+
+class ClassifyResponse(BaseModel):
+    # LLM 원시 출력(클라이언트의 parseClassification이 검증). 미가용이면 None.
+    raw: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class SpectateRequest(BaseModel):
     # M2 관전 모드 — 창 한 장(base64 JPEG) + 컴팩트 컨텍스트(직전 코멘트/요약).
     # 이미지는 저장하지 않는다: 프롬프트로만 흘러가고 응답 뒤 버려진다.
