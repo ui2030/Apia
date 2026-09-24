@@ -1,0 +1,51 @@
+{
+  "cards": {
+    "2026-09-01.jsonl": [
+      {
+        "day": "2026-09-01",
+        "u": "오늘 커피 두 잔 마셨어에 대해 물으면?",
+        "a": "카페인 좀 줄여봐요"
+      },
+      {
+        "day": "2026-09-01",
+        "u": "주말엔 등산 갈까 해에 대해 물으면?",
+        "a": "날씨 좋대요"
+      }
+    ],
+    "2026-09-02.jsonl": [
+      {
+        "day": "2026-09-02",
+        "u": "등산화 새로 샀어에 대해 물으면?",
+        "a": "잘 맞던가요?"
+      }
+    ]
+  },
+  "status": {
+    "schema_version": 2,
+    "lastConvertedAt": 1788375600000,
+    "cardCounts": {
+      "2026-09-01": 2,
+      "2026-09-02": 1
+    },
+    "spend": {
+      "2026-09-03": 0.02
+    },
+    "failures": {},
+    "warnings": [],
+    "lastError": null
+  },
+  "state": {
+    "schema_version": 2,
+    "lastConvertedAt": 1788375600000,
+    "totalCards": 3,
+    "cardDays": 2,
+    "pendingDays": 0,
+    "oldestPendingDay": null,
+    "spend7d": 0.02,
+    "spend": {
+      "2026-09-03": 0.02
+    },
+    "warnings": [],
+    "lastError": null
+  }
+}

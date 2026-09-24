@@ -66,6 +66,35 @@ class ClassifyResponse(BaseModel):
     reason: Optional[str] = None
 
 
+class CoursewareExchange(BaseModel):
+    # 교재 파이프라인 — 하루치 버퍼의 교환 한 건(사용자 발화 + 비서 응답 원문).
+    # 프롬프트로만 흘러가고 백엔드에 저장하지 않는다.
+    u: str = ""
+    a: str = ""
+
+
+class CoursewareCard(BaseModel):
+    # 익명화된 복습 카드 Q/A 한 쌍.
+    u: str
+    a: str
+
+
+class CoursewareConvertRequest(BaseModel):
+    day: str = ""
+    exchanges: List[CoursewareExchange] = Field(default_factory=list)
+
+
+class CoursewareConvertResponse(BaseModel):
+    # status가 계약이다: ok일 때만 클라이언트가 원본 버퍼를 지운다.
+    #   deferred = 키 없음/예산 소진(연기), failed = 호출은 했으나 결과 없음.
+    status: Literal["ok", "deferred", "failed"]
+    cards: Optional[List[CoursewareCard]] = None
+    reason: Optional[str] = None
+    budget_usd: float = 0.0
+    spent_today: float = 0.0
+    spend_7d: float = 0.0
+
+
 class SpectateRequest(BaseModel):
     # M2 관전 모드 — 창 한 장(base64 JPEG) + 컴팩트 컨텍스트(직전 코멘트/요약).
     # 이미지는 저장하지 않는다: 프롬프트로만 흘러가고 응답 뒤 버려진다.

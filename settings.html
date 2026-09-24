@@ -817,6 +817,36 @@
     <div id="ledger-table" style="margin-top:6px;"></div>
     <div class="row-sub" id="ledger-path" style="margin-top:8px; word-break:break-all;"></div>
   </div>
+
+  <div class="section" id="courseware-section">
+    <div class="section-title">교재 파이프라인</div>
+    <div class="helper-text" style="margin-bottom:8px;">
+      그날의 대화를 자리 비운 사이에 <b>익명 복습 교재</b>로 바꾸고, 바꾸는 데 성공한
+      날의 <b>원본은 지웁니다</b>(실패하면 원본을 그대로 두고 다음에 다시 시도해요).
+      아직 <b>학습에 쓰지 않고</b> 캐릭터의 말도 달라지지 않습니다.
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">교재</div>
+        <div class="row-sub" id="courseware-cards">읽는 중…</div>
+      </div>
+      <button type="button" class="btn btn-ghost" id="courseware-convert-btn" style="white-space:nowrap; flex:0 0 auto;">지금 변환</button>
+    </div>
+    <div class="row">
+      <div class="row-label">변환 대기</div>
+      <span class="row-sub" id="courseware-pending" style="font-size:11px;">—</span>
+    </div>
+    <div class="row">
+      <div class="row-label">최근 7일 교사 지출</div>
+      <span class="row-sub" id="courseware-spend" style="font-size:11px;">—</span>
+    </div>
+    <div class="row">
+      <div class="row-label">마지막 변환</div>
+      <span class="row-sub" id="courseware-last" style="font-size:11px;">—</span>
+    </div>
+    <div class="row-sub" id="courseware-warn" style="margin-top:6px; display:none;"></div>
+  </div>
 </div>
 
 <div class="footer">
@@ -939,6 +969,7 @@ async function init() {
   await syncDataPanelEnvFromBackend()
   await refreshDataPanelStats()
   bindLedgerPanel()
+  bindCoursewarePanel()
 }
 
 // ── 눈치 원장 열람 ──────────────────────────────────────────────────────────
@@ -1046,6 +1077,58 @@ function bindLedgerPanel() {
     renderLedger(await window.api.ledger.reset())
   })
   window.api.ledger.getState().then(renderLedger).catch(() => {})
+}
+
+// ── 교재 파이프라인 패널 (읽기 전용 + "지금 변환") ──────────────────────────
+function renderCourseware(state) {
+  const cardsEl = document.getElementById('courseware-cards')
+  if (!cardsEl) return
+  if (!state || state.error) {
+    cardsEl.textContent = '상태를 읽지 못했어요' + (state?.error ? ' — ' + state.error : '')
+    return
+  }
+  cardsEl.textContent = `카드 ${state.totalCards}장 / ${state.cardDays}일치`
+  const pendingEl = document.getElementById('courseware-pending')
+  if (pendingEl) {
+    pendingEl.textContent = state.pendingDays > 0
+      ? `${state.pendingDays}일 (가장 오래된 ${state.oldestPendingDay})`
+      : '없음'
+  }
+  const spendEl = document.getElementById('courseware-spend')
+  if (spendEl) spendEl.textContent = `$${(state.spend7d || 0).toFixed(4)} (하루 상한 $0.07)`
+  const lastEl = document.getElementById('courseware-last')
+  if (lastEl) {
+    lastEl.textContent = state.lastConvertedAt
+      ? new Date(state.lastConvertedAt).toLocaleString('ko-KR')
+      : '아직 없음'
+  }
+  const warnEl = document.getElementById('courseware-warn')
+  if (warnEl) {
+    const parts = []
+    for (const w of state.warnings || []) parts.push(`${w.day} 변환이 ${w.streak}회 연속 실패했어요 (원본은 그대로 있습니다)`)
+    if (state.lastError) parts.push(`최근 오류: ${state.lastError.day} — ${state.lastError.message}`)
+    warnEl.textContent = parts.join(' · ')
+    warnEl.style.display = parts.length ? '' : 'none'
+  }
+}
+
+function bindCoursewarePanel() {
+  if (!window.api?.courseware) {
+    document.getElementById('courseware-section')?.remove()
+    return
+  }
+  const btn = document.getElementById('courseware-convert-btn')
+  btn?.addEventListener('click', async () => {
+    btn.disabled = true
+    btn.textContent = '변환 중…'
+    try {
+      renderCourseware(await window.api.courseware.convertNow())
+    } finally {
+      btn.disabled = false
+      btn.textContent = '지금 변환'
+    }
+  })
+  window.api.courseware.getState().then(renderCourseware).catch(() => {})
 }
 
 async function loadCharacterRegistryIfAvailable() {

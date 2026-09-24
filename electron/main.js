@@ -66,6 +66,7 @@ const {
   createTopicLedger,
   createExchangeTracker
 } = require('./services/topicLedger')
+const { createCoursewareStore, createCoursewareJob } = require('./services/courseware')
 
 const isDev = process.argv.includes('--dev')
 const CONFIGURED_BACKEND_URL = process.env.APIA_BACKEND_URL || DEFAULT_BACKEND_URL
@@ -352,6 +353,67 @@ function stopLedgerDailyJob() {
   }
 }
 
+// ── 교재 파이프라인 ─────────────────────────────────────────────────────────
+//
+// 눈치 원장과 **같은 IPC 초크포인트**(send-message / chat:streamStart)에 붙되
+// 코드는 독립이다. 원장은 원문을 절대 남기지 않고, 이쪽은 원문을 하루 동안만
+// 들고 있다가 교재로 바꾼 뒤 지운다 — 목적이 달라 수명도 다르다.
+//
+// 여기서 하는 일은 기록·변환·폐기뿐이다. 학습(A-3)도 검색 참조(A-2)도 없고,
+// 캐릭터의 말이나 화제 선택으로 나가는 출구가 하나도 없다.
+const COURSEWARE_DIR = path.join(app.getPath('userData'), 'courseware')
+const courseware = createCoursewareStore({ dir: COURSEWARE_DIR, log: { warn: logWarn } })
+
+// 변환은 사용자가 자리를 비운 동안만 — 교사 왕복이 수십 초라 쓰는 중에 끼면
+// 백엔드 응답이 밀린다. presenceManager와 같은 5분 기준.
+const COURSEWARE_IDLE_SEC = 300
+const coursewareJob = createCoursewareJob({
+  store: courseware,
+  isIdle: () => {
+    try { return powerMonitor.getSystemIdleTime() >= COURSEWARE_IDLE_SEC } catch { return false }
+  },
+  convert: (day, exchanges) => requestBackendJson('/courseware/convert', {
+    method: 'POST',
+    timeout: 240000,
+    body: { day, exchanges: exchanges.map((e) => ({ u: e.u, a: e.a })) }
+  })
+})
+
+// 교환 1건 기록. 실패해도 대화는 그대로 — 버퍼가 한 줄 비는 것뿐이다.
+function recordCoursewareExchange(message, reply) {
+  try { courseware.appendExchange({ u: message, a: reply }) } catch (error) {
+    logWarn('[COURSEWARE_BUFFER_FAILED]', error?.message || error)
+  }
+}
+
+ipcMain.handle('courseware:getState', () => {
+  try { return courseware.getState() } catch (error) { return { error: error?.message || String(error) } }
+})
+ipcMain.handle('courseware:convertNow', async () => {
+  try {
+    const result = await coursewareJob.runOnce({ force: true })
+    return { ...courseware.getState(), result }
+  } catch (error) { return { error: error?.message || String(error) } }
+})
+
+// 변환 잡 — 15분마다 점검. 지난 날짜 버퍼가 없으면 디렉터리 하나 읽고 끝난다.
+let coursewareTimer = null
+const COURSEWARE_POLL_MS = 900000
+
+function startCoursewareJob() {
+  if (coursewareTimer) return
+  coursewareTimer = setInterval(() => {
+    coursewareJob.runOnce().catch((error) => logWarn('[COURSEWARE_JOB_WARN]', error?.message || error))
+  }, COURSEWARE_POLL_MS)
+}
+
+function stopCoursewareJob() {
+  if (coursewareTimer) {
+    clearInterval(coursewareTimer)
+    coursewareTimer = null
+  }
+}
+
 // backend.env is a separate boundary from apia-settings.json — secrets,
 // line-oriented, must round-trip with the Python loader.
 const backendEnvRepo = new BackendEnvRepository({
@@ -432,6 +494,7 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
       }
     })
     ledgerTracker.noteReplyDone()
+    recordCoursewareExchange(message, reply?.reply) // 교재 버퍼 — 비동기 큐, 비차단
     return reply
   } catch (e) {
     return { error: e.message }
@@ -523,6 +586,7 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
           sender.send('chat-stream-delta', { requestId, text: frame.text || '' })
         } else if (frame.type === 'final') {
           ledgerTracker.noteReplyDone() // 계측 — 응답이 화면에 다 뜬 시점
+          recordCoursewareExchange(message, frame.reply) // 교재 버퍼 — 비동기 큐, 비차단
           sender.send('chat-stream-done', {
             requestId,
             reply: frame.reply,
@@ -1367,6 +1431,7 @@ app.whenReady().then(async () => {
   }
 
   startLedgerDailyJob()
+  startCoursewareJob()
 
   // Phase F1: drop the main overlay into the Windows wallpaper layer (behind
   // desktop icons). Codex MUST-FIX: lazy + graceful — if the native module
@@ -1988,6 +2053,7 @@ function shutdownOnce() {
     stopCursorFeed()
     stopPresenceFeed()
     stopLedgerDailyJob()
+    stopCoursewareJob()
     // 종료 = 대화 종료. 확정 안 된 마지막 교환은 버리고(종료≠회피) 일일 집계를
     // 한 번 돌려 원장을 최신 상태로 닫는다.
     try {

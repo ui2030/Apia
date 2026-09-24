@@ -122,6 +122,13 @@ contextBridge.exposeInMainWorld('api', {
     reset: () => ipcRenderer.invoke('ledger:reset')
   },
 
+  // 교재 파이프라인. 읽기 + "지금 변환" 한 개뿐 — 삭제·초기화 표면은 없다
+  // (원본 폐기는 변환 성공 뒤에만 일어나야 하고, 그 판단은 main이 단독 관할).
+  courseware: {
+    getState: () => ipcRenderer.invoke('courseware:getState'),
+    convertNow: () => ipcRenderer.invoke('courseware:convertNow')
+  },
+
   notifyCharacter: (payload) => ipcRenderer.invoke('character:notify', payload),
   onCharacterAction: (cb) => ipcRenderer.on('character:action', (_e, payload) => cb(payload)),
   chatHide: () => ipcRenderer.invoke('chat:hide'),
