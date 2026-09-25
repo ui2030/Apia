@@ -85,11 +85,17 @@ const {
   RETURN_IDLE_SEC: TRAINING_RETURN_IDLE_SEC,
   DEADLINE_GRACE_MS: TRAINER_GRACE_MS,
   awaitChildExit,
+  evaluateTrigger,
   similarity: shadowSimilarity,
   lengthRatio: shadowLengthRatio,
   createNightSchoolStore,
   createNightSchoolJob
 } = require('./services/nightSchool')
+const {
+  LOCAL_SERVE_TIMEOUT_MS,
+  classifyUtterance,
+  createServingGate
+} = require('./services/promotion')
 
 const isDev = process.argv.includes('--dev')
 const CONFIGURED_BACKEND_URL = process.env.APIA_BACKEND_URL || DEFAULT_BACKEND_URL
@@ -586,43 +592,132 @@ const nightSchoolJob = createNightSchoolJob({
 })
 
 /**
+ * 로컬 학생(베이스+채택 델타)에게 발화 하나를 시킨다. 그림자(A-3)와 승격
+ * 서빙(A-4)이 **같은 표면**을 쓴다 — 하는 일이 글자 그대로 같기 때문이다
+ * ("모델을 올리지 말고, 떠 있으면 델타를 붙여 한 번 생성"). 둘의 차이는
+ * 기다리는 시간과 그 답을 어디에 쓰느냐뿐이라 엔드포인트를 나누지 않았다.
+ */
+function localStudentReply(message, timeout) {
+  const delta = nightSchool.adoptedDelta()
+  if (!delta) return Promise.resolve({ status: 'dormant', reason: '채택 델타 없음' })
+  return requestBackendJson('/training/shadow', {
+    method: 'POST',
+    timeout,
+    headers: { 'X-Apia-Training-Token': process.env.APIA_TRAINING_TOKEN || '' },
+    body: { message, delta_dir: delta.dir }
+  })
+}
+
+/**
  * 그림자 1건 — 채팅 교환이 **끝난 뒤** 비동기로. 대화 지연 0이 계약이라
  * 호출자는 이 promise를 기다리지 않는다.
  *
  * 로컬 모델을 올리지 않는다(백엔드가 떠 있는지만 보고 판단은 백엔드가 한다).
- * 델타가 없으면 아예 부르지 않는다.
+ * 델타가 없거나 그 유형이 이미 승격됐으면 아예 부르지 않는다.
  */
-function recordShadow(message, reply) {
+function recordShadow(message, reply, type) {
   const delta = nightSchool.adoptedDelta()
   if (!delta) return nightSchool.noteShadowDormant('채택 델타 없음')
   if (!message || !reply) return
-  requestBackendJson('/training/shadow', {
-    method: 'POST',
-    timeout: 60000,
-    headers: { 'X-Apia-Training-Token': process.env.APIA_TRAINING_TOKEN || '' },
-    body: { message, delta_dir: delta.dir }
-  }).then((res) => {
+  // 이미 승격된 유형은 그림자를 돌리지 않는다. 그림자의 용도는 "승격해도 되나"를
+  // 재는 것인데 그 판단은 끝났고(이제는 서빙 통계가 그 자리를 대신한다), 승격
+  // 유형에서 그림자를 계속 돌리면 다음 발화의 서빙이 그 생성에 막혀 API로
+  // 새는 악순환이 생긴다 — 둘이 같은 로컬 경로 하나를 쓰기 때문이다.
+  if (nightSchool.isPromoted(type)) return
+  localStudentReply(message, 60000).then((res) => {
     if (res?.status !== 'ok' || !res.reply) {
       return nightSchool.noteShadowDormant(res?.reason || res?.status || 'no reply')
     }
     // 여기서 원문은 점수로 바뀌고 버려진다. 디스크로 내려가는 건 숫자뿐이다.
     nightSchool.noteShadow({
       similarity: shadowSimilarity(res.reply, reply),
-      lengthRatio: shadowLengthRatio(res.reply, reply)
+      lengthRatio: shadowLengthRatio(res.reply, reply),
+      type
     })
   }).catch((error) => nightSchool.noteShadowDormant(error?.message || String(error)))
+}
+
+// ── 승격 서빙 게이트 (A-4) ──────────────────────────────────────────────────
+//
+// 승격된 유형만 로컬이 먼저 답한다. 폴백은 사용자에게 **보이지 않는다** —
+// 게이트가 'api'를 돌려주면 호출자는 평소의 /chat 경로를 그대로 탄다.
+const servingGate = createServingGate({
+  store: nightSchool,
+  generate: (message, { timeoutMs }) => localStudentReply(message, timeoutMs),
+  timeoutMs: LOCAL_SERVE_TIMEOUT_MS
+})
+
+/**
+ * 교환 하나의 앞단. 참조 카드가 붙은 body와 유형, 그리고 로컬이 답했다면 그
+ * 답을 돌려준다. 두 채팅 초크포인트(비스트리밍/스트리밍)가 같은 규칙을 쓰도록
+ * 규칙은 여기 한 곳에만 둔다.
+ */
+async function prepareExchange(message, baseBody, settings) {
+  const body = attachReferenceCards(baseBody, courseware, settings.coursewareReferenceEnabled !== false)
+  const hasReferenceCards = Array.isArray(body.reference_cards) && body.reference_cards.length > 0
+  const type = classifyUtterance(message, { hasReferenceCards })
+  let served = null
+  try {
+    served = await servingGate.serve(message, { hasReferenceCards, type })
+  } catch (error) {
+    // 게이트가 던지면 승격이 없던 것처럼 API로 간다 — 대화가 먼저다.
+    logWarn('[PROMOTION_GATE_WARN]', error?.message || error)
+  }
+  return { body, type, local: served?.source === 'local' ? served.reply : null }
 }
 
 ipcMain.handle('nightSchool:getState', async () => {
   try {
     const state = nightSchool.getState()
     const signals = await probeTrainingSignals()
-    return { ...state, signals, running: nightSchoolJob.isRunning() }
+    const s = nightSchool.loadStatus()
+    // 관제판 "다음 예정 조건" — 잡이 지금 판정하면 뭐라고 할지 그대로 보여준다.
+    const next = evaluateTrigger({
+      ...signals,
+      lastSuccessAt: s.lastSuccessAt,
+      cardsAtLastSuccess: s.cardsAtLastSuccess
+    })
+    return { ...state, signals, next, running: nightSchoolJob.isRunning() }
   } catch (error) { return { error: error?.message || String(error) } }
 })
 ipcMain.handle('nightSchool:trainNow', async () => {
   try {
     const result = await nightSchoolJob.runOnce({ force: true })
+    return { ...nightSchool.getState(), result }
+  } catch (error) { return { error: error?.message || String(error) } }
+})
+
+// 승격 토글 — 사용자 승인 경로. 추천 배지가 없는 유형을 켜려는 요청은 여기서
+// 거절한다(관제판이 이미 비활성화하지만, 승격은 UI 하나에 맡길 결정이 아니다).
+ipcMain.handle('nightSchool:setPromotion', (e, { type, enabled } = {}) => {
+  try {
+    if (enabled && !nightSchool.shadowByType()[type]?.recommended) {
+      return { ...nightSchool.getState(), result: { ok: false, error: '아직 승격 추천 조건을 채우지 못했어요' } }
+    }
+    const result = nightSchool.setPromotion(type, enabled)
+    return { ...nightSchool.getState(), result }
+  } catch (error) { return { error: error?.message || String(error) } }
+})
+
+// 되감기 — 보관 앵커로 채택 델타를 되돌린다.
+//
+// 확인은 **여기서** 받는다. 렌더러의 confirm()은 IPC를 직접 부르면 그냥
+// 건너뛸 수 있는 장식이라, 델타를 갈아끼우는 실제 지점 앞에 네이티브
+// 다이얼로그를 둔다(기본 버튼 = 취소).
+ipcMain.handle('nightSchool:rewind', async (e, { version } = {}) => {
+  try {
+    if (!version) return { ...nightSchool.getState(), result: { ok: false, error: '앵커를 고르지 않았어요' } }
+    const { response } = await dialog.showMessageBox(windows.getSettings() || windows.getMain(), {
+      type: 'question',
+      buttons: ['취소', '되감기'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '학습 결과 되감기',
+      message: `학습 결과를 ${version} 시점으로 되돌릴까요?`,
+      detail: '지금 쓰는 델타는 앵커로 그대로 남아 다시 앞으로 감을 수 있어요.'
+    })
+    if (response !== 1) return { ...nightSchool.getState(), result: { ok: false, cancelled: true } }
+    const result = nightSchool.rewind(version)
     return { ...nightSchool.getState(), result }
   } catch (error) { return { error: error?.message || String(error) } }
 })
@@ -724,22 +819,31 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
       ? useWeb
       : settings.useWebDefault === true
     const chatTimeout = chatTimeoutFor(settings.aiMode)
+    // A-2: 교재에서 이 발화와 겹치는 카드를 찾아 body에 싣는다. 토글이 꺼져
+    // 있거나 겹치는 게 없으면 키 자체가 안 붙는다(= 기존과 같은 요청).
+    // A-4: 승격된 유형이면 로컬 학생이 먼저 답한다(폴백은 아래 /chat 그대로).
+    const { body, type, local } = await prepareExchange(message, {
+      message,
+      history,
+      ai_mode: settings.aiMode,
+      memory_turns: settings.memoryTurns,
+      use_web: resolvedUseWeb
+    }, settings)
+    if (local) {
+      ledgerTracker.noteReplyDone()
+      // 로컬이 낸 답은 교재로도 그림자로도 되먹이지 않는다 — 자기 출력을 다시
+      // 교재로 학습하면 모델이 자기 말버릇만 증폭한다(그림자도 비교 상대가
+      // 자기 자신이라 점수가 무의미해진다).
+      return { reply: local, emotion: 'neutral', citations: [] }
+    }
     const reply = await requestBackendJson('/chat', {
       method: 'POST',
       timeout: chatTimeout,
-      // A-2: 교재에서 이 발화와 겹치는 카드를 찾아 body에 싣는다. 토글이 꺼져
-      // 있거나 겹치는 게 없으면 키 자체가 안 붙는다(= 기존과 같은 요청).
-      body: attachReferenceCards({
-        message,
-        history,
-        ai_mode: settings.aiMode,
-        memory_turns: settings.memoryTurns,
-        use_web: resolvedUseWeb
-      }, courseware, settings.coursewareReferenceEnabled !== false)
+      body
     })
     ledgerTracker.noteReplyDone()
     recordCoursewareExchange(message, reply?.reply) // 교재 버퍼 — 비동기 큐, 비차단
-    recordShadow(message, reply?.reply)             // 그림자 — 기다리지 않는다(지연 0)
+    recordShadow(message, reply?.reply, type)       // 그림자 — 기다리지 않는다(지연 0)
     return reply
   } catch (e) {
     return { error: e.message }
@@ -808,18 +912,29 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
     let timedOut = false
     try {
       await backend.ensureAvailableForRequest()
+      // A-2 참조 카드 + A-4 승격 서빙 — 비스트리밍 경로와 같은 규칙
+      // (prepareExchange 단일 출처).
+      const { body, type, local } = await prepareExchange(message, {
+        message,
+        history,
+        ai_mode: settings.aiMode,
+        memory_turns: settings.memoryTurns,
+        use_web: resolvedUseWeb
+      }, settings)
+      if (local) {
+        // 로컬 서빙은 한 덩어리다(스트림이 없다). 델타 프레임 없이 완료만
+        // 보낸다 — 렌더러는 델타 없이 done이 와도 그 본문으로 버블을 채운다.
+        if (isCurrent()) {
+          ledgerTracker.noteReplyDone()
+          sender.send('chat-stream-done', { requestId, reply: local, emotion: 'neutral', citations: [] })
+        }
+        return
+      }
       timer = setTimeout(() => { timedOut = true; try { controller.abort() } catch {} }, chatTimeout)
       const response = await fetch(`${getBackendUrl()}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // A-2 참조 카드 — 비스트리밍 경로와 같은 규칙(courseware.js 단일 출처).
-        body: JSON.stringify(attachReferenceCards({
-          message,
-          history,
-          ai_mode: settings.aiMode,
-          memory_turns: settings.memoryTurns,
-          use_web: resolvedUseWeb
-        }, courseware, settings.coursewareReferenceEnabled !== false)),
+        body: JSON.stringify(body),
         signal: controller.signal
       })
       if (!response.ok || !response.body) {
@@ -833,7 +948,7 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
         } else if (frame.type === 'final') {
           ledgerTracker.noteReplyDone() // 계측 — 응답이 화면에 다 뜬 시점
           recordCoursewareExchange(message, frame.reply) // 교재 버퍼 — 비동기 큐, 비차단
-          recordShadow(message, frame.reply)             // 그림자 — 기다리지 않는다(지연 0)
+          recordShadow(message, frame.reply, type)       // 그림자 — 기다리지 않는다(지연 0)
           sender.send('chat-stream-done', {
             requestId,
             reply: frame.reply,

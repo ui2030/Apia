@@ -131,9 +131,13 @@ contextBridge.exposeInMainWorld('api', {
 
   // 야간 학습기(A-3). 읽기 + "지금 시작" 한 개. 시작도 트리거 조건을 그대로
   // 통과해야 한다 — 버튼은 폴링을 앞당길 뿐 면제가 아니다.
+  // A-4 성장 관제판: 승격 토글과 되감기가 추가 표면이다. 승격은 **사용자만**
+  // 켤 수 있고(강등은 main이 혼자 한다), 되감기는 보관 앵커로만 간다.
   nightSchool: {
     getState: () => ipcRenderer.invoke('nightSchool:getState'),
-    trainNow: () => ipcRenderer.invoke('nightSchool:trainNow')
+    trainNow: () => ipcRenderer.invoke('nightSchool:trainNow'),
+    setPromotion: (type, enabled) => ipcRenderer.invoke('nightSchool:setPromotion', { type, enabled }),
+    rewind: (version) => ipcRenderer.invoke('nightSchool:rewind', { version })
   },
 
   notifyCharacter: (payload) => ipcRenderer.invoke('character:notify', payload),

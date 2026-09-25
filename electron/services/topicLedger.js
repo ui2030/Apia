@@ -384,9 +384,10 @@ function createTopicLedger({ ledgerPath, now = () => Date.now(), fsImpl = fs, lo
 /**
  * 채팅 교환(사용자 발화 ↔ 응답)에서 신호를 뽑아낸다.
  *
- * 한 교환의 신호는 **다음 발화가 와야** 확정된다(응답 지연도 화제 전환도 다음
- * 발화가 있어야 정의된다). 다음 발화 없이 대화가 끝나면 그 교환은 통째로 버린다
- * — 종료는 회피가 아니다(발주서 §2).
+ * 한 교환의 신호는 **다음 교환의 응답이 끝나야** 확정된다(응답 지연도 화제
+ * 전환도 다음 발화가 있어야 정의되고, 그 발화의 화제 분류는 응답 뒤에 시작한다
+ * — A-4 승격 서빙과 로컬 경로를 다투지 않으려고). 다음 발화 없이 대화가 끝나면
+ * 그 교환은 통째로 버린다 — 종료는 회피가 아니다(발주서 §2).
  *
  * 순수 상태기계: 시계(now)와 분류기(classify)를 주입받고 I/O를 하지 않는다.
  */
@@ -397,6 +398,10 @@ function createExchangeTracker({
   awayThresholdMs = AWAY_THRESHOLD_MS
 } = {}) {
   let pending = null
+  // 확정을 기다리는 직전 교환. 확정에는 **다음 교환의 화제**가 필요한데, 분류는
+  // 그 교환의 응답이 끝난 뒤에야 시작하므로(아래 noteReplyDone 주석) 확정 시점도
+  // 발화 도착이 아니라 다음 응답 완료로 미뤄진다.
+  let awaiting = null
   let dayKey = null
   let dayLengths = []
 
@@ -417,20 +422,31 @@ function createExchangeTracker({
       engagement: engagementDensity(text),
       // 당일 발화 3건 미만이면 중앙값이 통계가 아니다 → 무효
       lenRatio: dayLengths.length >= MIN_DAILY_UTTERANCES && med > 0 ? len / med : null,
-      topic: Promise.resolve()
-        .then(() => (classify ? classify(text) : null))
-        .catch(() => null)
+      text,
+      // 분류는 **응답이 끝난 뒤에** 시작한다(noteReplyDone). 분류기는 로컬 모델
+      // 전용이고, A-4의 승격 서빙도 같은 로컬 경로를 쓴다 — 발화 직후에 분류를
+      // 걸면 서빙이 매번 "local path busy"로 API에 양보해 승격이 사실상 죽는다.
+      // 이 교환의 화제는 **다음 발화가 와야** 쓰이므로 늦게 시작해도 늦지 않다.
+      topic: Promise.resolve(null)
     }
 
     const prev = pending
     pending = current
     // 응답이 끝나지 않은 교환은 신호를 못 만든다(사용자가 답을 기다리지 않고
     // 연달아 보낸 경우) — 조용히 버린다.
-    if (prev && prev.replyAt != null) finalize(prev, current)
+    awaiting = prev && prev.replyAt != null ? prev : null
   }
 
   function noteReplyDone() {
-    if (pending && pending.replyAt == null) pending.replyAt = now()
+    if (pending && pending.replyAt == null) {
+      const cur = pending // 다음 발화가 pending을 갈아끼워도 이 교환을 분류한다
+      cur.replyAt = now()
+      cur.topic = Promise.resolve()
+        .then(() => (classify ? classify(cur.text) : null))
+        .catch(() => null)
+      // 직전 교환은 이제야 확정된다 — 화제 전환 신호가 이 교환의 화제를 쓴다.
+      if (awaiting) { finalize(awaiting, cur); awaiting = null }
+    }
   }
 
   /** 응답 직후 사용자가 처음 키를 누른 순간. 지연의 끝점은 전송이 아니라 입력 시작. */
@@ -449,7 +465,7 @@ function createExchangeTracker({
   }
 
   /** 대화 종료(창 닫힘·앱 종료). 확정되지 않은 마지막 교환은 폐기. */
-  function endConversation() { pending = null }
+  function endConversation() { pending = null; awaiting = null }
 
   async function finalize(prev, next) {
     try {

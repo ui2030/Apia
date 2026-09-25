@@ -165,6 +165,7 @@ describe('무효 조건', () => {
     tracker.notePresence(600) // 10분째 입력 없음 = 부재
     clock.t += 600000
     tracker.noteUserMessage('돌아왔어요')
+    tracker.noteReplyDone()   // 확정은 다음 교환의 응답이 끝날 때
     await flushMicrotasks()
     expect(signals).toHaveLength(1)
     expect(signals[0].reply_latency_ms).toBeNull()
@@ -180,6 +181,7 @@ describe('무효 조건', () => {
     tracker.noteInputStart()  // 여기서 타자 시작
     clock.t += 9000           // 9초 동안 타이핑 — 지연에 포함되면 안 된다
     tracker.noteUserMessage('둘째 발화')
+    tracker.noteReplyDone()
     await flushMicrotasks()
     expect(signals[0].reply_latency_ms).toBe(4000)
   })
@@ -225,6 +227,7 @@ describe('무효 조건', () => {
     tracker.noteReplyDone()
     clock.t += 2000
     tracker.noteUserMessage('둘째 발화')
+    tracker.noteReplyDone()
     await flushMicrotasks()
     expect(signals).toHaveLength(1)
     expect(signals[0].topic_shifted).toBeNull()
@@ -239,6 +242,7 @@ describe('무효 조건', () => {
     tracker.noteReplyDone()
     clock.t += 1000
     tracker.noteUserMessage('셋째')
+    tracker.noteReplyDone()
     await flushMicrotasks()
     expect(signals).toHaveLength(1)
   })

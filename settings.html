@@ -789,8 +789,67 @@
     </div>
   </div>
 
+  <!-- ── 성장 관제판 (A-4) ──────────────────────────────────────────────────
+       아래 세 패널(원장·교재·야간 학습)이 모두 "비서가 자라는 과정"이라서
+       같은 성장 묶음 아래로 들어왔다. 이 판만이 **승격을 켜는 유일한 표면**이다. -->
+  <div class="section" id="growth-section">
+    <div class="section-title">성장 관제판</div>
+    <div class="helper-text" style="margin-bottom:8px;">
+      내 PC의 로컬 모델이 얼마나 자랐는지 보고, <b>어떤 종류의 말부터 직접 맡길지</b>
+      정하는 곳입니다. 승격은 <b>여기서 직접 켤 때만</b> 일어나고, 품질이 떨어지면
+      <b>알아서 다시 내려갑니다</b>. 로컬이 어색한 답을 내면 사용자가 보기 전에
+      기존 방식(API)으로 조용히 바뀝니다.
+    </div>
+
+    <div class="row" style="margin-top:4px;">
+      <div>
+        <div class="row-label">야간 학습</div>
+        <div class="row-sub" id="training-last">읽는 중…</div>
+      </div>
+      <button type="button" class="btn btn-ghost" id="training-now-btn" style="white-space:nowrap; flex:0 0 auto;">이번 주 학습 지금 시작</button>
+    </div>
+    <div class="row">
+      <div class="row-label">다음 예정 조건</div>
+      <span class="row-sub" id="training-next" style="font-size:11px;">—</span>
+    </div>
+    <div class="row">
+      <div class="row-label">채택 델타</div>
+      <span class="row-sub" id="training-delta" style="font-size:11px;">—</span>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row-label">되감기</div>
+        <div class="row-sub">예전 학습 결과(앵커)로 되돌립니다</div>
+      </div>
+      <div style="display:flex; gap:6px; flex:0 0 auto; align-items:center;">
+        <select id="training-anchor-select" style="max-width:190px;"></select>
+        <button type="button" class="btn btn-ghost" id="training-rewind-btn" style="white-space:nowrap;">되감기</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <div class="row-label">그림자 (최근 7일 전체)</div>
+      <span class="row-sub" id="training-shadow" style="font-size:11px;">—</span>
+    </div>
+    <div class="row-sub" style="margin-top:2px;">유형별 시도 · 평균 유사도 · 승격 추천</div>
+    <div id="growth-shadow-table" style="margin-top:4px;"></div>
+
+    <div class="row" style="margin-top:10px;">
+      <div class="row-label">승격 (추천된 유형만 켤 수 있어요)</div>
+    </div>
+    <div id="growth-promotion"></div>
+    <div class="row-sub" id="growth-demotions" style="margin-top:6px; display:none;"></div>
+
+    <div class="row" style="margin-top:10px;">
+      <div class="row-label">서빙 (최근 7일)</div>
+      <span class="row-sub" id="growth-serving" style="font-size:11px;">—</span>
+    </div>
+    <div class="row-sub" id="growth-serving-reasons" style="margin-top:2px; display:none;"></div>
+    <div class="row-sub" id="training-note" style="margin-top:6px; display:none;"></div>
+  </div>
+
   <div class="section" id="ledger-section">
-    <div class="section-title">눈치 원장 (계측 전용)</div>
+    <div class="section-title">성장 · 눈치 원장 (계측 전용)</div>
     <div class="helper-text" style="margin-bottom:8px;">
       대화 화제별로 <b>반응이 편했는지</b>를 수치로만 적어 두는 관찰 기록입니다.
       <b>대화 원문은 저장하지 않고</b> 화제 이름과 숫자만 남아요. 지금은 기록·열람만 하며
@@ -819,7 +878,7 @@
   </div>
 
   <div class="section" id="courseware-section">
-    <div class="section-title">교재 파이프라인</div>
+    <div class="section-title">성장 · 교재 파이프라인</div>
     <div class="helper-text" style="margin-bottom:8px;">
       그날의 대화를 자리 비운 사이에 <b>익명 복습 교재</b>로 바꾸고, 바꾸는 데 성공한
       날의 <b>원본은 지웁니다</b>(실패하면 원본을 그대로 두고 다음에 다시 시도해요).
@@ -863,23 +922,6 @@
       <span class="row-sub" id="courseware-last" style="font-size:11px;">—</span>
     </div>
     <div class="row-sub" id="courseware-warn" style="margin-top:6px; display:none;"></div>
-
-    <div class="row" style="margin-top:10px;">
-      <div>
-        <div class="row-label">야간 학습</div>
-        <div class="row-sub" id="training-last">읽는 중…</div>
-      </div>
-      <button type="button" class="btn btn-ghost" id="training-now-btn" style="white-space:nowrap; flex:0 0 auto;">이번 주 학습 지금 시작</button>
-    </div>
-    <div class="row">
-      <div class="row-label">채택 델타</div>
-      <span class="row-sub" id="training-delta" style="font-size:11px;">—</span>
-    </div>
-    <div class="row">
-      <div class="row-label">그림자 (최근 7일)</div>
-      <span class="row-sub" id="training-shadow" style="font-size:11px;">—</span>
-    </div>
-    <div class="row-sub" id="training-note" style="margin-top:6px; display:none;"></div>
   </div>
 </div>
 
@@ -1173,10 +1215,130 @@ function bindCoursewarePanel() {
   window.api.courseware.getState().then(renderCourseware).catch(() => {})
 }
 
-// ── 야간 학습기 패널 (A-3, 읽기 전용 + "지금 시작") ─────────────────────────
+// ── 성장 관제판 (A-3 학습 + A-4 승격) ───────────────────────────────────────
 const TRAINING_STATUS_LABEL = {
   passed: '채택', discarded: '폐기', interrupted: '중단',
   deferred: '연기', failed: '실패'
+}
+
+// 유형 이름은 관제판에서만 쓰는 사용자용 라벨이다 — 판정 로직의 유형 id는
+// electron/services/promotion.js가 단독 관할한다.
+const PROMOTION_TYPE_LABEL = {
+  greeting: '인사·안부',
+  reaction: '짧은 호응',
+  personal: '내 얘기 (기억 참조)',
+  general: '그 밖의 대화'
+}
+
+function renderGrowthTypes(state) {
+  const tableEl = document.getElementById('growth-shadow-table')
+  const promoEl = document.getElementById('growth-promotion')
+  if (!tableEl || !promoEl) return
+  tableEl.innerHTML = ''
+  promoEl.innerHTML = ''
+  const byType = state.byType || {}
+  const promotion = state.promotion || {}
+
+  for (const [type, label] of Object.entries(PROMOTION_TYPE_LABEL)) {
+    const t = byType[type] || {}
+    const row = document.createElement('div')
+    row.className = 'row'
+    const left = document.createElement('div')
+    left.innerHTML = `<div class="row-label">${label}</div>`
+    const sub = document.createElement('div')
+    sub.className = 'row-sub'
+    sub.style.fontSize = '11px'
+    const sim = Number.isFinite(t.avgSimilarity) ? `${(t.avgSimilarity * 100).toFixed(0)}%` : '—'
+    sub.textContent = `시도 ${t.attempts || 0}회 · 평균 유사도 ${sim}`
+    left.appendChild(sub)
+    const badge = document.createElement('span')
+    badge.className = 'row-sub'
+    badge.style.cssText = 'font-size:11px; flex:0 0 auto; white-space:nowrap;'
+    badge.textContent = t.recommended ? '승격 추천' : (t.reason || '—')
+    if (t.recommended) badge.style.color = '#a78bfa'
+    row.appendChild(left)
+    row.appendChild(badge)
+    tableEl.appendChild(row)
+
+    // 승격 토글. 추천이 없으면 아예 누를 수 없다 — 자동 승격이 없는 대신
+    // 사용자 승인도 검증된 유형에만 열린다.
+    const pRow = document.createElement('div')
+    pRow.className = 'row'
+    const pLeft = document.createElement('div')
+    pLeft.innerHTML = `<div class="row-label">${label}</div>`
+    const pSub = document.createElement('div')
+    pSub.className = 'row-sub'
+    pSub.textContent = promotion[type]
+      ? '로컬이 직접 답합니다 (어색하면 자동으로 원래대로)'
+      : (t.recommended ? '켜면 로컬이 이 종류의 말을 맡습니다' : '아직 검증이 덜 됐어요')
+    pLeft.appendChild(pSub)
+    const toggle = document.createElement('label')
+    toggle.className = 'toggle'
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.checked = promotion[type] === true
+    input.disabled = !promotion[type] && !t.recommended
+    input.addEventListener('change', async () => {
+      input.disabled = true
+      try {
+        renderNightSchool(await window.api.nightSchool.setPromotion(type, input.checked))
+      } catch { input.checked = !input.checked; input.disabled = false }
+    })
+    const track = document.createElement('div')
+    track.className = 't-track'
+    const thumb = document.createElement('div')
+    thumb.className = 't-thumb'
+    toggle.appendChild(input)
+    toggle.appendChild(track)
+    toggle.appendChild(thumb)
+    pRow.appendChild(pLeft)
+    pRow.appendChild(toggle)
+    promoEl.appendChild(pRow)
+  }
+
+  const demoEl = document.getElementById('growth-demotions')
+  if (demoEl) {
+    const list = (state.demotions || []).slice(0, 3).map((d) =>
+      `${new Date(d.at).toLocaleDateString('ko-KR')} ${PROMOTION_TYPE_LABEL[d.type] || d.type} 자동 강등 — ${d.reason}`)
+    demoEl.textContent = list.join(' · ')
+    demoEl.style.display = list.length ? '' : 'none'
+  }
+}
+
+function renderGrowthServing(state) {
+  const el = document.getElementById('growth-serving')
+  if (!el) return
+  const s = state.serving || {}
+  el.textContent = s.total
+    ? `로컬 ${s.local}회 / API ${s.api}회 (로컬 ${((s.local / s.total) * 100).toFixed(0)}%)`
+    : '아직 없음 (승격된 유형이 없거나 해당 발화가 없었어요)'
+  const reasonsEl = document.getElementById('growth-serving-reasons')
+  if (reasonsEl) {
+    const parts = (s.topReasons || []).map((r) => `${r.reason} ${r.count}회`)
+    reasonsEl.textContent = parts.length ? `API로 넘어간 사유: ${parts.join(' · ')}` : ''
+    reasonsEl.style.display = parts.length ? '' : 'none'
+  }
+}
+
+function renderGrowthAnchors(state) {
+  const select = document.getElementById('training-anchor-select')
+  if (!select) return
+  const anchors = state.anchors || []
+  select.innerHTML = ''
+  if (anchors.length === 0) {
+    const opt = document.createElement('option')
+    opt.textContent = '보관된 앵커 없음'
+    select.appendChild(opt)
+  }
+  for (const version of anchors) {
+    const opt = document.createElement('option')
+    opt.value = version
+    opt.textContent = version === state.adoptedVersion ? `${version} (사용 중)` : version
+    select.appendChild(opt)
+  }
+  select.value = state.adoptedVersion || anchors[0] || ''
+  const btn = document.getElementById('training-rewind-btn')
+  if (btn) btn.disabled = anchors.length === 0
 }
 
 function renderNightSchool(state) {
@@ -1198,6 +1360,8 @@ function renderNightSchool(state) {
       ? `${state.adoptedVersion} / 앵커 ${state.anchorCount}개`
       : '아직 없음 (그림자 휴면)'
   }
+  const nextEl = document.getElementById('training-next')
+  if (nextEl) nextEl.textContent = state.next?.reason || '—'
   const shadowEl = document.getElementById('training-shadow')
   if (shadowEl) {
     const s = state.shadow || {}
@@ -1205,6 +1369,9 @@ function renderNightSchool(state) {
       ? `시도 ${s.attempts7d}회 / 평균 유사도 ${(s.avgSimilarity * 100).toFixed(1)}%`
       : `시도 없음${s.dormantReason ? ` (${s.dormantReason})` : ''}`
   }
+  renderGrowthAnchors(state)
+  renderGrowthTypes(state)
+  renderGrowthServing(state)
   const noteEl = document.getElementById('training-note')
   if (noteEl) {
     const parts = []
@@ -1216,7 +1383,21 @@ function renderNightSchool(state) {
 }
 
 function bindNightSchoolPanel() {
-  if (!window.api?.nightSchool) return
+  if (!window.api?.nightSchool) {
+    document.getElementById('growth-section')?.remove()
+    return
+  }
+  const rewindBtn = document.getElementById('training-rewind-btn')
+  rewindBtn?.addEventListener('click', async () => {
+    const version = document.getElementById('training-anchor-select')?.value
+    if (!version) return
+    // 확인 다이얼로그는 main이 띄운다 — 렌더러 confirm()은 IPC를 직접 부르면
+    // 우회되는 장식이라 여기서 중복으로 묻지 않는다.
+    rewindBtn.disabled = true
+    try {
+      renderNightSchool(await window.api.nightSchool.rewind(version))
+    } finally { rewindBtn.disabled = false }
+  })
   const btn = document.getElementById('training-now-btn')
   btn?.addEventListener('click', async () => {
     btn.disabled = true

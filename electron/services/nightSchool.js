@@ -21,6 +21,12 @@ const fs = require('fs')
 const path = require('path')
 
 const { grams, dayKeyOf } = require('./courseware')
+const {
+  TYPES,
+  DEMOTION_WINDOW: DEMOTION_WINDOW_SIZE,
+  recommendPromotion,
+  demotionVerdict
+} = require('./promotion')
 
 const SCHEMA_VERSION = 1
 
@@ -47,6 +53,11 @@ const RENDER_AWAY_SEC = 300
 
 const ANCHOR_KEEP = 8          // 주간 앵커 보관 개수
 const SHADOW_WINDOW_DAYS = 7
+// 보존은 표시 창의 두 배다 — 승격 추천의 "최근 추세"가 최근 7일과 그 이전
+// 7일을 비교하기 때문(A-4 §2). 보존을 7일로 두면 비교 대상이 영원히 없다.
+const SHADOW_RETAIN_DAYS = SHADOW_WINDOW_DAYS * 2
+const SERVING_WINDOW_DAYS = 7  // 관제판 "최근 7일 로컬/API 비율"
+const DEMOTION_HISTORY_KEEP = 10
 const DAY_MS = 86400000
 
 /**
@@ -141,9 +152,16 @@ function emptyStatus() {
     adopted: null,         // { version, dir, adoptedAt, gate }
     anchors: [],           // 최근 채택 델타 version들(최신이 앞)
     teacherSpentWeek: 0,
-    // 그림자 집계 — dayKey -> { attempts, simSum, lenSum }. 원문은 없다.
+    // 그림자 집계 — dayKey -> { attempts, simSum, lenSum, types: { <type>: {...} } }.
+    // 원문은 없다. types는 A-4에서 붙었다 — 없는(=A-3 시절) 버킷은 유형 미상으로
+    // 남고 총계에만 들어간다(마이그레이션 없음, 스키마 버전도 그대로).
     shadow: {},
-    shadowDormant: null    // 마지막 휴면 사유(관측용)
+    shadowDormant: null,   // 마지막 휴면 사유(관측용)
+    // ── A-4 승격 ──
+    promotion: {},         // type -> { enabled, at }  (수동 토글만이 여기를 켠다)
+    demotions: [],         // { type, at, reason } 최신이 앞. 자동 강등 이력.
+    serving: {},           // dayKey -> { local, api, reasons: { <사유>: n } }
+    servingRecent: {}      // type -> [0|1, ...] 최근 20회 품질 판정(1 = 미달)
   }
 }
 
@@ -294,8 +312,9 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
 
   /**
    * 그림자 1건. **점수만** 받는다 — 사용자 발화도 두 응답 원문도 인자에 없다.
+   * type은 A-4의 유형 태그(분류는 호출자가 순수 함수로 끝내고 결과만 넘긴다).
    */
-  function noteShadow({ similarity: sim, lengthRatio: len } = {}) {
+  function noteShadow({ similarity: sim, lengthRatio: len, type } = {}) {
     if (!Number.isFinite(sim)) return
     const s = loadStatus()
     const day = dayKeyOf(now())
@@ -303,9 +322,17 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
     bucket.attempts += 1
     bucket.simSum += sim
     bucket.lenSum += Number.isFinite(len) ? len : 0
+    if (TYPES.includes(type)) {
+      const types = bucket.types || (bucket.types = {})
+      const t = types[type] || { attempts: 0, simSum: 0, lenSum: 0 }
+      t.attempts += 1
+      t.simSum += sim
+      t.lenSum += Number.isFinite(len) ? len : 0
+      types[type] = t
+    }
     s.shadow[day] = bucket
     const keep = new Set(
-      Array.from({ length: SHADOW_WINDOW_DAYS }, (_, i) => dayKeyOf(now() - i * DAY_MS))
+      Array.from({ length: SHADOW_RETAIN_DAYS }, (_, i) => dayKeyOf(now() - i * DAY_MS))
     )
     for (const key of Object.keys(s.shadow)) if (!keep.has(key)) delete s.shadow[key]
     s.shadowDormant = null
@@ -321,12 +348,21 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
     saveStatus()
   }
 
+  /** 최근 n일의 dayKey 집합(오늘 포함). offset일 전부터 센다. */
+  function dayWindow(count, offset = 0) {
+    return new Set(
+      Array.from({ length: count }, (_, i) => dayKeyOf(now() - (i + offset) * DAY_MS))
+    )
+  }
+
   function shadowSummary() {
     const s = loadStatus()
+    const week = dayWindow(SHADOW_WINDOW_DAYS)
     let attempts = 0
     let simSum = 0
     let lenSum = 0
-    for (const bucket of Object.values(s.shadow)) {
+    for (const [day, bucket] of Object.entries(s.shadow)) {
+      if (!week.has(day)) continue // 보존은 14일, 표시는 7일
       attempts += bucket.attempts || 0
       simSum += bucket.simSum || 0
       lenSum += bucket.lenSum || 0
@@ -337,6 +373,144 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
       avgLengthRatio: attempts ? lenSum / attempts : null,
       dormantReason: s.shadowDormant
     }
+  }
+
+  /**
+   * 유형별 그림자 집계 + 승격 추천(표시용). 추천이 true여도 **아무것도 승격되지
+   * 않는다** — 관제판 토글의 잠금을 푸는 것뿐이다.
+   */
+  function shadowByType() {
+    const s = loadStatus()
+    const recentDays = dayWindow(SHADOW_WINDOW_DAYS)
+    const priorDays = dayWindow(SHADOW_WINDOW_DAYS, SHADOW_WINDOW_DAYS)
+    const acc = {}
+    for (const type of TYPES) {
+      acc[type] = { attempts: 0, simSum: 0, recent: { n: 0, sum: 0 }, prior: { n: 0, sum: 0 } }
+    }
+    for (const [day, bucket] of Object.entries(s.shadow)) {
+      for (const [type, t] of Object.entries(bucket.types || {})) {
+        const a = acc[type]
+        if (!a) continue
+        // 시도 수·평균은 보존 창(14일) 전체. 추세만 7일씩 갈라 본다.
+        a.attempts += t.attempts || 0
+        a.simSum += t.simSum || 0
+        if (recentDays.has(day)) { a.recent.n += t.attempts || 0; a.recent.sum += t.simSum || 0 }
+        else if (priorDays.has(day)) { a.prior.n += t.attempts || 0; a.prior.sum += t.simSum || 0 }
+      }
+    }
+    const out = {}
+    for (const type of TYPES) {
+      const a = acc[type]
+      const stats = {
+        attempts: a.attempts,
+        avgSimilarity: a.attempts ? a.simSum / a.attempts : null,
+        recentAvg: a.recent.n ? a.recent.sum / a.recent.n : null,
+        priorAvg: a.prior.n ? a.prior.sum / a.prior.n : null
+      }
+      out[type] = { ...stats, ...recommendPromotion(stats) }
+    }
+    return out
+  }
+
+  // ── A-4 승격 ──────────────────────────────────────────────────────────────
+
+  /** 하나라도 승격돼 있는가. 대화 경로의 첫 관문이라 디스크를 보지 않는다(캐시된 status). */
+  function hasPromotion() {
+    const p = loadStatus().promotion || {}
+    return TYPES.some((t) => p[t]?.enabled === true)
+  }
+
+  function isPromoted(type) {
+    return loadStatus().promotion?.[type]?.enabled === true
+  }
+
+  /**
+   * 승격 토글. **사용자 승인 경로 전용** — 코드가 스스로 true로 부르는 자리는
+   * 어디에도 없다(강등은 noteServing이 false로만 부른다).
+   */
+  function setPromotion(type, enabled) {
+    if (!TYPES.includes(type)) return { ok: false, error: `unknown type: ${type}` }
+    const s = loadStatus()
+    s.promotion = { ...s.promotion, [type]: { enabled: Boolean(enabled), at: now() } }
+    if (enabled) s.servingRecent = { ...s.servingRecent, [type]: [] } // 창을 비우고 새로 센다
+    const saved = saveStatus()
+    return saved.ok ? { ok: true, type, enabled: Boolean(enabled) } : { ok: false, error: saved.error }
+  }
+
+  /**
+   * 서빙 1건. 로컬이 답했으면 source='local', 폴백이면 'api'+사유.
+   * quality=true(품질 필터 미달)일 때만 강등 창에 1을 밀어 넣는다 — 미상주·
+   * 타임아웃은 환경 탓이라 모델을 벌하지 않는다.
+   *
+   * @returns {{demoted?: {type, reason}}}
+   */
+  function noteServing({ type, source, reason, quality = false } = {}) {
+    const s = loadStatus()
+    const day = dayKeyOf(now())
+    const bucket = s.serving[day] || { local: 0, api: 0, reasons: {} }
+    if (source === 'local') bucket.local += 1
+    else bucket.api += 1
+    if (reason) bucket.reasons[reason] = (bucket.reasons[reason] || 0) + 1
+    s.serving[day] = bucket
+    const keep = dayWindow(SERVING_WINDOW_DAYS)
+    for (const key of Object.keys(s.serving)) if (!keep.has(key)) delete s.serving[key]
+
+    let demoted = null
+    if (TYPES.includes(type) && (source === 'local' || quality)) {
+      const window = (s.servingRecent[type] || []).concat(quality ? 1 : 0).slice(-DEMOTION_WINDOW_SIZE)
+      s.servingRecent[type] = window
+      const verdict = demotionVerdict(window)
+      if (verdict.demote && isPromoted(type)) {
+        s.promotion = { ...s.promotion, [type]: { enabled: false, at: now() } }
+        s.servingRecent[type] = []
+        s.demotions = [{ type, at: now(), reason: verdict.reason }, ...s.demotions].slice(0, DEMOTION_HISTORY_KEEP)
+        demoted = { type, reason: verdict.reason }
+      }
+    }
+    saveStatus()
+    return demoted ? { demoted } : {}
+  }
+
+  /** 관제판 표시용 — 승격 상태·강등 이력·최근 7일 서빙 비율. */
+  function servingSummary() {
+    const s = loadStatus()
+    const week = dayWindow(SERVING_WINDOW_DAYS)
+    let local = 0
+    let api = 0
+    const reasons = {}
+    for (const [day, bucket] of Object.entries(s.serving)) {
+      if (!week.has(day)) continue
+      local += bucket.local || 0
+      api += bucket.api || 0
+      for (const [r, n] of Object.entries(bucket.reasons || {})) reasons[r] = (reasons[r] || 0) + n
+    }
+    return {
+      local,
+      api,
+      total: local + api,
+      topReasons: Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3)
+        .map(([reason, count]) => ({ reason, count }))
+    }
+  }
+
+  /**
+   * 되감기 — 보관 중인 앵커로 채택 델타를 되돌린다. 쓰기는 adopt와 같은
+   * status.json tmp→rename 하나라 중간 상태가 없고, 앵커 디렉터리는 건드리지
+   * 않는다(되감은 뒤 다시 앞으로 감을 수 있어야 한다).
+   */
+  function rewind(version) {
+    const s = loadStatus()
+    if (!s.anchors.includes(version)) return { ok: false, error: '보관 목록에 없는 앵커' }
+    const target = path.join(anchorsDir, version)
+    if (!isUsableDelta(target)) return { ok: false, error: '앵커 델타가 손상됐거나 사라졌어요' }
+    const previous = s.adopted
+    s.adopted = { version, dir: target, adoptedAt: now(), gate: previous?.gate || null, rewound: true }
+    const saved = saveStatus()
+    if (!saved.ok) {
+      s.adopted = previous
+      return { ok: false, error: saved.error }
+    }
+    return { ok: true, version }
   }
 
   /** 설정 창 표시용 스냅샷. */
@@ -354,8 +528,14 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
       adoptedAt: adopted?.adoptedAt || null,
       gate: adopted?.gate || null,
       anchorCount: s.anchors.length,
+      anchors: s.anchors.slice(),
       teacherSpentWeek: s.teacherSpentWeek || 0,
       shadow: shadowSummary(),
+      // A-4 관제판 — 유형별 그림자·승격 상태·강등 이력·서빙 비율.
+      byType: shadowByType(),
+      promotion: Object.fromEntries(TYPES.map((t) => [t, isPromoted(t)])),
+      demotions: (s.demotions || []).slice(),
+      serving: servingSummary(),
       path: dir
     }
   }
@@ -367,12 +547,19 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
     adoptedDelta,
     isUsableDelta,
     adopt,
+    rewind,
     pruneAnchors,
     noteRun,
     discardCandidate,
     noteShadow,
     noteShadowDormant,
     shadowSummary,
+    shadowByType,
+    hasPromotion,
+    isPromoted,
+    setPromotion,
+    noteServing,
+    servingSummary,
     paths: { dir, anchorsDir, workDir, statusPath, stopPath, resultPath, logPath }
   }
 }
@@ -448,6 +635,8 @@ module.exports = {
   RENDER_AWAY_SEC,
   DEADLINE_GRACE_MS,
   ANCHOR_KEEP,
+  SHADOW_WINDOW_DAYS,
+  SHADOW_RETAIN_DAYS,
   awaitChildExit,
   evaluateTrigger,
   similarity,

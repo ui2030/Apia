@@ -228,6 +228,128 @@ describe('그림자 집계 — 점수만 남는다', () => {
   })
 })
 
+describe('유형별 그림자 (A-4) — 추세를 보려고 보존이 표시 창의 두 배다', () => {
+  it('유형 태그가 붙으면 유형별로도 센다 (총계는 그대로)', () => {
+    const store = createNightSchoolStore({ dir })
+    store.noteShadow({ similarity: 0.8, lengthRatio: 1, type: 'greeting' })
+    store.noteShadow({ similarity: 0.2, lengthRatio: 1, type: 'general' })
+    store.noteShadow({ similarity: 0.5, lengthRatio: 1 }) // 유형 없음(A-3 시절)
+    expect(store.shadowSummary().attempts7d).toBe(3)
+    const byType = store.shadowByType()
+    expect(byType.greeting.attempts).toBe(1)
+    expect(byType.greeting.avgSimilarity).toBeCloseTo(0.8, 6)
+    expect(byType.general.attempts).toBe(1)
+    expect(byType.reaction.attempts).toBe(0)
+  })
+
+  it('추세는 최근 7일 vs 그 이전 7일 — 하락이면 추천이 꺼진다', () => {
+    let clock = new Date('2026-03-01T12:00:00Z').getTime()
+    const store = createNightSchoolStore({ dir, now: () => clock })
+    for (let i = 0; i < 20; i += 1) store.noteShadow({ similarity: 0.9, lengthRatio: 1, type: 'greeting' })
+    clock += 8 * DAY
+    for (let i = 0; i < 20; i += 1) store.noteShadow({ similarity: 0.5, lengthRatio: 1, type: 'greeting' })
+    const t = store.shadowByType().greeting
+    expect(t.attempts).toBe(40)          // 14일 보존이라 이전 구간이 아직 살아 있다
+    expect(t.priorAvg).toBeCloseTo(0.9, 6)
+    expect(t.recentAvg).toBeCloseTo(0.5, 6)
+    expect(t.recommended).toBe(false)
+    expect(t.reason).toContain('하락')
+  })
+
+  it('14일을 넘기면 유형 기록도 버린다', () => {
+    let clock = new Date('2026-03-01T12:00:00Z').getTime()
+    const store = createNightSchoolStore({ dir, now: () => clock })
+    store.noteShadow({ similarity: 0.9, lengthRatio: 1, type: 'greeting' })
+    clock += 15 * DAY
+    store.noteShadow({ similarity: 0.3, lengthRatio: 1, type: 'greeting' })
+    expect(store.shadowByType().greeting.attempts).toBe(1)
+  })
+})
+
+describe('승격 상태 (A-4) — 코드가 스스로 켜는 길은 없다', () => {
+  it('기본은 전부 꺼짐이고 hasPromotion은 false', () => {
+    const store = createNightSchoolStore({ dir })
+    expect(store.hasPromotion()).toBe(false)
+    expect(store.isPromoted('greeting')).toBe(false)
+  })
+
+  it('모르는 유형은 켜지지 않는다', () => {
+    const store = createNightSchoolStore({ dir })
+    expect(store.setPromotion('nonsense', true).ok).toBe(false)
+    expect(store.hasPromotion()).toBe(false)
+  })
+
+  it('토글은 디스크에 남아 재시작을 넘긴다', () => {
+    createNightSchoolStore({ dir }).setPromotion('greeting', true)
+    expect(createNightSchoolStore({ dir }).isPromoted('greeting')).toBe(true)
+  })
+
+  it('다시 켜면 강등 창이 비워진다 — 지난 실패가 즉시 재강등시키지 않게', () => {
+    const store = createNightSchoolStore({ dir })
+    store.setPromotion('greeting', true)
+    for (let i = 0; i < 19; i += 1) store.noteServing({ type: 'greeting', source: 'api', reason: '마크다운 기호', quality: true })
+    expect(store.isPromoted('greeting')).toBe(true) // 창이 아직 19개
+    store.setPromotion('greeting', false)
+    store.setPromotion('greeting', true)
+    store.noteServing({ type: 'greeting', source: 'api', reason: '마크다운 기호', quality: true })
+    expect(store.isPromoted('greeting')).toBe(true) // 창이 1개라 판정하지 않는다
+  })
+})
+
+describe('되감기 (A-4) — 앵커로만 가고, 실패하면 지금 델타가 그대로', () => {
+  it('보관 앵커로 채택 포인터를 되돌린다', () => {
+    const store = createNightSchoolStore({ dir })
+    store.adopt('v1', makeDelta(join(dir, 'work', 'c1')), null, 10)
+    store.adopt('v2', makeDelta(join(dir, 'work', 'c2')), null, 20)
+    expect(store.adoptedDelta().version).toBe('v2')
+    expect(store.rewind('v1')).toMatchObject({ ok: true })
+    expect(store.adoptedDelta().version).toBe('v1')
+    // 되감아도 v2는 앵커로 남는다 — 다시 앞으로 감을 수 있어야 한다.
+    expect(store.rewind('v2')).toMatchObject({ ok: true })
+    expect(store.adoptedDelta().version).toBe('v2')
+  })
+
+  it('보관 목록에 없는 버전은 거절', () => {
+    const store = createNightSchoolStore({ dir })
+    store.adopt('v1', makeDelta(join(dir, 'work', 'c1')), null, 10)
+    expect(store.rewind('v9').ok).toBe(false)
+    expect(store.adoptedDelta().version).toBe('v1')
+  })
+
+  it('앵커 디렉터리가 깨졌으면 거절하고 지금 델타를 유지한다', () => {
+    const store = createNightSchoolStore({ dir })
+    store.adopt('v1', makeDelta(join(dir, 'work', 'c1')), null, 10)
+    store.adopt('v2', makeDelta(join(dir, 'work', 'c2')), null, 20)
+    fs.rmSync(join(store.paths.anchorsDir, 'v1'), { recursive: true, force: true })
+    expect(store.rewind('v1').ok).toBe(false)
+    expect(store.adoptedDelta().version).toBe('v2')
+  })
+
+  it('되감기해도 직전 채택 델타는 앵커 목록·디스크에 그대로 남는다', () => {
+    const store = createNightSchoolStore({ dir })
+    store.adopt('v1', makeDelta(join(dir, 'work', 'c1')), null, 10)
+    store.adopt('v2', makeDelta(join(dir, 'work', 'c2')), null, 20)
+    expect(store.rewind('v1').ok).toBe(true)
+    const s = store.loadStatus()
+    expect(s.anchors).toContain('v2')                       // 보관 목록에 남고
+    expect(existsSync(join(store.paths.anchorsDir, 'v2'))).toBe(true) // 디스크에도 남는다
+    expect(store.getState().anchors).toContain('v2')        // 관제판 드롭다운에도
+  })
+
+  it('status.json 쓰기가 실패하면 되감기는 없던 일이 된다 — 이전 채택 델타 유지', () => {
+    const store = createNightSchoolStore({ dir })
+    store.adopt('v1', makeDelta(join(dir, 'work', 'c1')), null, 10)
+    store.adopt('v2', makeDelta(join(dir, 'work', 'c2')), null, 20)
+    const broken = createNightSchoolStore({
+      dir,
+      fsImpl: brokenFs({ writeFileSync: () => { throw new Error('disk full') } })
+    })
+    expect(broken.rewind('v1').ok).toBe(false)
+    expect(broken.adoptedDelta().version).toBe('v2')
+    expect(createNightSchoolStore({ dir }).adoptedDelta().version).toBe('v2')
+  })
+})
+
 describe('종료 — 학습 자식을 유령으로 남기지 않는다', () => {
   /** child_process 핸들의 최소 흉내 — close 이벤트와 exitCode/kill만 있으면 된다. */
   function fakeChild() {
