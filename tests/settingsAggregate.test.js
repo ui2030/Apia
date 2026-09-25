@@ -99,6 +99,15 @@ describe('normalize', () => {
     expect(repo.normalize({ useWebDefault: 1 }).useWebDefault).toBe(false)
   })
 
+  it('coursewareReferenceEnabled defaults to true (구버전 settings.json 포함)', () => {
+    // A-2: 명시적으로 끈 적이 없으면 켜져 있어야 한다. 교재가 없으면 검색이
+    // 0장을 돌려줄 뿐이라 켜져 있는 것만으로 달라지는 건 없다.
+    const repo = createRepo()
+    expect(repo.normalize().coursewareReferenceEnabled).toBe(true)
+    expect(repo.normalize({ coursewareReferenceEnabled: false }).coursewareReferenceEnabled).toBe(false)
+    expect(repo.normalize({ coursewareReferenceEnabled: 'no' }).coursewareReferenceEnabled).toBe(true)
+  })
+
   it('rejects an unknown aiMode and falls back to default', () => {
     const repo = createRepo()
     expect(repo.normalize({ aiMode: 'gpt5' }).aiMode).toBe(SETTINGS_DEFAULTS.aiMode)

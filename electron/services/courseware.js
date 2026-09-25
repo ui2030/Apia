@@ -2,9 +2,10 @@
  * 교재 파이프라인 — 그날의 대화를 버퍼에 적고, 지난 날짜의 버퍼를 교사 API가
  * 익명 교재 카드로 바꾸고, **바꾸기에 성공한 뒤에만** 원본을 지운다.
  *
- * 이 모듈은 학습을 하지 않는다. 캐릭터의 말·화제 선택·알림에 연결된 출구가
- * 하나도 없다(연결은 뒷 단계 몫). 눈치 원장(topicLedger.js)과는 훅 지점만
- * 공유하고 코드는 독립이다.
+ * 이 모듈은 학습을 하지 않는다(A-3 몫). 출구는 **하나뿐**이다: A-2 검색 참조 —
+ * 현재 발화와 겹치는 카드 상위 3장을 찾아 채팅 요청에 참고로 실어 보낸다.
+ * 화제 선택·알림으로 나가는 길은 여전히 없다. 눈치 원장(topicLedger.js)과는
+ * 훅 지점만 공유하고 코드는 독립이다.
  *
  * 폐기 규칙(이 파일에서 가장 중요한 불변식):
  *   버퍼 파일을 지우는 경로는 commitCourseware() **하나뿐**이고, 그 안에서도
@@ -20,6 +21,9 @@ const path = require('path')
 const SCHEMA_VERSION = 2
 const FAILURE_WARN_STREAK = 7 // 이만큼 연속 실패하면 원본을 유지한 채 경고를 적는다
 const SPEND_WINDOW_DAYS = 7
+const REFERENCE_TOP_K = 3      // 프롬프트에 붙일 카드 수 (E3 실측이 top-3)
+const REFERENCE_TITLE_MAX = 40 // status.json에 남길 예시 길이 — 제목 수준까지만
+const RECENT_REFERENCE_MAX = 3
 
 const README_TEXT = [
   '이 폴더는 Apia 교재 파이프라인의 작업 공간입니다.',
@@ -41,6 +45,67 @@ function dayKeyOf(ms) {
 
 const DAY_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/
 
+// ── 검색 참조(A-2) ──────────────────────────────────────────────────────────
+//
+// night-loop-lab 실험 E3에서 검증된 방식 그대로: 질의와 카드의 **문자 2-gram
+// 겹침 개수** 상위 k장. 임베딩도 인덱스도 없다 — 조사·어미가 붙는 한국어에서
+// 형태소 분석 없이도 "등산화"와 "등산"이 겹치고, 카드 수천 장까지 선형 스캔이
+// 밀리초대라 더 복잡한 걸 둘 이유가 없다.
+
+/** 공백을 지운 문자열의 문자 n-gram 집합. */
+function grams(text, n = 2) {
+  const s = String(text == null ? '' : text).replace(/\s+/g, '')
+  const out = new Set()
+  for (let i = 0; i + n <= s.length; i += 1) out.add(s.slice(i, i + n))
+  return out
+}
+
+/**
+ * 질의와 겹치는 2-gram이 많은 카드 상위 k장. 순수 함수.
+ *
+ * 겹침이 0인 카드는 **돌려주지 않는다** — 상관없는 기억을 프롬프트에 밀어넣으면
+ * 답이 엉뚱해진다(E3의 top-k는 항상 k장을 주지만, 그건 평가셋이 항상 관련
+ * 카드를 갖고 있다는 전제였다). 동점은 카드 순서 유지(Array.sort가 안정 정렬).
+ *
+ * @param {string} query
+ * @param {Array<{day?:string,u:string,a:string,g?:Set<string>}>} cards
+ *        g가 있으면 미리 계산된 2-gram으로 본다(핫 경로에서 재계산 회피).
+ */
+function searchCards(query, cards, k = REFERENCE_TOP_K) {
+  const gq = grams(query)
+  if (gq.size === 0 || !Array.isArray(cards)) return []
+  const scored = []
+  for (const card of cards) {
+    const cg = card?.g instanceof Set ? card.g : grams(`${card?.u || ''} ${card?.a || ''}`)
+    let score = 0
+    for (const g of gq) if (cg.has(g)) score += 1 // 질의 쪽을 돈다 — 보통 훨씬 작다
+    if (score > 0) scored.push({ card, score })
+  }
+  scored.sort((a, b) => b.score - a.score)
+  return scored.slice(0, k).map(({ card }) => ({ day: card.day, u: card.u, a: card.a }))
+}
+
+/**
+ * 채팅 요청 body에 참조 카드를 붙인다. 두 IPC 초크포인트(send-message /
+ * chat:streamStart)가 같은 규칙을 쓰도록 규칙은 여기 한 곳에만 둔다.
+ *
+ * 토글이 꺼져 있거나 겹치는 카드가 없으면 **받은 body를 그대로**(같은 객체)
+ * 돌려준다 = reference_cards 키 자체가 생기지 않고, 백엔드가 만드는 프롬프트도
+ * 기존과 바이트 동일하다. 검색이 던져도 대화는 그대로 나간다.
+ */
+function attachReferenceCards(body, store, enabled) {
+  if (!enabled || !store) return body
+  let cards
+  try {
+    cards = store.findReferences(String(body?.message || ''))
+  } catch {
+    return body
+  }
+  if (!cards || cards.length === 0) return body
+  try { store.noteReference(cards) } catch {}
+  return { ...body, reference_cards: cards.map((c) => ({ u: c.u, a: c.a })) }
+}
+
 function emptyStatus() {
   return {
     schema_version: SCHEMA_VERSION,
@@ -51,7 +116,11 @@ function emptyStatus() {
     spend: {},       // dayKey -> usd (교사 호출이 일어난 날 기준, 최근 7일만 보존)
     failures: {},    // 버퍼 dayKey -> 연속 실패 횟수
     warnings: [],    // { day, streak, at } — 7일 연속 실패한 버퍼
-    lastError: null  // { at, day, message }
+    lastError: null, // { at, day, message }
+    // A-2 관측: 참조가 붙은 **교환 수**와 최근 예시(카드 제목 수준)만 센다.
+    // 사용자 발화 원문은 여기에 절대 들어가지 않는다.
+    referenceAttached: 0,
+    recentReferences: []
   }
 }
 
@@ -76,6 +145,10 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
   // 그러지 않으면 unlink 뒤에 도착한 한 건이 옛 버퍼를 되살리고, 다음 실행이
   // 그 하루치 교재를 그 한 건만으로 덮어쓴다.
   let heldDay = null
+  // 카드 전체 + 미리 계산한 2-gram. 검색은 대화 경로에서 매번 도니까 파일을
+  // 다시 읽지 않는다. 카드를 쓰는 경로(commit/reconcile)에서만 무효화한다 —
+  // 이 프로세스 바깥에서 cards/를 고치는 주체는 없다.
+  let cardIndex = null
 
   function ensureDir(target) {
     fsImpl.mkdirSync(target, { recursive: true })
@@ -233,6 +306,7 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
       log.warn?.('[COURSEWARE_BUFFER_UNLINK_FAILED]', day, error?.message || error)
     }
 
+    cardIndex = null // 새 카드가 생겼다 — 다음 검색에서 다시 읽는다
     const s = loadStatus()
     s.cardCounts[day] = list.length // 덮어쓰기 — 같은 날을 두 번 확정해도 이중 집계 없음
     s.lastConvertedAt = now()
@@ -245,9 +319,14 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
 
   /**
    * 그 일자의 교재 파일이 이미 온전히 있으면 카드 수를, 없거나 깨졌으면 null.
-   * "온전하다"는 모든 줄이 u/a를 가진 JSON이라는 뜻이다 — commitCourseware가
-   * rename으로만 파일을 만드니 반쪽짜리는 원리상 없지만, 재실행이 교사를
-   * 건너뛸지 판단하는 근거라 직접 확인한다. 빈 파일(0장)도 유효한 결과다.
+   * "온전하다"는 모든 줄이 **그 일자의** u/a를 가진 JSON이라는 뜻이다 —
+   * commitCourseware가 rename으로만 파일을 만드니 반쪽짜리는 원리상 없지만,
+   * 재실행이 교사를 건너뛸지 판단하는 근거라 직접 확인한다. 빈 파일(0장)도
+   * 유효한 결과다.
+   *
+   * day 필드까지 보는 이유: 손으로 옮겼거나 이름을 바꾼 카드 파일이 그 일자의
+   * 재변환을 영원히 막으면 안 된다. 내용이 다른 날 것이면 없는 셈 치고 정상
+   * 변환 경로로 보낸다(버퍼는 그대로 있으니 잃는 건 없다).
    */
   function verifiedCardCount(day) {
     let text
@@ -258,10 +337,53 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
       try {
         const card = JSON.parse(line)
         if (!card || typeof card.u !== 'string' || typeof card.a !== 'string') return null
+        if (card.day !== day) return null
         count += 1
       } catch { return null }
     }
     return count
+  }
+
+  /** 카드 전부 + 2-gram. 한 번 읽고 캐시한다(무효화는 카드 쓰기 경로에서). */
+  function loadCardIndex() {
+    if (cardIndex) return cardIndex
+    const out = []
+    for (const day of listDays(cardsDir)) {
+      let text
+      try { text = fsImpl.readFileSync(cardsPath(day), 'utf-8') } catch { continue }
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const c = JSON.parse(line)
+          if (typeof c?.u === 'string' && typeof c?.a === 'string') {
+            out.push({ day, u: c.u, a: c.a, g: grams(`${c.u} ${c.a}`) })
+          }
+        } catch {} // 깨진 줄 하나 때문에 그날 카드를 통째로 버리진 않는다
+      }
+    }
+    cardIndex = out
+    return cardIndex
+  }
+
+  /** 현재 발화와 겹치는 카드 상위 k장(없으면 빈 배열). */
+  function findReferences(query, k = REFERENCE_TOP_K) {
+    return searchCards(query, loadCardIndex(), k)
+  }
+
+  /**
+   * 참조가 붙은 교환 1건. **카운트와 카드 제목 수준의 예시만** 남긴다 —
+   * 사용자 발화도 카드 답변도 여기 적지 않는다.
+   */
+  function noteReference(cards) {
+    const list = Array.isArray(cards) ? cards : []
+    if (list.length === 0) return
+    const s = loadStatus()
+    s.referenceAttached = (s.referenceAttached || 0) + 1
+    s.recentReferences = list
+      .map((c) => String(c?.u || '').slice(0, REFERENCE_TITLE_MAX))
+      .concat(s.recentReferences || [])
+      .slice(0, RECENT_REFERENCE_MAX)
+    saveStatus()
   }
 
   /**
@@ -278,12 +400,16 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
     } catch (error) {
       log.warn?.('[COURSEWARE_BUFFER_UNLINK_FAILED]', day, error?.message || error)
     }
+    cardIndex = null // 크래시 뒤 발견된 카드 파일 — 캐시가 있었다면 낡았다
     const s = loadStatus()
     s.cardCounts[day] = count
     delete s.failures[day]
     s.warnings = s.warnings.filter((w) => w.day !== day)
     s.lastError = null
-    saveStatus()
+    // 상태 저장이 실패해도 교재·버퍼는 이미 정합이라 ok로 닫는다. 다만 조용히
+    // 넘어가면 다음 실행이 왜 같은 날을 또 화해시키는지 알 길이 없다.
+    const saved = saveStatus()
+    if (!saved.ok) log.warn?.('[COURSEWARE_RECONCILE_STATUS_FAILED]', day, saved.error)
     return { ok: true, day, cards: count, reconciled: true }
   }
 
@@ -336,6 +462,8 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
       spend: { ...s.spend },
       warnings: s.warnings.slice(),
       lastError: s.lastError,
+      referenceAttached: s.referenceAttached || 0,
+      recentReferences: (s.recentReferences || []).slice(),
       path: dir
     }
   }
@@ -349,6 +477,8 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
     pendingDays,
     readBuffer,
     verifiedCardCount,
+    findReferences,
+    noteReference,
     reconcileExisting,
     commitCourseware,
     noteFailure,
@@ -430,7 +560,11 @@ function createCoursewareJob({ store, convert, isIdle = () => true } = {}) {
 module.exports = {
   SCHEMA_VERSION,
   FAILURE_WARN_STREAK,
+  REFERENCE_TOP_K,
   dayKeyOf,
+  grams,
+  searchCards,
+  attachReferenceCards,
   createCoursewareStore,
   createCoursewareJob
 }

@@ -27,6 +27,9 @@ from typing import Iterable, List, Sequence
 # strings in sync with ClaudeService._CONTEXT_SECTION_ORDER.
 SECTION_MEMORY = "기억"
 SECTION_FILES = "파일"
+# A-2 — electron이 교재에서 검색해 보낸 참조 카드. 이 섹션은 점수 기반 cap을
+# 타지 않는다(이미 상위 3장으로 잘려서 온다). 대신 프롬프트의 **맨 뒤**에 붙는다.
+SECTION_COURSEWARE = "교재"
 
 # Conservative overhead estimate for section labels + separator the prompt
 # builder adds *around* each section: "## <hint>\n…\n\n" — the hint is the

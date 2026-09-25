@@ -77,7 +77,11 @@ const SETTINGS_DEFAULTS = Object.freeze({
   // 캡처 대상 창 id는 **일부러 저장하지 않는다**: 창 id는 재시작 후 다른 창을
   // 가리킬 수 있어서, 복원했다가 엉뚱한 창을 찍는 것보다 매번 고르게 하는 편이
   // 프라이버시에 안전하다(Codex 사전검토).
-  spectatePaused: false
+  spectatePaused: false,
+  // A-2 교재 검색 참조 — 현재 발화와 겹치는 교재 카드를 채팅 프롬프트에 참고로
+  // 붙인다. 기본 ON: 교재가 없으면 검색이 0장을 돌려줘서 아무 일도 안 일어나고,
+  // 쌓인 사용자는 "지난주에 말한 그거"가 통하는 쪽이 정상이다.
+  coursewareReferenceEnabled: true
 })
 
 const BACKEND_ENV_EXAMPLE_FILENAME = 'backend.env.example'
@@ -211,6 +215,8 @@ class SettingsRepository {
     settings.alwaysOnTop = settings.alwaysOnTop !== false
     settings.ttsEnabled = settings.ttsEnabled !== false
     settings.useWebDefault = settings.useWebDefault === true
+    // 기본 ON — 구버전 settings.json(키 없음)도 켜진 채로 하이드레이트된다.
+    settings.coursewareReferenceEnabled = settings.coursewareReferenceEnabled !== false
     // Phase F: default true means new installs land in wallpaper mode. A
     // pre-Phase-F settings.json (no key set) hydrates as true too — same
     // intent. Coerce non-boolean to true so a hand-edited "yes"/null

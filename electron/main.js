@@ -66,7 +66,11 @@ const {
   createTopicLedger,
   createExchangeTracker
 } = require('./services/topicLedger')
-const { createCoursewareStore, createCoursewareJob } = require('./services/courseware')
+const {
+  createCoursewareStore,
+  createCoursewareJob,
+  attachReferenceCards
+} = require('./services/courseware')
 
 const isDev = process.argv.includes('--dev')
 const CONFIGURED_BACKEND_URL = process.env.APIA_BACKEND_URL || DEFAULT_BACKEND_URL
@@ -359,8 +363,9 @@ function stopLedgerDailyJob() {
 // 코드는 독립이다. 원장은 원문을 절대 남기지 않고, 이쪽은 원문을 하루 동안만
 // 들고 있다가 교재로 바꾼 뒤 지운다 — 목적이 달라 수명도 다르다.
 //
-// 여기서 하는 일은 기록·변환·폐기뿐이다. 학습(A-3)도 검색 참조(A-2)도 없고,
-// 캐릭터의 말이나 화제 선택으로 나가는 출구가 하나도 없다.
+// 여기서 하는 일은 기록·변환·폐기, 그리고 A-2 검색 참조다. 교재 파일은
+// electron이 소유하므로 검색도 여기서 돌고(백엔드는 디스크를 보지 않는다),
+// 고른 카드만 채팅 요청 body에 실려 나간다. 학습(A-3)은 아직 없다.
 const COURSEWARE_DIR = path.join(app.getPath('userData'), 'courseware')
 const courseware = createCoursewareStore({ dir: COURSEWARE_DIR, log: { warn: logWarn } })
 
@@ -485,13 +490,15 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
     const reply = await requestBackendJson('/chat', {
       method: 'POST',
       timeout: chatTimeout,
-      body: {
-      message,
-      history,
-      ai_mode: settings.aiMode,
-      memory_turns: settings.memoryTurns,
-      use_web: resolvedUseWeb
-      }
+      // A-2: 교재에서 이 발화와 겹치는 카드를 찾아 body에 싣는다. 토글이 꺼져
+      // 있거나 겹치는 게 없으면 키 자체가 안 붙는다(= 기존과 같은 요청).
+      body: attachReferenceCards({
+        message,
+        history,
+        ai_mode: settings.aiMode,
+        memory_turns: settings.memoryTurns,
+        use_web: resolvedUseWeb
+      }, courseware, settings.coursewareReferenceEnabled !== false)
     })
     ledgerTracker.noteReplyDone()
     recordCoursewareExchange(message, reply?.reply) // 교재 버퍼 — 비동기 큐, 비차단
@@ -567,13 +574,14 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
       const response = await fetch(`${getBackendUrl()}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        // A-2 참조 카드 — 비스트리밍 경로와 같은 규칙(courseware.js 단일 출처).
+        body: JSON.stringify(attachReferenceCards({
           message,
           history,
           ai_mode: settings.aiMode,
           memory_turns: settings.memoryTurns,
           use_web: resolvedUseWeb
-        }),
+        }, courseware, settings.coursewareReferenceEnabled !== false)),
         signal: controller.signal
       })
       if (!response.ok || !response.body) {

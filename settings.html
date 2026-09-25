@@ -823,7 +823,23 @@
     <div class="helper-text" style="margin-bottom:8px;">
       그날의 대화를 자리 비운 사이에 <b>익명 복습 교재</b>로 바꾸고, 바꾸는 데 성공한
       날의 <b>원본은 지웁니다</b>(실패하면 원본을 그대로 두고 다음에 다시 시도해요).
-      아직 <b>학습에 쓰지 않고</b> 캐릭터의 말도 달라지지 않습니다.
+      아직 <b>학습에는 쓰지 않습니다</b>.
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">기억 참조</div>
+        <div class="row-sub">지금 한 말과 관련된 교재를 찾아 대화에 참고로 넘깁니다 (끄면 검색도 하지 않아요)</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="courseware-reference-toggle">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+    <div class="row">
+      <div class="row-label">참조된 대화</div>
+      <span class="row-sub" id="courseware-reference-count" style="font-size:11px;">—</span>
     </div>
 
     <div class="row">
@@ -1101,6 +1117,13 @@ function renderCourseware(state) {
     lastEl.textContent = state.lastConvertedAt
       ? new Date(state.lastConvertedAt).toLocaleString('ko-KR')
       : '아직 없음'
+  }
+  const refEl = document.getElementById('courseware-reference-count')
+  if (refEl) {
+    const recent = (state.recentReferences || []).filter(Boolean)
+    refEl.textContent = (state.referenceAttached || 0) === 0
+      ? '아직 없음'
+      : `${state.referenceAttached}번` + (recent.length ? ` (최근: ${recent.join(' · ')})` : '')
   }
   const warnEl = document.getElementById('courseware-warn')
   if (warnEl) {
@@ -1495,6 +1518,8 @@ function applyToUI() {
   cosyvoicePromptName = settings.cosyvoicePromptName || null
   updateCosyvoiceRow()
   document.getElementById('use-web-default-toggle').checked = settings.useWebDefault === true
+  const refToggle = document.getElementById('courseware-reference-toggle')
+  if (refToggle) refToggle.checked = settings.coursewareReferenceEnabled !== false
   document.getElementById('use-wallpaper-mode').checked = settings.useWallpaperMode !== false
 }
 
@@ -1975,6 +2000,9 @@ async function save() {
     voiceId: document.getElementById('voice-select').value,
     useWebDefault: document.getElementById('use-web-default-toggle').checked,
     useWallpaperMode: document.getElementById('use-wallpaper-mode').checked,
+    // 교재 패널이 제거된 배포본(window.api.courseware 없음)에선 기본 ON 유지.
+    coursewareReferenceEnabled:
+      document.getElementById('courseware-reference-toggle')?.checked !== false,
   }
 
   // 개발자 전용 로컬 엔진 필드는 게이트가 꺼지면 DOM에 없다. 그럴 땐 payload에서

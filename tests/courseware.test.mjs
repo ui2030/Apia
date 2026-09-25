@@ -19,10 +19,15 @@ const {
   createCoursewareStore,
   createCoursewareJob,
   dayKeyOf,
+  searchCards,
+  attachReferenceCards,
   FAILURE_WARN_STREAK
 } = require('../electron/services/courseware')
 
 const GOLDEN_PATH = fileURLToPath(new URL('./fixtures/courseware.golden.json', import.meta.url))
+const REFERENCE_GOLDEN_PATH = fileURLToPath(
+  new URL('./fixtures/courseware.reference.golden.json', import.meta.url)
+)
 
 let dir
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'apia-courseware-')) })
@@ -481,5 +486,225 @@ describe('버퍼 기록은 대화를 막지 않는다', () => {
     const rows = store.readBuffer('2026-09-02')
     expect(rows).toHaveLength(21)
     expect(rows.map((r) => r.u)).toEqual([...Array(20).keys()].map((i) => `u${i}`).concat('last'))
+  })
+})
+
+// ── 7. A-2 검색 참조 ────────────────────────────────────────────────────────
+//
+// 검색기 자체는 순수 함수라 파일 없이 본다. 그 다음이 "언제 붙느냐"(첨부 조건·
+// 토글)이고, 마지막이 실제 채팅 요청 body 골든이다.
+
+const CARD = (u, a, day = '2026-09-01') => ({ day, u, a })
+
+describe('검색기 — 문자 2-gram 겹침 상위 3장', () => {
+  const cards = [
+    CARD('주말에 뭘 하냐고 물으면?', '등산을 간다고 했어요'),
+    CARD('커피를 얼마나 마시냐고 물으면?', '하루 두 잔이라고 했어요'),
+    CARD('새로 산 게 뭐냐고 물으면?', '등산화를 샀다고 했어요'),
+    CARD('좋아하는 계절을 물으면?', '가을이라고 했어요')
+  ]
+
+  it('겹침이 많은 순으로 준다 (한국어, 형태소 분석 없이)', () => {
+    const hit = searchCards('지난주에 말한 등산 얘기 뭐였지?', cards)
+    expect(hit.length).toBeGreaterThan(0)
+    // "등산"이 든 두 장이 안 든 장보다 먼저 온다.
+    expect(hit[0].a).toMatch(/등산/)
+    expect(hit.slice(0, 2).every((c) => /등산/.test(c.a))).toBe(true)
+  })
+
+  it('겹치는 2-gram이 하나도 없으면 0장', () => {
+    expect(searchCards('xyzzy plugh', cards)).toEqual([])
+    expect(searchCards('', cards)).toEqual([])
+    expect(searchCards('가', cards)).toEqual([]) // 1글자는 2-gram이 안 나온다
+  })
+
+  it('최대 3장 + 동점은 카드 순서 유지', () => {
+    const many = Array.from({ length: 10 }, (_, i) => CARD(`취미를 물으면?${i}`, '등산이요'))
+    const hit = searchCards('취미를 물으면?', many)
+    expect(hit).toHaveLength(3)
+    expect(hit.map((c) => c.u)).toEqual(['취미를 물으면?0', '취미를 물으면?1', '취미를 물으면?2'])
+  })
+
+  it('u/a 양쪽을 다 본다', () => {
+    const only = [CARD('그때 뭐라고 했냐면', '토요일에 낚시를 간다고 했어요')]
+    expect(searchCards('낚시 얘기', only)).toHaveLength(1)
+  })
+
+  it('카드 1천 장 선형 스캔 소요시간', () => {
+    const many = Array.from({ length: 1000 }, (_, i) =>
+      CARD(`${i}번 대화에서 사용자가 말한 것을 물으면?`,
+        `${i}번 답변: 등산과 커피와 가을에 대한 이야기였어요`))
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    store.commitCourseware('2026-09-01', many)
+    store.findReferences('warmup') // 인덱스 빌드는 측정에서 뺀다(최초 1회)
+    const t0 = performance.now()
+    for (let i = 0; i < 100; i += 1) store.findReferences('지난주에 말한 등산 얘기가 뭐였지?')
+    const per = (performance.now() - t0) / 100
+    console.log(`[A-2] 카드 1000장 검색 ${per.toFixed(3)}ms/회`)
+    expect(per).toBeLessThan(20) // 대화 경로에 얹으므로 넉넉잡아도 이 아래여야 한다
+  })
+})
+
+describe('첨부 조건 — attachReferenceCards', () => {
+  const seed = (store) => store.commitCourseware('2026-09-01', [
+    { u: '취미가 뭐냐고 물으면?', a: '등산이라고 했어요' },
+    { u: '커피를 얼마나 마시냐고 물으면?', a: '하루 두 잔이라고 했어요' }
+  ])
+
+  it('관련 카드가 있으면 reference_cards를 붙인다', () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    seed(store)
+    const body = attachReferenceCards({ message: '내 취미가 뭐였더라?' }, store, true)
+    expect(body.reference_cards).toEqual([{ u: '취미가 뭐냐고 물으면?', a: '등산이라고 했어요' }])
+  })
+
+  it('겹치는 카드가 없으면 body를 그대로(같은 객체) 돌려준다', () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    seed(store)
+    const body = { message: 'xyzzy plugh' }
+    expect(attachReferenceCards(body, store, true)).toBe(body)
+  })
+
+  it('토글 OFF면 검색조차 하지 않는다', () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    seed(store)
+    let searched = 0
+    const spy = {
+      ...store,
+      findReferences: (...args) => { searched += 1; return store.findReferences(...args) }
+    }
+    const body = { message: '내 취미가 뭐였더라?' }
+    expect(attachReferenceCards(body, spy, false)).toBe(body)
+    expect(searched).toBe(0)
+    expect(store.getState().referenceAttached).toBe(0)
+  })
+
+  it('검색이 던져도 대화는 그대로 나간다', () => {
+    const body = { message: '내 취미가 뭐였더라?' }
+    const broken = { findReferences: () => { throw new Error('index blew up') } }
+    expect(attachReferenceCards(body, broken, true)).toBe(body)
+  })
+
+  it('첨부 수와 최근 예시만 status에 센다 (발화 원문은 안 남는다)', () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    seed(store)
+    attachReferenceCards({ message: '내 취미가 뭐였더라?' }, store, true)
+    attachReferenceCards({ message: '커피 얼마나 마신댔지' }, store, true)
+    const state = store.getState()
+    expect(state.referenceAttached).toBe(2)
+    expect(state.recentReferences[0]).toBe('커피를 얼마나 마시냐고 물으면?')
+    const raw = fs.readFileSync(store.paths.statusPath, 'utf-8')
+    expect(raw).not.toMatch(/뭐였더라|마신댔지/)
+  })
+
+  it('새 카드가 확정되면 다음 검색이 그것까지 본다', () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    seed(store)
+    expect(attachReferenceCards({ message: '낚시 얘기' }, store, true).reference_cards).toBeUndefined()
+    store.commitCourseware('2026-09-02', [{ u: '주말 계획을 물으면?', a: '낚시를 간다고 했어요' }])
+    expect(attachReferenceCards({ message: '낚시 얘기' }, store, true).reference_cards)
+      .toEqual([{ u: '주말 계획을 물으면?', a: '낚시를 간다고 했어요' }])
+  })
+})
+
+describe('E2E — 가짜 카드를 심고 "지난주에 말한 취미" 질의 (백엔드는 가짜)', () => {
+  it('채팅 요청 body 골든', async () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-10T09:00:00') })
+    store.commitCourseware('2026-09-01', [
+      // 이 질의가 찾아야 할 카드.
+      { u: '취미가 뭐냐고 물으면?', a: '주말마다 등산을 간다고 했어요' },
+      { u: '커피를 얼마나 마시냐고 물으면?', a: '하루 두 잔이라고 했어요' }
+    ])
+    store.commitCourseware('2026-09-02', [
+      // 미끼 1: 같은 등산 얘기지만 "취미"라는 글자가 없다.
+      { u: '새로 산 게 뭐냐고 물으면?', a: '등산화를 샀다고 했어요' },
+      // 미끼 2: 아예 상관없는 카드.
+      { u: '좋아하는 계절을 물으면?', a: '가을이라고 했어요' }
+    ])
+
+    // 가짜 백엔드 — main.js의 두 초크포인트가 만드는 body를 그대로 받는다.
+    const sent = []
+    const fakeBackend = async (body) => { sent.push(body); return { reply: '그 등산 얘기요?' } }
+
+    const message = '지난주에 말한 취미가 뭐였지?'
+    const chatBody = () => ({
+      message, history: [], ai_mode: 'claude', memory_turns: 10, use_web: false
+    })
+    await fakeBackend(attachReferenceCards(chatBody(), store, true))
+    // 토글 OFF인 두 번째 교환은 키 자체가 붙지 않는다.
+    await fakeBackend(attachReferenceCards(chatBody(), store, false))
+
+    // 골든이 "우연히 빈 결과"로 굳는 걸 막는 산 증인.
+    expect(sent[0].reference_cards).toBeDefined()
+    expect(sent[1].reference_cards).toBeUndefined()
+
+    const { path: statePath, ...state } = store.getState()
+    expect(statePath).toBe(dir)
+    const snapshot = { sent, state }
+    if (process.env.UPDATE_GOLDEN === '1') {
+      await writeFile(REFERENCE_GOLDEN_PATH, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf-8')
+    }
+    expect(snapshot).toEqual(JSON.parse(await readFile(REFERENCE_GOLDEN_PATH, 'utf-8')))
+  })
+})
+
+// ── 8. 부수 정리 2건 ────────────────────────────────────────────────────────
+
+describe('verifiedCardCount — day 필드까지 검증', () => {
+  const strayCard = (store, day) => {
+    fs.mkdirSync(store.paths.cardsDir, { recursive: true })
+    fs.writeFileSync(
+      store.paths.cardsPath(day),
+      `${JSON.stringify({ day: '2026-08-30', u: 'q', a: 'a' })}\n`,
+      'utf-8'
+    )
+  }
+
+  it('행의 day가 파일명 일자와 다르면 없는 셈 친다', () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    strayCard(store, '2026-09-01')
+    expect(store.verifiedCardCount('2026-09-01')).toBe(null)
+  })
+
+  it('잘못 놓인 카드 파일이 재변환을 막지 못한다', async () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    await seedBuffer(store, '2026-09-01', [{ u: '안녕', a: '안녕하세요' }])
+    strayCard(store, '2026-09-01')
+    expect(store.reconcileExisting('2026-09-01')).toBe(null)
+    let called = 0
+    const job = createCoursewareJob({
+      store,
+      convert: async () => {
+        called += 1
+        return { status: 'ok', cards: [{ u: '인사는?', a: '반갑게' }] }
+      }
+    })
+    expect(await job.runOnce({ force: true })).toMatchObject({ ok: true, cards: 1 })
+    expect(called).toBe(1)
+  })
+
+  it('제 일자의 카드는 그대로 화해된다', () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    store.commitCourseware('2026-09-01', [{ u: 'q', a: 'a' }])
+    expect(store.verifiedCardCount('2026-09-01')).toBe(1)
+  })
+})
+
+describe('reconcileExisting — saveStatus 실패를 로깅한다', () => {
+  it('상태 쓰기가 실패하면 경고가 남고 결과는 ok', async () => {
+    const warns = []
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-03T04:00:00') })
+    store.commitCourseware('2026-09-01', [{ u: 'q', a: 'a' }])
+    await seedBuffer(store, '2026-09-01', [{ u: '늦게 도착', a: '네' }])
+
+    // 카드는 멀쩡한데 status.json만 못 쓰는 상황.
+    const broken = createCoursewareStore({
+      dir,
+      now: () => at('2026-09-03T04:00:00'),
+      fsImpl: brokenFs({ writeFileSync: () => { throw new Error('status readonly') } }),
+      log: { warn: (...args) => warns.push(args.join(' ')) }
+    })
+    expect(broken.reconcileExisting('2026-09-01')).toMatchObject({ ok: true, reconciled: true })
+    expect(warns.join('\n')).toMatch(/COURSEWARE_RECONCILE_STATUS_FAILED.*2026-09-01/)
   })
 })

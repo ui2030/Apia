@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Request
@@ -25,6 +26,7 @@ from ai_config import CONTEXT_MAX_CHARS
 from schemas import ChatCitation, ChatRequest, ChatResponse
 from services.claude_service import ClaudeService
 from services.context_assembler import (
+    SECTION_COURSEWARE,
     SECTION_FILES,
     assemble_context_blocks,
     file_recalls_to_items,
@@ -39,6 +41,42 @@ router = APIRouter()
 claude = ClaudeService()
 
 _BACKGROUND_TASKS: Set["asyncio.Task[None]"] = set()
+
+
+# A-2 참조 카드 상한. electron이 이미 3장으로 잘라 보내지만 프롬프트에 그대로
+# 들어가는 값이라 라우터에서도 자른다(신뢰 경계).
+_REFERENCE_MAX_CARDS = 3
+_REFERENCE_MAX_CHARS = 400  # 정규화·직렬화가 끝난 **카드 한 줄 전체** 기준
+
+# 카드 본문은 교사 모델이 쓴 텍스트다 = 신뢰 경계 바깥. 개행이나 `##`가 그대로
+# 들어가면 카드가 "교재" 섹션을 빠져나가 상위 지시문 행세를 할 수 있다.
+# 제어문자(개행·탭·NUL 포함)를 전부 공백으로 접어 카드 한 장을 한 줄에 가둔다.
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _flatten_field(text: str) -> str:
+    """카드 필드 → 항상 한 줄. 제어문자는 공백으로, 연속 공백은 하나로."""
+    # 따옴표는 홑따옴표로 바꾼다 — 인용으로 감싼 카드를 안에서 닫지 못하게.
+    return " ".join(_CONTROL_RE.sub(" ", text or "").replace('"', "'").split())
+
+
+def _reference_block(cards) -> Optional[str]:
+    """참조 카드 → 시스템 프롬프트 섹션 본문. 쓸 게 없으면 None.
+
+    카드는 **데이터**다. 한 장이 정확히 한 줄이고 각 필드는 따옴표로 감싸
+    어디까지가 카드인지 구조로 드러낸다. 길이는 정규화가 끝난 줄 전체를
+    기준으로 자른다 — 필드마다 따로 자르면 카드 하나가 상한의 두 배가 된다.
+    """
+    lines = []
+    for card in (cards or [])[:_REFERENCE_MAX_CARDS]:
+        u, a = _flatten_field(card.u), _flatten_field(card.a)
+        if not u and not a:
+            continue
+        line = f'- "{u}" → "{a}"'
+        if len(line) > _REFERENCE_MAX_CHARS:
+            line = line[:_REFERENCE_MAX_CHARS - 1] + '"'  # 잘려도 인용은 닫는다
+        lines.append(line)
+    return "\n".join(lines) or None
 
 
 def _web_results_to_items(results: List[WebResult]) -> List[ContextItem]:
@@ -100,6 +138,12 @@ async def _gather_context(req: ChatRequest, request: Request) -> Tuple[Any, Any,
             "출처를 인용할 때는 `[1]`, `[2]` 같은 마커를 답변 본문에 그대로 써 주세요.\n"
             + context_blocks["웹"]
         )
+
+    # A-2 교재 참조는 점수 cap 바깥이다 — 이미 상위 3장이고, 낮은 점수부터
+    # 떨구는 assemble에 섞으면 웹 결과가 많은 턴에 조용히 사라진다.
+    reference = _reference_block(req.reference_cards)
+    if reference:
+        context_blocks[SECTION_COURSEWARE] = reference
 
     return memory, web, (context_blocks or None), web_results
 

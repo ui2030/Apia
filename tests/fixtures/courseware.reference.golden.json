@@ -1,0 +1,40 @@
+{
+  "sent": [
+    {
+      "message": "지난주에 말한 취미가 뭐였지?",
+      "history": [],
+      "ai_mode": "claude",
+      "memory_turns": 10,
+      "use_web": false,
+      "reference_cards": [
+        {
+          "u": "취미가 뭐냐고 물으면?",
+          "a": "주말마다 등산을 간다고 했어요"
+        }
+      ]
+    },
+    {
+      "message": "지난주에 말한 취미가 뭐였지?",
+      "history": [],
+      "ai_mode": "claude",
+      "memory_turns": 10,
+      "use_web": false
+    }
+  ],
+  "state": {
+    "schema_version": 2,
+    "lastConvertedAt": 1788998400000,
+    "totalCards": 4,
+    "cardDays": 2,
+    "pendingDays": 0,
+    "oldestPendingDay": null,
+    "spend7d": 0,
+    "spend": {},
+    "warnings": [],
+    "lastError": null,
+    "referenceAttached": 1,
+    "recentReferences": [
+      "취미가 뭐냐고 물으면?"
+    ]
+  }
+}

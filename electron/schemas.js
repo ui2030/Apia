@@ -69,6 +69,8 @@ const SettingsSchema = z.object({
   useWallpaperMode: z.boolean().optional(),
   // M2 — 관전 일시정지 지속. 구버전 settings.json은 기본값으로 하이드레이트.
   spectatePaused: z.boolean().optional(),
+  // A-2 — 교재 검색 참조. optional/기본 ON: 구버전 settings.json은 켜진 채로.
+  coursewareReferenceEnabled: z.boolean().optional(),
   // 역할별 모델 — 행동 디렉터 / 관전 코멘트. optional: 구버전 settings.json은
   // SETTINGS_DEFAULTS의 ''로 하이드레이트된다.
   aiModeDirector: roleAiModeSchema.optional(),

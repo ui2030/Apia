@@ -30,6 +30,13 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class ReferenceCard(BaseModel):
+    # A-2: electron이 교재 카드에서 현재 발화로 검색해 붙인 참조 한 장.
+    # 교재는 electron이 소유하므로 백엔드는 디스크를 보지 않고 이것만 받는다.
+    u: str = ""
+    a: str = ""
+
+
 class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = Field(default_factory=list)
@@ -38,6 +45,9 @@ class ChatRequest(BaseModel):
     # step 4: 사용자가 명시 요청 시 (또는 설정 토글로) 웹 검색을 한 번 돈다.
     # default false — provider 미설정인 환경에서 무음 실패를 만들지 않기 위함.
     use_web: bool = False
+    # A-2: 비어 있으면(=기본) 프롬프트는 기존과 바이트 동일하다. 개수·길이는
+    # 라우터에서 자른다 — 카드 하나가 길다고 대화 전체를 422로 떨구지 않는다.
+    reference_cards: List[ReferenceCard] = Field(default_factory=list)
 
 
 class DirectorRequest(BaseModel):

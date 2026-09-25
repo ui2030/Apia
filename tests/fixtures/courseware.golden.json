@@ -32,7 +32,9 @@
     },
     "failures": {},
     "warnings": [],
-    "lastError": null
+    "lastError": null,
+    "referenceAttached": 0,
+    "recentReferences": []
   },
   "state": {
     "schema_version": 2,
@@ -46,6 +48,8 @@
       "2026-09-03": 0.02
     },
     "warnings": [],
-    "lastError": null
+    "lastError": null,
+    "referenceAttached": 0,
+    "recentReferences": []
   }
 }
