@@ -3,11 +3,18 @@ fastapi==0.109.0
 uvicorn[standard]==0.27.0
 python-multipart==0.0.9
 
-# ── EXAONE 로컬 실행 ──
-transformers>=4.40.0
+# ── 로컬 학생 모델 실행 ──
+# 4.51 미만은 Qwen3 아키텍처를 모른다 — 기본 MODEL_ID(Qwen3-4B-Instruct-2507)가
+# 로드 자체에서 실패한다. 구모델(Qwen2.5)로 되돌릴 때도 이 하한은 문제없다.
+transformers>=4.51
 accelerate>=0.27.0
 sentencepiece
 protobuf
+
+# 그림자 모드(A-3) — 야간 학습이 만든 LoRA 델타를 이미 떠 있는 로컬 모델에
+# 붙였다 떼는 데만 쓴다. 없으면 그림자만 조용히 쉬고 대화는 그대로다.
+# 학습 자체는 이 venv가 아니라 trainingPythonPath의 인터프리터가 한다.
+peft>=0.13
 
 # ── PyTorch CUDA (RTX 3060 - CUDA 12.1) ──
 # 아래 명령어로 별도 설치:

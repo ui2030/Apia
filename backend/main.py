@@ -28,7 +28,9 @@ from ai_config import (
     WEB_PROVIDER,
     WEB_TIMEOUT_SECONDS,
 )
-from routers import chat, classify, courseware, director, spectate, store, stt, tts, voice, warmup
+from routers import (
+    chat, classify, courseware, director, spectate, store, stt, training, tts, voice, warmup
+)
 from schemas import HealthResponse
 from services.embedding_service import EmbeddingService
 from services.file_index_service import FileIndexService
@@ -146,6 +148,7 @@ app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(director.router, prefix="/director", tags=["director"])
 app.include_router(classify.router, prefix="/classify", tags=["classify"])
 app.include_router(courseware.router, prefix="/courseware", tags=["courseware"])
+app.include_router(training.router, prefix="/training", tags=["training"])
 app.include_router(spectate.router, prefix="/spectate", tags=["spectate"])
 app.include_router(tts.router, prefix="/tts", tags=["tts"])
 app.include_router(stt.router, prefix="/stt", tags=["stt"])

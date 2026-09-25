@@ -81,7 +81,11 @@ const SETTINGS_DEFAULTS = Object.freeze({
   // A-2 교재 검색 참조 — 현재 발화와 겹치는 교재 카드를 채팅 프롬프트에 참고로
   // 붙인다. 기본 ON: 교재가 없으면 검색이 0장을 돌려줘서 아무 일도 안 일어나고,
   // 쌓인 사용자는 "지난주에 말한 그거"가 통하는 쪽이 정상이다.
-  coursewareReferenceEnabled: true
+  coursewareReferenceEnabled: true,
+  // A-3 야간 학습기가 쓸 파이썬. **백엔드 venv가 아니다** — 학습 스택(unsloth/trl)은
+  // 검증 실험을 돌린 night-loop-lab venv에만 있고, 백엔드 venv에 또 깔면 torch가
+  // 6.9GB 중복된다. 경로가 없으면 학습 기능 전체가 조용히 비활성.
+  trainingPythonPath: 'C:\\Users\\ui2030\\Documents\\night-loop-lab\\.venv\\Scripts\\python.exe'
 })
 
 const BACKEND_ENV_EXAMPLE_FILENAME = 'backend.env.example'
@@ -90,7 +94,7 @@ APIA_AI_MODE=auto
 # APIA_GROQ_KEY=
 # APIA_ANTHROPIC_KEY=
 # APIA_HF_TOKEN=
-# APIA_MODEL_ID=Qwen/Qwen2.5-7B-Instruct
+# APIA_MODEL_ID=Qwen/Qwen3-4B-Instruct-2507
 # APIA_CLAUDE_MODEL=claude-sonnet-4-6
 # APIA_GROQ_MODEL=llama-3.3-70b-versatile
 # APIA_DEFAULT_MEMORY_TURNS=10
@@ -217,6 +221,9 @@ class SettingsRepository {
     settings.useWebDefault = settings.useWebDefault === true
     // 기본 ON — 구버전 settings.json(키 없음)도 켜진 채로 하이드레이트된다.
     settings.coursewareReferenceEnabled = settings.coursewareReferenceEnabled !== false
+    settings.trainingPythonPath = typeof settings.trainingPythonPath === 'string'
+      ? settings.trainingPythonPath
+      : SETTINGS_DEFAULTS.trainingPythonPath
     // Phase F: default true means new installs land in wallpaper mode. A
     // pre-Phase-F settings.json (no key set) hydrates as true too — same
     // intent. Coerce non-boolean to true so a hand-edited "yes"/null

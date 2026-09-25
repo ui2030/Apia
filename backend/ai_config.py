@@ -87,7 +87,13 @@ def _read_int(*names: str, default: int) -> int:
 AI_MODE = _read_env("APIA_AI_MODE", "AI_MODE", default="auto")
 DEFAULT_MEMORY_TURNS = _read_int("APIA_DEFAULT_MEMORY_TURNS", default=10)
 
-MODEL_ID = _read_env("APIA_MODEL_ID", "MODEL_ID", default="Qwen/Qwen2.5-7B-Instruct")
+# 로컬 학생 모델. Qwen2.5-7B에서 Qwen3-4B로 내렸다 — 7B는 한국어 답변에 중국어를
+# 섞는 드리프트가 있었고(구모델의 알려진 문제), 4B는 VRAM을 절반만 쓰면서 야간
+# 학습(A-3)의 QLoRA 재학습이 12GB 카드에 들어간다. night-loop-lab 실험이 검증한
+# 것도 이 모델이라 학습 레시피와 서빙 모델이 같아진다.
+# 구모델로 되돌리려면 backend.env에 `APIA_MODEL_ID=Qwen/Qwen2.5-7B-Instruct`.
+# 주의: Qwen3 아키텍처는 transformers>=4.51을 요구한다(4.46에서는 로드 불가).
+MODEL_ID = _read_env("APIA_MODEL_ID", "MODEL_ID", default="Qwen/Qwen3-4B-Instruct-2507")
 
 HF_TOKEN = _read_env("APIA_HF_TOKEN", "HF_TOKEN", default="")
 ANTHROPIC_KEY = _read_env("APIA_ANTHROPIC_KEY", "ANTHROPIC_KEY", default="")

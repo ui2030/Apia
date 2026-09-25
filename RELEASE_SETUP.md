@@ -32,7 +32,7 @@ APIA_AI_MODE=auto
 APIA_GROQ_KEY=your_groq_key
 # APIA_ANTHROPIC_KEY=your_anthropic_key
 # APIA_HF_TOKEN=your_huggingface_token
-APIA_MODEL_ID=Qwen/Qwen2.5-7B-Instruct
+APIA_MODEL_ID=Qwen/Qwen3-4B-Instruct-2507
 APIA_DEFAULT_MEMORY_TURNS=10
 APIA_AUTO_MODE_PRIORITY=groq,claude,hf_api,local
 ```

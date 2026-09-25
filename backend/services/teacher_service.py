@@ -30,6 +30,13 @@ PRICE_IN_MISS, PRICE_IN_HIT, PRICE_OUT = 0.27, 0.07, 1.10
 # 일일 교사 지출 상한 (발주서 §2). 하루 단위로 리셋된다.
 DAILY_BUDGET_USD = 0.07
 
+# 용도별 **추가** 상한. 일일 상한과 AND로 걸린다 — 버킷 상한이 남아도 일일 상한에
+# 닿으면 못 쓰고, 그 반대도 마찬가지다. 야간 학습의 on-policy 교정은 일일 예산을
+# 하루에 다 태워버릴 수 있는 유일한 대량 호출이라 주 단위로 한 번 더 묶는다.
+ON_POLICY_BUCKET = "onpolicy"
+ON_POLICY_WEEKLY_USD = 0.10
+_WEEK_DAYS = 7
+
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"
 
@@ -111,16 +118,35 @@ def spend_window() -> Dict[str, float]:
     return {day: float(rec.get("usd", 0.0)) for day, rec in _load_usage_safe().items()}
 
 
-def _record(usage: Dict[str, Dict[str, float]], hit: int, miss: int, out: int) -> float:
+def _bucket_key(bucket: str) -> str:
+    return f"usd_{bucket}"
+
+
+def _bucket_window(usage: Dict[str, Dict[str, float]], bucket: str) -> float:
+    """최근 7일의 버킷 지출 합. 날짜 키로 정렬해서 센다 — 장부가 7일치만 보존하긴
+    하지만, 합산 기준을 dict 삽입 순서에 맡기면 손으로 고친 장부에서 틀린다."""
+    key = _bucket_key(bucket)
+    return sum(float(usage[day].get(key, 0.0)) for day in sorted(usage)[-_WEEK_DAYS:])
+
+
+def on_policy_spent_week() -> float:
+    return _bucket_window(_load_usage_safe(), ON_POLICY_BUCKET)
+
+
+def _record(
+    usage: Dict[str, Dict[str, float]], hit: int, miss: int, out: int,
+    bucket: Optional[str] = None,
+) -> float:
     """이미 읽어 둔 장부에 이번 호출을 더해 저장한다. 저장 실패는 던진다."""
     day = usage.setdefault(_today(), {"calls": 0, "in_hit": 0, "in_miss": 0, "out": 0, "usd": 0.0})
     day["calls"] = int(day.get("calls", 0)) + 1
     day["in_hit"] = int(day.get("in_hit", 0)) + hit
     day["in_miss"] = int(day.get("in_miss", 0)) + miss
     day["out"] = int(day.get("out", 0)) + out
-    day["usd"] = float(day.get("usd", 0.0)) + (
-        hit * PRICE_IN_HIT + miss * PRICE_IN_MISS + out * PRICE_OUT
-    ) / 1e6
+    cost = (hit * PRICE_IN_HIT + miss * PRICE_IN_MISS + out * PRICE_OUT) / 1e6
+    day["usd"] = float(day.get("usd", 0.0)) + cost
+    if bucket:
+        day[_bucket_key(bucket)] = float(day.get(_bucket_key(bucket), 0.0)) + cost
     _save_usage(usage)
     return float(day["usd"])
 
@@ -145,10 +171,15 @@ def ask_json(
     max_tokens: int = 3000,
     temperature: float = 0.3,
     timeout: int = 180,
+    bucket: Optional[str] = None,
+    bucket_weekly_cap: Optional[float] = None,
 ) -> Tuple[Dict[str, Any], float]:
     """교사 1회 호출(JSON 모드). `(파싱된 JSON, 오늘 누적 지출)`.
 
     `system`은 호출 종류마다 **고정 문자열**이어야 prefix 캐시가 붙어 단가가 내려간다.
+
+    `bucket`을 주면 그 용도의 지출을 따로 적고, `bucket_weekly_cap`이 있으면 최근
+    7일 합을 일일 상한과 **함께** 검사한다(둘 다 통과해야 호출한다).
 
     예산 확인부터 장부 기록까지가 한 임계구역이다 — 확인과 기록 사이에 다른
     호출이 끼면 둘이 같은 잔액을 보고 함께 통과한다.
@@ -171,11 +202,19 @@ def ask_json(
         already = float(ledger.get(_today(), {}).get("usd", 0.0))
         if already >= DAILY_BUDGET_USD:
             raise TeacherUnavailable(f"daily budget reached (${already:.4f} >= ${DAILY_BUDGET_USD})")
+        if bucket and bucket_weekly_cap is not None:
+            week = _bucket_window(ledger, bucket)
+            if week >= bucket_weekly_cap:
+                raise TeacherUnavailable(
+                    f"{bucket} weekly budget reached (${week:.4f} >= ${bucket_weekly_cap})"
+                )
 
-        return _call_locked(key, base, model, ledger, system, user, max_tokens, temperature, timeout)
+        return _call_locked(key, base, model, ledger, system, user, max_tokens,
+                            temperature, timeout, bucket)
 
 
-def _call_locked(key, base, model, ledger, system, user, max_tokens, temperature, timeout):
+def _call_locked(key, base, model, ledger, system, user, max_tokens, temperature, timeout,
+                 bucket=None):
     """_LOCK을 쥔 채로만 부른다. HTTP 왕복과 장부 기록이 한 덩어리."""
     global _ledger_broken
 
@@ -209,7 +248,7 @@ def _call_locked(key, base, model, ledger, system, user, max_tokens, temperature
     miss = int(usage.get("prompt_cache_miss_tokens", int(usage.get("prompt_tokens", 0) or 0) - hit) or 0)
     out = int(usage.get("completion_tokens", 0) or 0)
     try:
-        total = _record(ledger, hit, max(miss, 0), out)
+        total = _record(ledger, hit, max(miss, 0), out, bucket)
     except Exception as error:  # noqa: BLE001
         # 이미 쓴 돈이라 결과는 돌려준다(버리면 원본만 더 오래 남는다). 대신
         # 다음 호출부터 막는다 — 적지 못한 지출이 쌓이는 쪽이 훨씬 나쁘다.
@@ -231,4 +270,11 @@ def budget_snapshot() -> Dict[str, Optional[float]]:
         "budget_usd": DAILY_BUDGET_USD,
         "spent_today": spent_today(),
         "spend_7d": sum(spend_window().values()),
+    }
+
+
+def on_policy_snapshot() -> Dict[str, float]:
+    return {
+        "budget_week_usd": ON_POLICY_WEEKLY_USD,
+        "spent_week": on_policy_spent_week(),
     }

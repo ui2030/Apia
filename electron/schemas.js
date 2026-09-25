@@ -71,6 +71,8 @@ const SettingsSchema = z.object({
   spectatePaused: z.boolean().optional(),
   // A-2 — 교재 검색 참조. optional/기본 ON: 구버전 settings.json은 켜진 채로.
   coursewareReferenceEnabled: z.boolean().optional(),
+  // A-3 — 야간 학습기 인터프리터 경로. optional: 구버전 settings.json은 기본값으로.
+  trainingPythonPath: z.string().optional(),
   // 역할별 모델 — 행동 디렉터 / 관전 코멘트. optional: 구버전 settings.json은
   // SETTINGS_DEFAULTS의 ''로 하이드레이트된다.
   aiModeDirector: roleAiModeSchema.optional(),

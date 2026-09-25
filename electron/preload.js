@@ -129,6 +129,13 @@ contextBridge.exposeInMainWorld('api', {
     convertNow: () => ipcRenderer.invoke('courseware:convertNow')
   },
 
+  // 야간 학습기(A-3). 읽기 + "지금 시작" 한 개. 시작도 트리거 조건을 그대로
+  // 통과해야 한다 — 버튼은 폴링을 앞당길 뿐 면제가 아니다.
+  nightSchool: {
+    getState: () => ipcRenderer.invoke('nightSchool:getState'),
+    trainNow: () => ipcRenderer.invoke('nightSchool:trainNow')
+  },
+
   notifyCharacter: (payload) => ipcRenderer.invoke('character:notify', payload),
   onCharacterAction: (cb) => ipcRenderer.on('character:action', (_e, payload) => cb(payload)),
   chatHide: () => ipcRenderer.invoke('chat:hide'),

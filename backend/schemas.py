@@ -105,6 +105,39 @@ class CoursewareConvertResponse(BaseModel):
     spend_7d: float = 0.0
 
 
+class TrainingCorrectItem(BaseModel):
+    # 야간 학습 on-policy 교정 — 교재 질문 q, 교재 정답 ref, 학생이 실제로 낸 답 a.
+    q: str = ""
+    ref: str = ""
+    a: str = ""
+
+
+class TrainingCorrectRequest(BaseModel):
+    items: List[TrainingCorrectItem] = Field(default_factory=list)
+
+
+class TrainingCorrectResponse(BaseModel):
+    # ok가 아니면 학습기가 교재 원답으로 폴백한다(교정 없이 SFT).
+    status: Literal["ok", "deferred", "failed"]
+    answers: Optional[List[str]] = None
+    reason: Optional[str] = None
+    budget_week_usd: float = 0.0
+    spent_week: float = 0.0
+
+
+class ShadowRequest(BaseModel):
+    # 그림자 모드 — 사용자 발화 하나. delta_dir은 Electron이 소유한 채택 델타 경로.
+    message: str = ""
+    delta_dir: str = ""
+
+
+class ShadowResponse(BaseModel):
+    # dormant = 조건 미충족(모델 미로드·델타 없음). 실패가 아니라 '오늘은 안 한다'.
+    status: Literal["ok", "dormant", "failed"]
+    reply: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class SpectateRequest(BaseModel):
     # M2 관전 모드 — 창 한 장(base64 JPEG) + 컴팩트 컨텍스트(직전 코멘트/요약).
     # 이미지는 저장하지 않는다: 프롬프트로만 흘러가고 응답 뒤 버려진다.

@@ -103,6 +103,13 @@ class ClaudeService:
         # 자세한 안전성 근거는 _maybe_unload_local 참조.
         self._local_last_used = 0.0
         self._local_active = 0
+        # 로컬 GPU 생성을 직렬화한다. 그림자 모드(A-3)가 학습 델타를 켰다 끄는
+        # 동안 사용자 대면 생성이 끼어들면 **사용자 답이 델타의 영향을 받는다** —
+        # 승격은 A-4의 일이므로 그 창을 원천 차단한다. 어차피 GPU는 하나라
+        # 실질 처리량 손해는 없다.
+        self._local_gen_lock = asyncio.Lock()
+        # 지금 모델에 붙여 둔 그림자 델타 경로(없으면 None). 모델이 내려가면 같이 비운다.
+        self._shadow_delta: Optional[str] = None
         self._hf_client = None
         self._claude = None
         self._groq = None
@@ -260,6 +267,7 @@ class ClaudeService:
 
         self._model = None
         self._tok = None
+        self._shadow_delta = None  # 모델과 함께 사라진다 — 다시 올라오면 다시 붙인다
         self._initialized_modes.discard("local")  # 다음 사용 때 기존 lazy init이 다시 올린다
         if self._torch is not None:
             try:
@@ -1022,6 +1030,99 @@ class ClaudeService:
         )
         return await self._summarize_local(self.CLASSIFY_SYSTEM, payload)
 
+    # ── 그림자 모드 (A-3) ───────────────────────────────────────────────────
+    #
+    # 야간 학습이 새긴 델타를 붙인 학생이 같은 발화에 **혼자** 답해 본다. 그 답은
+    # 사용자에게 절대 보이지 않고, 호출자가 API 답과의 유사도만 기록한다.
+    #
+    # 두 가지가 계약이다:
+    #   1. **모델을 올리지 않는다.** 이미 VRAM에 떠 있을 때만 답한다 — 그림자
+    #      때문에 게임 중에 4.5GB가 물리면 안 된다(classify와 같은 원칙).
+    #   2. **사용자 답을 바꾸지 않는다.** 델타는 생성 직전에 켜고 직후에 끄며,
+    #      그 구간 전체가 `_local_gen_lock` 안이라 대화 경로가 끼어들 수 없다.
+
+    SHADOW_ADAPTER = "apia_shadow"
+
+    def local_loaded(self) -> bool:
+        """로컬 모델이 **지금 VRAM에 있는가**. 올리지 않고 묻기만 한다."""
+        return "local" in self._initialized_modes and self._model is not None
+
+    async def shadow_reply(self, message: str, delta_path: str, max_new_tokens: int = 128) -> str:
+        """베이스+채택 델타로 한 번 생성. 실패는 그대로 던진다(호출자가 휴면 처리)."""
+        if not self.local_loaded():
+            raise RuntimeError("local model not resident")
+        if not delta_path or not Path(delta_path).is_dir():
+            raise RuntimeError("no adopted delta")
+        # 로컬 경로가 이미 바쁘면 그냥 건너뛴다. 기다렸다 잡으면 그 사이 들어온
+        # 사용자 발화가 그림자 생성 뒤에 줄을 서게 된다 = 대화 지연. 그림자는
+        # 한 번 걸러도 아무것도 잃지 않는다(다음 교환에 다시 온다).
+        if self._local_active > 0 or self._local_gen_lock.locked():
+            raise RuntimeError("local path busy")
+
+        system_prompt = self._build_system_prompt(None)
+
+        def _infer():
+            if self._shadow_delta != delta_path:
+                # 주 1회 새 델타가 채택되면 같은 이름으로 다시 붙는다 — 먼저
+                # 떼지 않으면 "이미 있는 어댑터"로 거절당하고, 떼지 못하면
+                # 지난주 델타가 VRAM에 계속 남는다.
+                if self._shadow_delta is not None:
+                    try:
+                        self._model.delete_adapter(self.SHADOW_ADAPTER)
+                    except Exception as error:  # noqa: BLE001
+                        print(f"[AI] shadow delete_adapter failed: {type(error).__name__}")
+                # 붙인 직후 바로 끈다 — 대화 경로가 활성 어댑터를 보는 일이 없게.
+                self._model.load_adapter(delta_path, adapter_name=self.SHADOW_ADAPTER)
+                self._model.disable_adapters()
+                self._shadow_delta = delta_path
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message},
+            ]
+            text = self._tok.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            inputs = self._tok(text, return_tensors="pt").to("cuda")
+            input_ids = inputs["input_ids"]
+            self._model.set_adapter(self.SHADOW_ADAPTER)
+            self._model.enable_adapters()
+            try:
+                with self._torch.no_grad():
+                    output = self._model.generate(
+                        input_ids,
+                        max_new_tokens=max_new_tokens,
+                        temperature=TEMPERATURE,
+                        top_p=TOP_P,
+                        do_sample=True,
+                        pad_token_id=self._tok.eos_token_id,
+                        eos_token_id=self._tok.eos_token_id,
+                    )
+            finally:
+                # 여기서 실패하면 다음 사용자 답이 델타를 먹는다 — 그럴 바엔
+                # 모델을 통째로 내려 다음 요청이 깨끗한 베이스를 다시 올리게 한다.
+                try:
+                    self._model.disable_adapters()
+                except Exception as error:  # noqa: BLE001
+                    print(f"[AI] shadow disable_adapters failed: {type(error).__name__}")
+                    self._model = None
+                    self._tok = None
+                    self._shadow_delta = None
+                    self._initialized_modes.discard("local")
+                    raise
+            generated = output[0][input_ids.shape[-1]:]
+            text = self._tok.decode(generated, skip_special_tokens=True).strip()
+            # `[EMOTION:...]`은 떼고 돌려준다. 비교 상대인 API 응답은 chat()에서
+            # 이미 떼인 본문이라, 그냥 두면 태그 한 줄 때문에 유사도가 눌린다.
+            return self._parse_emotion(text)[0]
+
+        self._local_active += 1
+        try:
+            async with self._local_gen_lock:
+                return await asyncio.to_thread(_infer)
+        finally:
+            self._local_active -= 1
+            self._local_last_used = time.monotonic()
+
     # M2 관전 모드 — 사용자가 고른 창 한 장을 보고 "지금 뭐가 벌어지나"를 읽는다.
     # 방송이 아니라 옆에서 같이 보는 친구라 코멘트는 짧고 드물어야 한다. 흥미도가
     # 낮으면 **말하지 않는 것이 정답**이라고 명시적으로 지시한다 — 매 tick 떠들면
@@ -1303,7 +1404,8 @@ class ClaudeService:
 
         self._local_active += 1
         try:
-            return await asyncio.to_thread(_infer)
+            async with self._local_gen_lock:
+                return await asyncio.to_thread(_infer)
         except Exception as error:
             raise RuntimeError(f"local summarize failed: {error}") from error
         finally:
@@ -1351,7 +1453,8 @@ class ClaudeService:
         loop = asyncio.get_event_loop()
         self._local_active += 1
         try:
-            return await loop.run_in_executor(None, _infer)
+            async with self._local_gen_lock:
+                return await loop.run_in_executor(None, _infer)
         except Exception as error:
             print(f"[AI] local inference error: {error}")
             return "I hit a local inference error. [EMOTION:sad]"

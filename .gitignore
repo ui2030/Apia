@@ -74,6 +74,9 @@ __pycache__/
 *.pyc
 test-results/
 .claude/
+# unsloth가 CWD에 만드는 컴파일 캐시. 학습기는 작업 디렉터리에서 돌지만,
+# night_trainer.py --selfcheck를 backend/에서 손으로 돌리면 여기에 생긴다.
+unsloth_compiled_cache/
 
 # 비밀값과 DB 곁 파일 — 이름이 정확히 .env / apia.db 인 것만 막히던 구멍 보완.
 backend.env

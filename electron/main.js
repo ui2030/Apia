@@ -3,6 +3,15 @@ app.commandLine.appendSwitch('allow-file-access-from-files')
 
 const path = require('path')
 const fs = require('fs')
+const crypto = require('crypto')
+const { execFile, spawn } = require('child_process')
+
+// 야간 학습기(A-3)의 백엔드 표면은 부르는 것만으로 교사 예산과 GPU가 나간다.
+// localhost에 붙을 수 있는 아무 프로세스나 그걸 시키지 못하게, 실행할 때마다
+// 새 토큰을 만들어 백엔드와 학습 프로세스에 **env로만** 건넨다(명령줄은 프로세스
+// 목록에 노출된다). process.env에 넣어 두면 두 자식의 spawn env에 그대로 실린다.
+// 디스크·로그·상태 파일 어디에도 적지 않는다 — 프로세스가 죽으면 같이 사라진다.
+process.env.APIA_TRAINING_TOKEN = crypto.randomBytes(32).toString('hex')
 
 // E2E seam: GUI tests pass an isolated tmp dir so they never touch the
 // user's real %APPDATA%\Apia. Must run BEFORE any other code reads
@@ -71,6 +80,16 @@ const {
   createCoursewareJob,
   attachReferenceCards
 } = require('./services/courseware')
+const {
+  DEADLINE_SEC: TRAINING_DEADLINE_SEC,
+  RETURN_IDLE_SEC: TRAINING_RETURN_IDLE_SEC,
+  DEADLINE_GRACE_MS: TRAINER_GRACE_MS,
+  awaitChildExit,
+  similarity: shadowSimilarity,
+  lengthRatio: shadowLengthRatio,
+  createNightSchoolStore,
+  createNightSchoolJob
+} = require('./services/nightSchool')
 
 const isDev = process.argv.includes('--dev')
 const CONFIGURED_BACKEND_URL = process.env.APIA_BACKEND_URL || DEFAULT_BACKEND_URL
@@ -99,6 +118,7 @@ async function readErrorResponse(response) {
 async function requestBackend(endpoint, {
   method = 'GET',
   body,
+  headers: extraHeaders,
   timeout = 5000
 } = {}) {
   const { controller, timer } = makeTimeoutController(timeout)
@@ -106,7 +126,9 @@ async function requestBackend(endpoint, {
   try {
     const response = await fetch(`${getBackendUrl()}${endpoint}`, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: (body || extraHeaders)
+        ? { ...(body ? { 'Content-Type': 'application/json' } : null), ...extraHeaders }
+        : undefined,
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal
     })
@@ -365,7 +387,8 @@ function stopLedgerDailyJob() {
 //
 // 여기서 하는 일은 기록·변환·폐기, 그리고 A-2 검색 참조다. 교재 파일은
 // electron이 소유하므로 검색도 여기서 돌고(백엔드는 디스크를 보지 않는다),
-// 고른 카드만 채팅 요청 body에 실려 나간다. 학습(A-3)은 아직 없다.
+// 고른 카드만 채팅 요청 body에 실려 나간다. 이 교재를 실제로 모델에 새기는
+// 야간 학습(A-3)은 아래 nightSchool 블록이 맡는다.
 const COURSEWARE_DIR = path.join(app.getPath('userData'), 'courseware')
 const courseware = createCoursewareStore({ dir: COURSEWARE_DIR, log: { warn: logWarn } })
 
@@ -417,6 +440,220 @@ function stopCoursewareJob() {
     clearInterval(coursewareTimer)
     coursewareTimer = null
   }
+}
+
+// ── 야간 학습기 + 그림자 모드 (A-3) ─────────────────────────────────────────
+//
+// 교재(A-1)를 실제로 로컬 학생 모델에 새기는 주 1회 재학습과, 그렇게 배운
+// 학생을 사용자 몰래 채점하는 그림자 모드. **사용자 대면 응답은 여전히 불변**이다
+// — 학생 답은 유사도 점수로만 남고 화면에 오르지 않는다(승격은 A-4 몫).
+//
+// 학습은 이 프로세스에서 하지 않는다. 별도 파이썬을 스폰한다 — 이유가 셋이다.
+//   1. 학습 스택(unsloth/trl/peft)이 백엔드 venv에 없고, 넣으면 torch가 6.9GB
+//      중복된다. 검증 실험을 돌린 night-loop-lab venv를 그대로 빌려 쓴다.
+//   2. 학습이 죽어도(OOM·드라이버) 대화와 캐릭터는 프로세스가 달라 무사하다.
+//   3. 사용자가 돌아오면 프로세스를 통째로 끊는 게 가장 확실한 즉시 중단이다.
+const TRAINING_DIR = path.join(COURSEWARE_DIR, 'training')
+const nightSchool = createNightSchoolStore({ dir: TRAINING_DIR, log: { warn: logWarn } })
+const TRAINER_SCRIPT = path.join(__dirname, '..', 'backend', 'training', 'night_trainer.py')
+
+function trainingPythonPath() {
+  try { return String(loadSettings().trainingPythonPath || '') } catch { return '' }
+}
+
+/** nvidia-smi로 여유 VRAM(GB). 없거나 실패하면 0 — 학습은 시작되지 않는다. */
+function probeVramFreeGb() {
+  return new Promise((resolve) => {
+    try {
+      execFile('nvidia-smi',
+        ['--query-gpu=memory.free', '--format=csv,noheader,nounits'],
+        { timeout: 8000, windowsHide: true },
+        (error, stdout) => {
+          if (error) return resolve(0)
+          const mb = Number(String(stdout).split('\n')[0]?.trim())
+          resolve(Number.isFinite(mb) ? mb / 1024 : 0)
+        })
+    } catch { resolve(0) }
+  })
+}
+
+async function probeTrainingSignals() {
+  let idleSec = 0
+  try { idleSec = powerMonitor.getSystemIdleTime() } catch {}
+  const python = trainingPythonPath()
+  let totalCards = 0
+  try { totalCards = courseware.getState().totalCards || 0 } catch {}
+  return {
+    idleSec,
+    vramFreeGb: await probeVramFreeGb(),
+    totalCards,
+    pythonOk: Boolean(python) && fs.existsSync(python),
+    scriptOk: fs.existsSync(TRAINER_SCRIPT)
+  }
+}
+
+/**
+ * 학습 프로세스 한 번. 종료될 때까지 기다렸다가 결과 JSON을 읽어 돌려준다.
+ *
+ * 중단은 두 겹이다: 사용자가 돌아오면 STOP 파일을 써서 **스스로** 체크포인트를
+ * 남기고 끝나게 하고, 그래도 안 끝나면 30초 뒤 kill한다. 어느 쪽이든 이전
+ * 채택 델타와 대화 기능에는 영향이 없다.
+ */
+// 살아 있는 학습 자식 핸들. 종료 경로가 STOP 파일만 쓰고 끝나면 Electron이
+// 먼저 죽은 뒤 학습이 유령으로 남아 GPU를 계속 문다.
+let trainerChild = null
+
+function runTrainer({ adoptedDelta, since }) {
+  return new Promise((resolve) => {
+    const { workDir, stopPath, resultPath, logPath } = nightSchool.paths
+    try {
+      fs.mkdirSync(workDir, { recursive: true })
+      fs.rmSync(stopPath, { force: true })
+      fs.rmSync(resultPath, { force: true })
+    } catch (error) {
+      return resolve({ status: 'failed', reason: `work dir: ${error?.message || error}` })
+    }
+
+    const args = [
+      TRAINER_SCRIPT,
+      '--cards', courseware.paths.cardsDir,
+      '--work', workDir,
+      '--result', resultPath,
+      '--backend-url', getBackendUrl(),
+      '--stop-file', stopPath,
+      // 부모가 크래시하면 STOP 파일을 써 줄 주체가 없다. 학습기가 직접 감시한다.
+      '--parent-pid', String(process.pid),
+      '--deadline-sec', String(TRAINING_DEADLINE_SEC)
+    ]
+    if (adoptedDelta) args.push('--adopted-delta', adoptedDelta)
+    if (since) args.push('--since', since)
+
+    let child
+    let logStream = null
+    try {
+      logStream = fs.createWriteStream(logPath, { flags: 'w' })
+      child = spawn(trainingPythonPath(), args, {
+        // cwd는 **작업 디렉터리**다. unsloth가 CWD에 컴파일 캐시(unsloth_compiled_cache)를
+        // 만들기 때문에 repo 안에서 돌리면 소스 트리가 더러워진다. 학습기는 경로를
+        // 전부 인자로 받으므로 어디서 돌든 상관없다.
+        cwd: workDir,
+        windowsHide: true,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' }
+      })
+    } catch (error) {
+      try { logStream?.end() } catch {}
+      return resolve({ status: 'failed', reason: `spawn: ${error?.message || error}` })
+    }
+
+    trainerChild = child
+    child.stdout?.pipe(logStream, { end: false })
+    child.stderr?.pipe(logStream, { end: false })
+
+    // 사용자 복귀 감시. 유휴가 짧아지면 STOP을 써서 즉시 중단시킨다.
+    let killTimer = null
+    const watch = setInterval(() => {
+      let idle = TRAINING_RETURN_IDLE_SEC + 1
+      try { idle = powerMonitor.getSystemIdleTime() } catch {}
+      if (idle > TRAINING_RETURN_IDLE_SEC) return
+      try { fs.writeFileSync(stopPath, 'user returned', 'utf-8') } catch {}
+      clearInterval(watch)
+      killTimer = setTimeout(() => { try { child.kill() } catch {} }, TRAINER_GRACE_MS)
+    }, 15000)
+
+    const finish = (fallback) => {
+      clearInterval(watch)
+      if (killTimer) clearTimeout(killTimer)
+      if (trainerChild === child) trainerChild = null
+      try { logStream?.end() } catch {}
+      let result = null
+      try { result = JSON.parse(fs.readFileSync(resultPath, 'utf-8')) } catch {}
+      resolve(result || fallback)
+    }
+
+    child.on('error', (error) => finish({ status: 'failed', reason: `spawn: ${error?.message}` }))
+    child.on('close', (code) => finish({
+      status: code === 0 ? 'failed' : 'interrupted',
+      reason: `학습 프로세스가 결과를 남기지 못했다 (exit ${code})`
+    }))
+  })
+}
+
+const nightSchoolJob = createNightSchoolJob({
+  store: nightSchool,
+  probe: probeTrainingSignals,
+  runTrainer,
+  log: { warn: logWarn }
+})
+
+/**
+ * 그림자 1건 — 채팅 교환이 **끝난 뒤** 비동기로. 대화 지연 0이 계약이라
+ * 호출자는 이 promise를 기다리지 않는다.
+ *
+ * 로컬 모델을 올리지 않는다(백엔드가 떠 있는지만 보고 판단은 백엔드가 한다).
+ * 델타가 없으면 아예 부르지 않는다.
+ */
+function recordShadow(message, reply) {
+  const delta = nightSchool.adoptedDelta()
+  if (!delta) return nightSchool.noteShadowDormant('채택 델타 없음')
+  if (!message || !reply) return
+  requestBackendJson('/training/shadow', {
+    method: 'POST',
+    timeout: 60000,
+    headers: { 'X-Apia-Training-Token': process.env.APIA_TRAINING_TOKEN || '' },
+    body: { message, delta_dir: delta.dir }
+  }).then((res) => {
+    if (res?.status !== 'ok' || !res.reply) {
+      return nightSchool.noteShadowDormant(res?.reason || res?.status || 'no reply')
+    }
+    // 여기서 원문은 점수로 바뀌고 버려진다. 디스크로 내려가는 건 숫자뿐이다.
+    nightSchool.noteShadow({
+      similarity: shadowSimilarity(res.reply, reply),
+      lengthRatio: shadowLengthRatio(res.reply, reply)
+    })
+  }).catch((error) => nightSchool.noteShadowDormant(error?.message || String(error)))
+}
+
+ipcMain.handle('nightSchool:getState', async () => {
+  try {
+    const state = nightSchool.getState()
+    const signals = await probeTrainingSignals()
+    return { ...state, signals, running: nightSchoolJob.isRunning() }
+  } catch (error) { return { error: error?.message || String(error) } }
+})
+ipcMain.handle('nightSchool:trainNow', async () => {
+  try {
+    const result = await nightSchoolJob.runOnce({ force: true })
+    return { ...nightSchool.getState(), result }
+  } catch (error) { return { error: error?.message || String(error) } }
+})
+
+// 학습 잡 — 교재 변환과 같은 15분 주기. 조건이 하나라도 어긋나면 nvidia-smi
+// 한 번 부르고 끝난다.
+let nightSchoolTimer = null
+
+function startNightSchoolJob() {
+  if (nightSchoolTimer) return
+  // 앵커 이동 중 크래시로 남은 고아 디렉터리 정리. 채택 중인 것과 최근 8개는
+  // pruneAnchors가 지키므로 여기서 더 판단할 게 없다.
+  try { nightSchool.pruneAnchors() } catch (error) { logWarn('[TRAINING_PRUNE_WARN]', error?.message || error) }
+  nightSchoolTimer = setInterval(() => {
+    nightSchoolJob.runOnce().catch((error) => logWarn('[TRAINING_JOB_WARN]', error?.message || error))
+  }, COURSEWARE_POLL_MS)
+}
+
+/**
+ * 종료 = 학습도 끝. STOP을 써서 체크포인트를 남기고 **실제로 끝날 때까지 기다린다**
+ * — 기다리지 않으면 Electron이 먼저 죽고 학습이 유령으로 남아 GPU를 계속 문다.
+ * 유예 안에 안 끝나면 kill한다(학습기는 스텝마다 STOP을 보므로 보통 몇 초).
+ */
+function stopNightSchoolJob() {
+  if (nightSchoolTimer) {
+    clearInterval(nightSchoolTimer)
+    nightSchoolTimer = null
+  }
+  try { fs.writeFileSync(nightSchool.paths.stopPath, 'app quit', 'utf-8') } catch {}
+  return awaitChildExit(trainerChild, TRAINER_GRACE_MS, () =>
+    logWarn('[TRAINING_KILL]', `학습 프로세스가 ${TRAINER_GRACE_MS}ms 안에 끝나지 않아 강제 종료`))
 }
 
 // backend.env is a separate boundary from apia-settings.json — secrets,
@@ -502,6 +739,7 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
     })
     ledgerTracker.noteReplyDone()
     recordCoursewareExchange(message, reply?.reply) // 교재 버퍼 — 비동기 큐, 비차단
+    recordShadow(message, reply?.reply)             // 그림자 — 기다리지 않는다(지연 0)
     return reply
   } catch (e) {
     return { error: e.message }
@@ -595,6 +833,7 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
         } else if (frame.type === 'final') {
           ledgerTracker.noteReplyDone() // 계측 — 응답이 화면에 다 뜬 시점
           recordCoursewareExchange(message, frame.reply) // 교재 버퍼 — 비동기 큐, 비차단
+          recordShadow(message, frame.reply)             // 그림자 — 기다리지 않는다(지연 0)
           sender.send('chat-stream-done', {
             requestId,
             reply: frame.reply,
@@ -1440,6 +1679,7 @@ app.whenReady().then(async () => {
 
   startLedgerDailyJob()
   startCoursewareJob()
+  startNightSchoolJob()
 
   // Phase F1: drop the main overlay into the Windows wallpaper layer (behind
   // desktop icons). Codex MUST-FIX: lazy + graceful — if the native module
@@ -2062,6 +2302,8 @@ function shutdownOnce() {
     stopPresenceFeed()
     stopLedgerDailyJob()
     stopCoursewareJob()
+    // 학습 자식이 실제로 끝날 때까지 기다린다(상한 TRAINER_GRACE_MS).
+    try { await stopNightSchoolJob() } catch (error) { logWarn('[TRAINING_SHUTDOWN_WARN]', error?.message || error) }
     // 종료 = 대화 종료. 확정 안 된 마지막 교환은 버리고(종료≠회피) 일일 집계를
     // 한 번 돌려 원장을 최신 상태로 닫는다.
     try {
