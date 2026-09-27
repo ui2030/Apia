@@ -317,6 +317,241 @@ describe('원장 저장소', () => {
   })
 })
 
+// ── 4-B. 응고(consolidation): 원시 신호는 버려도 점수는 잊지 않는다 ──────────
+
+const DAY = 86400000
+
+/** 회피 신호 n건을 t 기준으로 1초 간격으로 넣는다. i가 짝수면 강한 회피, 홀수면 중간. */
+function feedAversive(ledger, base, n) {
+  for (let i = 0; i < n; i++) {
+    ledger.recordSignal({
+      t: base + i * 1000, topic_id: 'work', conf: 0.9,
+      reply_latency_ms: i % 2 === 0 ? 30000 : 16500,
+      reply_len_ratio: i % 2 === 0 ? 0 : 0.4,
+      topic_shifted: true,
+      engagement: 0
+    })
+  }
+}
+
+describe('응고(consolidation)', () => {
+  it('90일이 지나 원시 신호가 폐기돼도 점수·상태가 폐기 전과 같다', () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    const clock = { t: base }
+    const ledger = createTopicLedger({ ledgerPath, now: () => clock.t })
+    feedAversive(ledger, base, 12)
+    ledger.aggregate()
+    const before = ledger.getState().topics.find((t) => t.id === 'work')
+    expect(before.state).toBe('frozen')
+
+    clock.t = base + 95 * DAY // 주입 시계로 90일 경과
+    ledger.aggregate()        // 내부 prune이 그 날짜를 통째로 폐기한다
+    const after = ledger.getState()
+
+    expect(after.rawCount).toBe(0) // 원시 신호는 약속대로 사라졌다
+    expect(after.rawDays).toBe(0)
+    const work = after.topics.find((t) => t.id === 'work')
+    expect(work).toBeDefined()
+    expect(work.score).toBe(before.score)
+    expect(work.evidence).toBe(before.evidence)
+    expect(work.state).toBe(before.state)
+    expect(after.events.demote).toBe(1)
+  })
+
+  it('점수는 언제 폐기됐는지에 좌우되지 않는다 (점진 응고 == 일괄 응고)', () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    const end = base + 99 * DAY
+    // 100일에 걸친 같은 신호 묶음을 두 원장에 넣는다. 한쪽은 하루씩 시계를 밀며
+    // 조금씩 응고하고, 다른 쪽은 마지막 날 시계로 한 번에 응고한다.
+    const feed = (ledger, clock) => {
+      for (let i = 0; i < 100; i++) {
+        if (clock) clock.t = base + i * DAY
+        ledger.recordSignal({
+          t: base + i * DAY, topic_id: 'work', conf: 0.9,
+          reply_latency_ms: i % 3 === 0 ? 30000 : 8000,
+          reply_len_ratio: i % 2 === 0 ? 0.2 : 0.9,
+          topic_shifted: i % 5 === 0,
+          engagement: i % 4
+        })
+      }
+    }
+    const gradualClock = { t: base }
+    const gradual = createTopicLedger({ ledgerPath, now: () => gradualClock.t })
+    feed(gradual, gradualClock)
+    gradualClock.t = end
+    gradual.aggregate()
+
+    const atOnce = createTopicLedger({ ledgerPath: `${ledgerPath}.2`, now: () => end })
+    feed(atOnce, null)
+    atOnce.aggregate()
+
+    const a = gradual.getState().topics.find((t) => t.id === 'work')
+    const b = atOnce.getState().topics.find((t) => t.id === 'work')
+    expect(a.evidence).toBe(100)
+    expect(b.evidence).toBe(100)
+    expect(a.score).toBe(b.score)
+    expect(a.state).toBe(b.state)
+  })
+
+  it('응고된 frozen 화제도 새 긍정 신호가 쌓이면 해빙된다', () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    const clock = { t: base }
+    const ledger = createTopicLedger({ ledgerPath, now: () => clock.t })
+    feedAversive(ledger, base, 12)
+    clock.t = base + 95 * DAY
+    ledger.aggregate()
+    expect(ledger.getState().topics.find((t) => t.id === 'work').state).toBe('frozen')
+
+    const later = base + 95 * DAY
+    for (let i = 0; i < 20; i++) {
+      ledger.recordSignal({
+        t: later + i * 1000, topic_id: 'work', conf: 0.9,
+        reply_latency_ms: 3000, reply_len_ratio: 1, topic_shifted: false, engagement: 3
+      })
+    }
+    ledger.aggregate()
+    const work = ledger.getState().topics.find((t) => t.id === 'work')
+    expect(work.state).toBe('thawed')
+    expect(work.evidence).toBe(32) // 응고분 12 + 새 신호 20
+  })
+
+  it('응고 후에도 aggregate 연속 2회 결과가 같고 골드 라벨이 남는다', async () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    const clock = { t: base }
+    const ledger = createTopicLedger({ ledgerPath, now: () => clock.t })
+    ledger.setGoldLabel('work', 'neutral')
+    feedAversive(ledger, base, 12)
+    clock.t = base + 95 * DAY
+    ledger.aggregate()
+    const first = await readFile(ledgerPath, 'utf-8')
+    ledger.aggregate()
+    expect(await readFile(ledgerPath, 'utf-8')).toBe(first)
+    expect(ledger.getState().topics.find((t) => t.id === 'work').goldLabel).toBe('neutral')
+    expect(ledger.getState().events.falseFreeze).toBe(1)
+  })
+
+  it('구버전(v1) 문서는 원시 신호·골드 라벨을 지킨 채 마이그레이션된다', () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    fs.writeFileSync(ledgerPath, JSON.stringify({
+      schema_version: 1,
+      raw: { '2026-01-05': [{ t: base, topic_id: 'work', conf: 0.9, reply_latency_ms: 30000, reply_len_ratio: 0, topic_shifted: true, engagement: 0 }] },
+      topics: { game: { score: 0.2, evidence: 9, state: 'thawed', goldLabel: 'joke_ok', updatedAt: base } },
+      events: { demote: 0, promote: 1, falseFreeze: 0, falseThaw: 0 },
+      lastAggregatedAt: base
+    }, null, 2), 'utf-8')
+
+    const ledger = createTopicLedger({ ledgerPath, now: () => base + 1000 })
+    const state = ledger.getState()
+    expect(state.schema_version).toBe(SCHEMA_VERSION)
+    expect(SCHEMA_VERSION).toBeGreaterThan(1)
+    expect(state.rawCount).toBe(1)
+    expect(state.topics.find((t) => t.id === 'game').goldLabel).toBe('joke_ok')
+    ledger.aggregate()
+    const work = ledger.getState().topics.find((t) => t.id === 'work')
+    expect(work.evidence).toBe(1)
+    expect(work.score).toBe(1)
+  })
+
+  it('저장된 events는 믿지 않는다 — 로드 시 topics 합산으로 재계산돼 유령 카운트가 재시작을 못 넘는다', () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    // removeTopic 이후 구현 버그 등으로 events만 남은 문서를 흉내 낸다:
+    // topics는 비었는데 events.demote=5.
+    fs.writeFileSync(ledgerPath, JSON.stringify({
+      schema_version: 2,
+      raw: {},
+      topics: {},
+      consolidated: { topics: {} },
+      events: { demote: 5, promote: 3, falseFreeze: 2, falseThaw: 1 },
+      lastAggregatedAt: base
+    }, null, 2), 'utf-8')
+
+    const ledger = createTopicLedger({ ledgerPath, now: () => base + 1000 })
+    expect(ledger.getState().events).toEqual({ demote: 0, promote: 0, falseFreeze: 0, falseThaw: 0 })
+  })
+
+  it('burn-in 경계 — 응고분 6 + 잔존 원시 1건이 7이 되는 순간 전이한다', () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    const clock = { t: base }
+    const ledger = createTopicLedger({ ledgerPath, now: () => clock.t })
+    feedAversive(ledger, base, 6)                       // 이 6건만 응고될 것
+    feedAversive(ledger, base + 50 * DAY, 1)            // 50일 뒤 1건은 살아남는다
+    clock.t = base + 100 * DAY // cutoff = base+10일 → 첫 날만 폐기, 50일차는 보존
+    ledger.aggregate()
+
+    const con = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8')).consolidated.topics.work
+    expect(con.evidence).toBe(6)      // 응고분은 아직 판단 보류 상태
+    expect(con.state).toBe('pending')
+    expect(con.demote).toBe(0)
+    const state = ledger.getState()
+    expect(state.rawCount).toBe(1)
+    const work = state.topics.find((t) => t.id === 'work')
+    expect(work.evidence).toBe(7)     // 경계 도달
+    expect(work.state).toBe('frozen') // 바로 판정이 내려진다
+    expect(state.events.demote).toBe(1)
+  })
+
+  it('응고분보다 오래된 t의 늦은 기록도 접히고, 멱등성은 유지된다', async () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    const clock = { t: base }
+    const ledger = createTopicLedger({ ledgerPath, now: () => clock.t })
+    feedAversive(ledger, base + 10 * DAY, 12)
+    clock.t = base + 105 * DAY
+    ledger.aggregate()
+    const before = ledger.getState().topics.find((t) => t.id === 'work')
+
+    // 응고된 날들보다 더 오래된 신호가 뒤늦게 들어온다(시계 되감김·옛 백업 병합).
+    ledger.recordSignal({
+      t: base, topic_id: 'work', conf: 0.9,
+      reply_latency_ms: 3000, reply_len_ratio: 1, topic_shifted: false, engagement: 3
+    })
+    ledger.aggregate()
+    const after = ledger.getState().topics.find((t) => t.id === 'work')
+    expect(after.evidence).toBe(before.evidence + 1) // 버려지지 않고 응고에 접혔다
+    expect(ledger.getState().rawCount).toBe(0)       // 원시 신호는 남지 않는다
+
+    const first = await readFile(ledgerPath, 'utf-8')
+    ledger.aggregate()
+    expect(await readFile(ledgerPath, 'utf-8')).toBe(first)
+  })
+
+  it('항목 삭제는 그 화제의 전이 카운트까지 가져간다', () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    const clock = { t: base }
+    const ledger = createTopicLedger({ ledgerPath, now: () => clock.t })
+    feedAversive(ledger, base, 12)
+    clock.t = base + 95 * DAY
+    ledger.aggregate()
+    expect(ledger.getState().events.demote).toBe(1)
+
+    ledger.removeTopic('work') // 유일한 응고 화제
+    expect(ledger.getState().events).toEqual({ demote: 0, promote: 0, falseFreeze: 0, falseThaw: 0 })
+    ledger.aggregate()
+    expect(ledger.getState().events).toEqual({ demote: 0, promote: 0, falseFreeze: 0, falseThaw: 0 })
+  })
+
+  it('항목 삭제·초기화는 응고된 점수까지 지운다', async () => {
+    const base = new Date(2026, 0, 5, 9, 0, 0).getTime()
+    const clock = { t: base }
+    const ledger = createTopicLedger({ ledgerPath, now: () => clock.t })
+    feedAversive(ledger, base, 12)
+    ledger.recordSignal({ t: base, topic_id: 'game', conf: 0.9, reply_latency_ms: 3000, reply_len_ratio: 1, topic_shifted: false, engagement: 3 })
+    clock.t = base + 95 * DAY
+    ledger.aggregate()
+    expect(ledger.getState().topics).toHaveLength(2)
+
+    ledger.removeTopic('work')
+    expect(ledger.getState().topics.map((t) => t.id)).toEqual(['game'])
+    expect(await readFile(ledgerPath, 'utf-8')).not.toContain('"work"')
+    ledger.aggregate() // 지운 화제가 응고분에서 되살아나지 않는다
+    expect(ledger.getState().topics.map((t) => t.id)).toEqual(['game'])
+
+    ledger.reset()
+    const state = ledger.getState()
+    expect(state.topics).toEqual([])
+    expect(await readFile(ledgerPath, 'utf-8')).not.toContain('"game"')
+  })
+})
+
 // ── 5. 시나리오: 가짜 대화 30교환 → 골든 파일 ────────────────────────────────
 
 describe('30교환 시나리오', () => {

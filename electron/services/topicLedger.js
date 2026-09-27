@@ -7,12 +7,17 @@
  * 프라이버시 원칙: 원장에는 **대화 원문을 절대 저장하지 않는다**. 분류기가 돌려준
  * topic_id와 수치만 남는다. 분류에 쓰인 원문은 로컬 백엔드로만 나가고 버려진다.
  *
+ * 영구 보존(응고): 원시 신호는 90일에 폐기하지만 **눈치는 잊지 않는다**. prune()이
+ * 일자를 버리기 전에 그 신호들을 `consolidated` 스냅샷에 접어 넣고, aggregate()는
+ * 빈 상태가 아니라 그 스냅샷에서 출발해 남은 원시 신호를 다시 훑는다. 폐기 전과
+ * 폐기 후의 점수·상태가 같고, 몇 번 돌려도 같다.
+ *
  * 파일 하나(JSON) + tmp→rename 원자적 쓰기. 스키마는 `schema_version`으로 고정.
  */
 const fs = require('fs')
 const path = require('path')
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 // ── 고정 화제 분류(26) ──────────────────────────────────────────────────────
 // 분류기 프롬프트와 열람 UI가 같은 출처를 쓴다. 목록을 바꾸면 이미 쌓인 원시
@@ -141,22 +146,95 @@ function dayKeyOf(ms) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+/**
+ * 시간순 신호들을 화제 상태에 제자리로 접어 넣는다. 집계와 응고가 **같은** 이
+ * 함수를 쓰기 때문에, 신호를 언제 폐기하든 최종 값이 달라지지 않는다:
+ * fold(빈 상태, s1..sn) === fold(fold(빈 상태, s1..sk), s(k+1)..sn).
+ *
+ * 전이 카운트(demote/promote)는 **화제별로 귀속**한다. 전역 카운터에 더해 버리면
+ * 그 화제를 삭제해도 카운트가 유령으로 남아 사용자의 삭제권이 반쪽이 된다.
+ *
+ * @param {object} topics  topic_id -> { score, evidence, state, demote, promote, updatedAt } (변경됨)
+ * @param {Array} signals  t 오름차순으로 정렬된 원시 신호
+ */
+function foldSignals(topics, signals) {
+  for (const sig of signals) {
+    if (!TOPIC_IDS.includes(sig.topic_id)) continue
+    const av = aversionScore(sig)
+    if (av == null) continue
+    const cur = topics[sig.topic_id] || (topics[sig.topic_id] = {
+      score: null, evidence: 0, state: 'pending', demote: 0, promote: 0, updatedAt: null
+    })
+    cur.score = emaStep(cur.score, av)
+    cur.evidence += 1
+    cur.updatedAt = sig.t
+    if (cur.evidence < BURN_IN) continue // 판단 보류 — 전이도 세지 않는다
+    // burn-in을 넘긴 순간의 출발점은 'neutral'이다. TH_LO~TH_HI 사이는
+    // 히스테리시스 구간이라 직전 상태를 유지한다.
+    const before = cur.state === 'pending' ? 'neutral' : cur.state
+    let next = before
+    if (cur.score >= TH_HI) next = 'frozen'
+    else if (cur.score <= TH_LO) next = 'thawed'
+    cur.state = next
+    if (next !== before) {
+      if (next === 'frozen') cur.demote += 1
+      else if (next === 'thawed') cur.promote += 1
+    }
+  }
+  return topics
+}
+
+/** 전역 4지표는 화제별 카운트의 **합산 파생**이다. 화제가 사라지면 몫도 사라진다. */
+function eventsFrom(topics) {
+  const events = { demote: 0, promote: 0, falseFreeze: 0, falseThaw: 0 }
+  for (const t of Object.values(topics)) {
+    events.demote += t.demote || 0
+    events.promote += t.promote || 0
+    const label = t.goldLabel
+    if (!label || t.state === 'pending') continue
+    if (t.state === 'frozen' && (label === 'neutral' || label === 'joke_ok')) events.falseFreeze += 1
+    if (t.state === 'thawed' && label === 'sensitive') events.falseThaw += 1
+  }
+  return events
+}
+
 // ── 원장 저장소 ─────────────────────────────────────────────────────────────
 
 function emptyDoc() {
   return {
     schema_version: SCHEMA_VERSION,
     raw: {},          // dayKey -> [signal]
-    topics: {},       // topic_id -> { score, evidence, state, goldLabel, updatedAt }
-    events: { demote: 0, promote: 0, falseFreeze: 0, falseThaw: 0 },
+    topics: {},       // topic_id -> { score, evidence, state, demote, promote, goldLabel, updatedAt }
+    // 폐기된 원시 신호까지 반영된 영구 스냅샷. 집계의 출발점이다. 전이 카운트도
+    // 화제별로 여기 들어 있어서, 화제를 지우면 그 몫이 함께 사라진다.
+    consolidated: { topics: {} },
+    events: { demote: 0, promote: 0, falseFreeze: 0, falseThaw: 0 }, // topics 합산 파생
     lastAggregatedAt: null
+  }
+}
+
+function emptyTopic() {
+  return { score: null, evidence: 0, state: 'pending', demote: 0, promote: 0, updatedAt: null, goldLabel: null }
+}
+
+function normalizeTopic(t) {
+  return {
+    score: Number.isFinite(t.score) ? t.score : null,
+    evidence: Number.isFinite(t.evidence) ? t.evidence : 0,
+    state: ['frozen', 'thawed', 'neutral'].includes(t.state) ? t.state : 'pending',
+    demote: Number.isFinite(t.demote) ? t.demote : 0,
+    promote: Number.isFinite(t.promote) ? t.promote : 0,
+    updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : null
   }
 }
 
 function normalizeDoc(parsed) {
   const doc = emptyDoc()
   if (!parsed || typeof parsed !== 'object') return doc
-  if (parsed.schema_version !== SCHEMA_VERSION) return doc // 구버전은 버리고 새로 센다
+  // v1 → v2 마이그레이션: v1의 점수는 어차피 '보존 중인 원시 신호만' 반영한 값이라
+  // consolidated를 비운 채 다음 집계에 맡기면 값이 그대로 재현된다(손실 0). 원시
+  // 신호와 골드 라벨은 그대로 물려받는다. 그보다 옛 버전은 없다.
+  if (parsed.schema_version !== SCHEMA_VERSION && parsed.schema_version !== 1) return doc
   if (parsed.raw && typeof parsed.raw === 'object') {
     for (const [day, list] of Object.entries(parsed.raw)) {
       if (Array.isArray(list)) doc.raw[day] = list.filter((s) => s && typeof s === 'object')
@@ -166,19 +244,21 @@ function normalizeDoc(parsed) {
     for (const [id, t] of Object.entries(parsed.topics)) {
       if (!TOPIC_IDS.includes(id) || !t || typeof t !== 'object') continue
       doc.topics[id] = {
-        score: Number.isFinite(t.score) ? t.score : null,
-        evidence: Number.isFinite(t.evidence) ? t.evidence : 0,
-        state: ['frozen', 'thawed', 'neutral'].includes(t.state) ? t.state : 'pending',
-        goldLabel: GOLD_LABELS.includes(t.goldLabel) ? t.goldLabel : null,
-        updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : null
+        ...normalizeTopic(t),
+        goldLabel: GOLD_LABELS.includes(t.goldLabel) ? t.goldLabel : null
       }
     }
   }
-  if (parsed.events && typeof parsed.events === 'object') {
-    for (const k of Object.keys(doc.events)) {
-      if (Number.isFinite(parsed.events[k])) doc.events[k] = parsed.events[k]
+  const con = parsed.consolidated
+  if (con && typeof con === 'object' && con.topics && typeof con.topics === 'object') {
+    for (const [id, t] of Object.entries(con.topics)) {
+      if (!TOPIC_IDS.includes(id) || !t || typeof t !== 'object') continue
+      doc.consolidated.topics[id] = normalizeTopic(t)
     }
   }
+  // 저장된 events는 믿지 않는다 — topics 합산 파생이 정의라, 로드 시점에 항상
+  // 재계산해야 (removeTopic 등 이후 죽은) 유령 카운트가 재시작을 넘어 살아남지 못한다.
+  doc.events = eventsFrom(doc.topics)
   if (Number.isFinite(parsed.lastAggregatedAt)) doc.lastAggregatedAt = parsed.lastAggregatedAt
   return doc
 }
@@ -243,21 +323,42 @@ function createTopicLedger({ ledgerPath, now = () => Date.now(), fsImpl = fs, lo
     return flush()
   }
 
-  /** 90일 지난 일자 통째 폐기. */
+  /**
+   * 90일 지난 신호 폐기 — **버리기 전에 consolidated에 접어 넣는다**(응고).
+   * cutoff는 단조 증가하므로 폐기되는 신호는 항상 남는 신호보다 오래됐고, 따라서
+   * 응고 순서가 전체 재계산 순서와 어긋나지 않는다.
+   *
+   * 방침: 이미 응고된 날들보다 **오래된 t를 가진 늦은 기록**(시계 되감김·옛 백업
+   * 병합 같은 예외 경로)도 그대로 consolidated에 접는다 — 의도된 동작이다. 관측된
+   * 눈치를 버리지 않는다는 원칙이 우선이고, 접히는 위치가 스냅샷 끝이라 EMA 순서만
+   * 조금 흔들릴 뿐 집계 멱등성은 깨지지 않는다(응고는 한 번, 이후 재계산은 같은
+   * 스냅샷에서 출발). 실제 수집 경로(createExchangeTracker)는 항상 현재 시각을
+   * 쓰므로 이 경로로 들어오는 일이 없다.
+   */
   function prune() {
     const d = load()
     const cutoff = now() - RAW_RETENTION_DAYS * 86400000
+    const expired = []
     for (const day of Object.keys(d.raw)) {
-      const list = d.raw[day].filter((s) => Number.isFinite(s.t) && s.t >= cutoff)
-      if (list.length === 0) delete d.raw[day]
-      else d.raw[day] = list
+      const keep = []
+      for (const s of d.raw[day]) {
+        if (!Number.isFinite(s.t)) continue // 시각 없는 신호는 응고도 보존도 못 한다
+        if (s.t >= cutoff) keep.push(s)
+        else expired.push(s)
+      }
+      if (keep.length === 0) delete d.raw[day]
+      else d.raw[day] = keep
     }
+    if (expired.length === 0) return
+    expired.sort((a, b) => a.t - b.t)
+    foldSignals(d.consolidated.topics, expired)
   }
 
   /**
-   * 일일 집계 — 보존 중인 원시 신호 전체를 시간순으로 다시 훑어 화제별 EMA와
-   * 4지표를 재계산한다. 증분이 아니라 **재계산**이라 언제 몇 번 돌려도 같은
-   * 결과가 나온다(골든 파일 테스트와 수동 '지금 집계' 버튼이 같은 값을 본다).
+   * 일일 집계 — **응고 스냅샷에서 출발해** 보존 중인 원시 신호 전체를 시간순으로
+   * 다시 훑어 화제별 EMA와 4지표를 재계산한다. 증분이 아니라 재계산이라 언제 몇
+   * 번 돌려도 같은 결과가 나온다(골든 파일 테스트와 수동 '지금 집계' 버튼이 같은
+   * 값을 본다). 폐기된 신호의 기여는 스냅샷에 이미 들어 있으니 잊히지 않는다.
    */
   function aggregate() {
     const d = load()
@@ -271,48 +372,19 @@ function createTopicLedger({ ledgerPath, now = () => Date.now(), fsImpl = fs, lo
     all.sort((a, b) => a.t - b.t)
 
     const topics = {}
-    const events = { demote: 0, promote: 0, falseFreeze: 0, falseThaw: 0 }
+    for (const [id, t] of Object.entries(d.consolidated.topics)) topics[id] = { ...t, goldLabel: null }
 
-    for (const sig of all) {
-      if (!TOPIC_IDS.includes(sig.topic_id)) continue
-      const av = aversionScore(sig)
-      if (av == null) continue
-      const cur = topics[sig.topic_id] || (topics[sig.topic_id] = {
-        score: null, evidence: 0, state: 'pending', goldLabel: gold[sig.topic_id] || null, updatedAt: null
-      })
-      cur.score = emaStep(cur.score, av)
-      cur.evidence += 1
-      cur.updatedAt = sig.t
-      if (cur.evidence < BURN_IN) continue // 판단 보류 — 전이도 세지 않는다
-      // burn-in을 넘긴 순간의 출발점은 'neutral'이다. TH_LO~TH_HI 사이는
-      // 히스테리시스 구간이라 직전 상태를 유지한다.
-      const before = cur.state === 'pending' ? 'neutral' : cur.state
-      let next = before
-      if (cur.score >= TH_HI) next = 'frozen'
-      else if (cur.score <= TH_LO) next = 'thawed'
-      cur.state = next
-      if (next !== before) {
-        if (next === 'frozen') events.demote += 1
-        else if (next === 'thawed') events.promote += 1
-      }
-    }
+    foldSignals(topics, all)
 
     // 수동 라벨만 있고 신호가 아직 없는 화제도 목록에 남긴다(라벨 보존).
     for (const [id, label] of Object.entries(gold)) {
       if (!label) continue
-      if (!topics[id]) topics[id] = { score: null, evidence: 0, state: 'pending', goldLabel: label, updatedAt: null }
+      if (!topics[id]) topics[id] = emptyTopic()
     }
-
-    for (const [id, t] of Object.entries(topics)) {
-      const label = gold[id] || null
-      t.goldLabel = label
-      if (!label || t.state === 'pending') continue
-      if (t.state === 'frozen' && (label === 'neutral' || label === 'joke_ok')) events.falseFreeze += 1
-      if (t.state === 'thawed' && label === 'sensitive') events.falseThaw += 1
-    }
+    for (const [id, t] of Object.entries(topics)) t.goldLabel = gold[id] || null
 
     d.topics = topics
-    d.events = events
+    d.events = eventsFrom(topics)
     d.lastAggregatedAt = now()
     return flush()
   }
@@ -321,21 +393,26 @@ function createTopicLedger({ ledgerPath, now = () => Date.now(), fsImpl = fs, lo
     const d = load()
     if (!TOPIC_IDS.includes(topicId)) return { ok: false, error: 'unknown topic' }
     const normalized = GOLD_LABELS.includes(label) ? label : null
-    if (!d.topics[topicId]) {
-      d.topics[topicId] = { score: null, evidence: 0, state: 'pending', goldLabel: null, updatedAt: null }
-    }
+    if (!d.topics[topicId]) d.topics[topicId] = emptyTopic()
     d.topics[topicId].goldLabel = normalized
+    d.events = eventsFrom(d.topics) // 라벨이 바뀌면 falseFreeze/falseThaw도 바뀐다
     return flush()
   }
 
-  /** 항목 삭제 — 그 화제의 원시 신호와 집계 결과를 함께 지운다. */
+  /**
+   * 항목 삭제 — 그 화제의 원시 신호·집계 결과·응고분을 함께 지운다(삭제권).
+   * 전이 카운트는 화제별로 귀속돼 있으므로 전역 events를 다시 합산하면 삭제된
+   * 화제의 몫이 유령으로 남지 않는다.
+   */
   function removeTopic(topicId) {
     const d = load()
     delete d.topics[topicId]
+    delete d.consolidated.topics[topicId]
     for (const day of Object.keys(d.raw)) {
       d.raw[day] = d.raw[day].filter((s) => s.topic_id !== topicId)
       if (d.raw[day].length === 0) delete d.raw[day]
     }
+    d.events = eventsFrom(d.topics)
     return flush()
   }
 

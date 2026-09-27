@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "raw": {
     "2026-01-05": [
       {
@@ -270,16 +270,23 @@
       "score": 0.0375,
       "evidence": 15,
       "state": "thawed",
-      "goldLabel": null,
-      "updatedAt": 1767571228000
+      "demote": 0,
+      "promote": 1,
+      "updatedAt": 1767571228000,
+      "goldLabel": null
     },
     "work": {
       "score": 0.6743386243386243,
       "evidence": 14,
       "state": "frozen",
-      "goldLabel": null,
-      "updatedAt": 1767571604400
+      "demote": 1,
+      "promote": 0,
+      "updatedAt": 1767571604400,
+      "goldLabel": null
     }
+  },
+  "consolidated": {
+    "topics": {}
   },
   "events": {
     "demote": 1,
