@@ -240,6 +240,9 @@ class WarmupStatusResponse(BaseModel):
     files_enabled: Optional[bool] = None
     web_enabled: Optional[bool] = None
     web_provider: Optional[str] = None
+    # 로컬 학생 모델 id (ai_config.MODEL_ID). 설정 UI의 "로컬 (…)" 라벨이
+    # 이 값에서 파생된다 — 모델을 바꾸면 라벨이 따라오게(단일 출처).
+    model_id: Optional[str] = None
 
 
 # ── /tts ───────────────────────────────────────────────────────────────────

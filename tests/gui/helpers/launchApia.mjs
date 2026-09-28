@@ -142,6 +142,11 @@ export async function openSettingsWindow(app, mainWindow) {
     app.waitForEvent('window'),
     mainWindow.click('#settings-btn')
   ])
+  // 새 BrowserWindow의 첫 문서는 빈 about:blank다 — loadFile은 그 뒤에 온다.
+  // waitForLoadState만 걸면 그 빈 문서에서 즉시 resolve되고, 곧이어 오는
+  // settings.html 네비게이션이 실행 컨텍스트를 날려 바로 뒤의 evaluate가
+  // "Execution context was destroyed"로 터진다. 실제 URL을 기다린다.
+  await settingsWindow.waitForURL(/settings\.html$/)
   await settingsWindow.waitForLoadState('domcontentloaded')
   return settingsWindow
 }

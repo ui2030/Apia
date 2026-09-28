@@ -89,7 +89,12 @@ class EmbeddingService:
                 self._model = model
                 # Probe dimension from a real encode so callers can size BLOB
                 # storage correctly without hardcoding per-model.
-                self._dim = int(model.get_sentence_embedding_dimension())
+                # sentence-transformers 5.x가 get_sentence_embedding_dimension을
+                # get_embedding_dimension으로 개명(구명은 경고 후 6.x에서 제거).
+                get_dim = getattr(
+                    model, "get_embedding_dimension", model.get_sentence_embedding_dimension
+                )
+                self._dim = int(get_dim())
             except Exception as exc:  # noqa: BLE001 — boundary surface
                 self._error = f"{type(exc).__name__}: {exc}"
                 logger.exception("[embedding] load failed")

@@ -82,7 +82,9 @@ test('API key write→read→clear roundtrip lands in backend.env', async () => 
     await groqRow.locator('[data-input]').fill('gsk_e2e_test_value')
 
     // Save & close — `save()` then `window.close()`.
-    await settings.click('button.btn-purple') // "저장 및 적용"
+    // #save-btn으로 특정한다 — .btn-purple은 음성 복제 '만들기'(평소 disabled)와
+    // 겹쳐서, 첫 매치를 집으면 영영 클릭 가능해지지 않아 타임아웃 난다.
+    await settings.click('#save-btn') // "저장 및 적용"
 
     // backend.env should now exist in the tmp userData.
     const envPath = join(userData, 'backend-data', 'backend.env')
@@ -102,7 +104,7 @@ test('API key write→read→clear roundtrip lands in backend.env', async () => 
 
     // ── clear ─────────────────────────────────────────────────────────
     await groqRow2.locator('[data-clear]').click()
-    await settings.click('button.btn-purple')
+    await settings.click('#save-btn')
 
     await expect.poll(async () => {
       const text = await readFile(envPath, 'utf-8').catch(() => '')
@@ -140,7 +142,7 @@ test('backend.env file button reports ok (not missing) after a key was saved', a
     let settings = await openSettingsWindow(app, mainWindow)
     await settings.locator('.api-key-row[data-key="APIA_GROQ_KEY"] [data-input]')
       .fill('gsk_e2e_for_open_file')
-    await settings.click('button.btn-purple')
+    await settings.click('#save-btn')
 
     const envPath = join(userData, 'backend-data', 'backend.env')
     await expect.poll(() => existsSync(envPath), { timeout: 5_000 }).toBe(true)

@@ -20,6 +20,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
+from ai_config import MODEL_ID
 from routers import voice
 from routers.chat import claude
 from schemas import WarmupPostResponse, WarmupStatusResponse
@@ -163,4 +164,5 @@ async def warmup_status(request: Request):
         "web_provider": (
             web_service.provider if web_service is not None else None
         ),
+        "model_id": MODEL_ID,
     }

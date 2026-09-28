@@ -6,7 +6,10 @@ python-multipart==0.0.9
 # ── 로컬 학생 모델 실행 ──
 # 4.51 미만은 Qwen3 아키텍처를 모른다 — 기본 MODEL_ID(Qwen3-4B-Instruct-2507)가
 # 로드 자체에서 실패한다. 구모델(Qwen2.5)로 되돌릴 때도 이 하한은 문제없다.
-transformers>=4.51
+# 상한 <5: transformers 5.x는 huggingface_hub>=1.0을 끌어오는데, seed-vc 내장
+# BigVGAN의 from_pretrained 패치(voice_clone_service._patch_bigvgan_hub_compat)가
+# hub 0.x API 전제다. 상한이 없으면 `pip install -r`만으로 음성 복제가 죽는다.
+transformers>=4.51,<5
 accelerate>=0.27.0
 sentencepiece
 protobuf
@@ -34,21 +37,31 @@ numpy==1.26.0
 # 비활성화된다 (voice_clone_service.is_available 게이트). GPU 권장:
 # pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 # 주의: 패키징 exe(requirements-packaging.txt)에는 넣지 않는다 — 용량 수 GB.
+# `pip check`가 "seed-vc requires ipython"을 계속 띄우는데, 패키지 코드 어디에도
+# IPython import가 없다(데모 노트북용 허수 메타데이터). 설치하지 않는다.
 seed-vc
+# decorator: seed-vc → librosa의 하드 의존인데, librosa 휠이 이미 깔린 환경
+# (anaconda base 상속)에서는 pip가 librosa를 건드리지 않아 이것만 빠진 채로
+# 남는다. 그러면 `import seed_vc`(빈 __init__)는 통과하고 실제 모델 로드
+# 단계에서 ModuleNotFoundError로 죽는다 — 명시 의존으로 못 박는다.
+decorator>=5
 
 # ── 기타 API (선택) ──
 # httpx<0.28 : starlette TestClient는 httpx 0.28에서 제거된 `app=` kwarg를 쓴다
 # (fastapi 0.109/starlette 0.35 기준). 백엔드 런타임에선 영향 없지만 pytest 픽스처
 # (FastAPI TestClient)가 0.28+에서 깨지므로 함께 핀해둔다.
 httpx>=0.27.0,<0.28
-huggingface_hub>=0.21.0
+# hub 상한 <1.0 — 위 transformers<5와 같은 이유(seed-vc BigVGAN 패치가 0.x API).
+huggingface_hub>=0.21.0,<1.0
 anthropic>=0.18.0
 groq>=0.4.0
 
 # ── 임베딩 (장기 기억 / 파일 이해 / 웹 검색 결과 의미 비교) ──
 # sentence-transformers는 첫 실행 때 모델(~90MB)을 HuggingFace에서 다운받아
 # 캐시하고, 이후엔 오프라인으로도 동작한다. all-MiniLM-L6-v2가 기본.
-sentence-transformers>=2.7.0
+# 상한 <6: 6.x는 transformers>=5 / huggingface_hub>=1.3을 요구해 위 두 핀과
+# 정면충돌한다(음성 복제 동반 사망). 5.7은 transformers 4.53과 함께 돈다.
+sentence-transformers>=2.7.0,<6
 
 # ── 개발/테스트 (dist에는 포함 안 됨, requirements-packaging.txt 참고) ──
 pytest>=8.0.0
