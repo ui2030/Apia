@@ -85,7 +85,14 @@ const SETTINGS_DEFAULTS = Object.freeze({
   // A-3 야간 학습기가 쓸 파이썬. **백엔드 venv가 아니다** — 학습 스택(unsloth/trl)은
   // 검증 실험을 돌린 night-loop-lab venv에만 있고, 백엔드 venv에 또 깔면 torch가
   // 6.9GB 중복된다. 경로가 없으면 학습 기능 전체가 조용히 비활성.
-  trainingPythonPath: 'C:\\Users\\ui2030\\Documents\\night-loop-lab\\.venv\\Scripts\\python.exe'
+  trainingPythonPath: 'C:\\Users\\ui2030\\Documents\\night-loop-lab\\.venv\\Scripts\\python.exe',
+  // 선톡(먼저 말 걸기). **기본 OFF** — 사용자가 먼저 부르지 않았는데 말을 거는
+  // 기능이니 본인이 켜야 한다(우선순위 낮은 편의 기능). 켜면 하루 1회, 재석
+  // 중이고 대화 중이 아닐 때만 한 줄 건다.
+  proactiveOpenerEnabled: false,
+  proactiveOpenerFrequency: 'daily', // 'daily'(하루 1회) | 'biDaily'(이틀 1회)
+  // 음성 듣기(마이크). **기본 OFF** — 마이크는 사용자가 명시적으로 켜야 한다.
+  micEnabled: false
 })
 
 const BACKEND_ENV_EXAMPLE_FILENAME = 'backend.env.example'
@@ -221,6 +228,13 @@ class SettingsRepository {
     settings.useWebDefault = settings.useWebDefault === true
     // 기본 ON — 구버전 settings.json(키 없음)도 켜진 채로 하이드레이트된다.
     settings.coursewareReferenceEnabled = settings.coursewareReferenceEnabled !== false
+    // 선톡·마이크 둘 다 기본 OFF(먼저 말 걸기·듣기는 옵트인). 빈도는 모르는
+    // 값이면 'daily'로 눕힌다.
+    settings.proactiveOpenerEnabled = settings.proactiveOpenerEnabled === true
+    if (settings.proactiveOpenerFrequency !== 'daily' && settings.proactiveOpenerFrequency !== 'biDaily') {
+      settings.proactiveOpenerFrequency = SETTINGS_DEFAULTS.proactiveOpenerFrequency
+    }
+    settings.micEnabled = settings.micEnabled === true
     settings.trainingPythonPath = typeof settings.trainingPythonPath === 'string'
       ? settings.trainingPythonPath
       : SETTINGS_DEFAULTS.trainingPythonPath

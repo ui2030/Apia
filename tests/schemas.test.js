@@ -82,6 +82,28 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, aiMode: 'ollama_vlm' }).success).toBe(false)
   })
 
+  // 선톡 + 마이크(발주서 9). 전부 optional이라 구버전 settings.json은 통과하고,
+  // 값이 오면 타입/enum을 강제한다.
+  it('accepts proactive opener + mic fields', () => {
+    const ok = {
+      ...DEFAULT_SETTINGS,
+      proactiveOpenerEnabled: true,
+      proactiveOpenerFrequency: 'biDaily',
+      micEnabled: false
+    }
+    expect(SettingsSchema.safeParse(ok).success).toBe(true)
+  })
+
+  it('rejects an unknown proactiveOpenerFrequency value', () => {
+    const bad = { ...DEFAULT_SETTINGS, proactiveOpenerFrequency: 'hourly' }
+    expect(SettingsSchema.safeParse(bad).success).toBe(false)
+  })
+
+  it('rejects a non-boolean micEnabled', () => {
+    const bad = { ...DEFAULT_SETTINGS, micEnabled: 'on' }
+    expect(SettingsSchema.safeParse(bad).success).toBe(false)
+  })
+
   it('rejects out-of-range memoryTurns', () => {
     const bad = { ...DEFAULT_SETTINGS, memoryTurns: 100 }
     expect(SettingsSchema.safeParse(bad).success).toBe(false)

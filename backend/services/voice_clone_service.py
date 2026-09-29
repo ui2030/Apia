@@ -37,7 +37,11 @@ _load_error: str | None = None
 _health_checked: bool | None = None
 
 OUTPUT_SR = 22050  # seed-vc v1 (f0_condition=False) bigvgan 출력 샘플레이트
-DIFFUSION_STEPS = 10  # 품질/지연 균형 — wrapper 기본값과 동일
+# 디퓨전 스텝 = 음질/지연 레버. 10은 wrapper 기본값이고, 올리면 잡음(기계음)이
+# 줄지만 변환 시간이 거의 선형으로 늘어 CLONE_TIMEOUT_SEC(20s)를 넘길 수 있다.
+# 환경변수로 뺀 이유는 실기에서 귀로 비교해 고를 값이기 때문 — 실측은
+# scripts/voice-quality-lab.py, 기본값 변경은 실청취 후에.
+DIFFUSION_STEPS = int(os.getenv("APIA_SEEDVC_DIFFUSION_STEPS", "") or 10)
 
 
 def _import_engine():

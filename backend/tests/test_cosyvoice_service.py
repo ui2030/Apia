@@ -406,7 +406,7 @@ def make_tts() -> TTSService:
     svc._pyttsx3 = MagicMock()
     svc.engine_type = "edge"
 
-    async def _edge(text, voice):
+    async def _edge(text, voice, prosody=None):
         return b"edge-audio"
 
     svc._synthesize_edge = _edge
@@ -434,7 +434,7 @@ def test_tts_falls_back_when_worker_fails(monkeypatch):
 def test_tts_falls_back_when_edge_reference_generation_fails(monkeypatch):
     svc = make_tts()
 
-    async def _dead_edge(text, voice):
+    async def _dead_edge(text, voice, prosody=None):
         raise RuntimeError("offline")
 
     svc._synthesize_edge = _dead_edge
@@ -454,7 +454,7 @@ def test_tts_generates_default_reference_once(monkeypatch, tmp_path):
         seen["prompt_text"] = prompt_text
         return make_wav(), "audio/wav"
 
-    async def _edge(text, voice):
+    async def _edge(text, voice, prosody=None):
         edge_calls.append(text)
         return b"edge-audio"
 

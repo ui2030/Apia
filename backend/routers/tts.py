@@ -18,7 +18,7 @@ router = APIRouter()
 async def tts(req: TTSRequest):
     tts_service = await get_tts()
     audio_bytes, mime, fallback = await tts_service.synthesize(
-        req.text, req.voice_id, req.engine
+        req.text, req.voice_id, req.engine, req.emotion
     )
     # fallback=True: 요청한 음성(주로 custom 복제 음성)이 아닌 대체 음성으로
     # 합성됨 — 프런트가 "기본 음성으로 말했어요"를 안내할 수 있게 헤더로.

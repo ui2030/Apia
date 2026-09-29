@@ -405,7 +405,7 @@ function finalizeStream(reply, emotion, citations, speak) {
     _applyEmotion?.(emotion)
     const talkMotion = _getTalkMotion?.({ emotion, text: reply })
     // fire-and-forget: composer already unlocked, TTS/lipsync plays in background.
-    speakText(reply, talkMotion)
+    speakText(reply, talkMotion, { emotion })
   }
 }
 
@@ -445,11 +445,13 @@ const _speechQueue = createSpeechQueue()
 // priority — 'user'는 사용자에게 답하는 말이라 무엇이든 끊고 반드시 나간다.
 // 'ambient'는 관전 코멘트 같은 혼잣말이라 **사용자 발화를 절대 끊지 않고**,
 // 앞선 혼잣말만 갈아치운다. 큐가 밀리면 낡은 혼잣말은 스스로 빠진다.
-function speakText(text, talkMotion = null, { priority = 'user', sfx = null } = {}) {
+// emotion — 이 발화의 감정 라벨. 백엔드가 이모지·마크다운을 소리에서 걷어내면서
+// 그 감정을 목소리 톤(피치·속도)으로 옮기는 데 쓴다. 없으면 텍스트에서 추정된다.
+function speakText(text, talkMotion = null, { priority = 'user', sfx = null, emotion = null } = {}) {
   if (!window.api) return Promise.resolve()
   if (!state.ttsEnabled) return Promise.resolve()
   if (priority === 'user' || state.speakingPriority === 'ambient') stopSpeakingNow()
-  return _speechQueue(() => _speakOnce(text, talkMotion, priority, sfx), { priority })
+  return _speechQueue(() => _speakOnce(text, talkMotion, priority, sfx, emotion), { priority })
 }
 
 // M2 — [SFX:x] 클립. 같은 Edge-TTS 목소리로 의성어를 미리 합성해 캐시한다:
@@ -491,7 +493,7 @@ function playClip(r) {
   })
 }
 
-async function _speakOnce(text, talkMotion = null, priority = 'user', sfx = null) {
+async function _speakOnce(text, talkMotion = null, priority = 'user', sfx = null, emotion = null) {
   let didEnterTalk = false
   state.speakingPriority = priority
 
@@ -503,7 +505,7 @@ async function _speakOnce(text, talkMotion = null, priority = 'user', sfx = null
       if (clip) await playClip(clip)
     }
     if (!text) return
-    const r = await window.api.tts(text, state.voiceId)
+    const r = await window.api.tts(text, state.voiceId, emotion)
 
     if (r?.disabled) {
       return

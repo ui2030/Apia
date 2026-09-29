@@ -254,6 +254,10 @@ class TTSRequest(BaseModel):
     # opt-in 엔진 선택. None/"default" = 기존 체인(edge→pyttsx3→silent).
     # "cosyvoice" = 로컬 CosyVoice3 음성 복제(실패 시 기존 체인으로 폴백).
     engine: Optional[str] = None
+    # 이 발화의 감정 라벨(happy/sad/angry/surprised/relaxed/neutral). 응답의
+    # [EMOTION:] 태그에서 온다 — 운율(rate/pitch)을 고르는 1순위 단서.
+    # 없으면 텍스트 단서(ㅋㅋ·!·이모지)로 추정한다.
+    emotion: Optional[str] = None
 
 
 # ── /stt ───────────────────────────────────────────────────────────────────

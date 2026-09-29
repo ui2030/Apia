@@ -108,6 +108,25 @@ describe('normalize', () => {
     expect(repo.normalize({ coursewareReferenceEnabled: 'no' }).coursewareReferenceEnabled).toBe(true)
   })
 
+  it('먼저 말 걸기 · 마이크는 둘 다 기본 OFF (옵트인)', () => {
+    // 부르지 않았는데 말 걸기, 말하지 않았는데 듣기 — 둘 다 사용자가 직접
+    // 켜야 한다. 구버전 settings.json(키 없음)도 꺼진 채로 하이드레이트된다.
+    const repo = createRepo()
+    expect(repo.normalize().proactiveOpenerEnabled).toBe(false)
+    expect(repo.normalize().micEnabled).toBe(false)
+    expect(repo.normalize({ proactiveOpenerEnabled: true }).proactiveOpenerEnabled).toBe(true)
+    expect(repo.normalize({ micEnabled: true }).micEnabled).toBe(true)
+    // 문자열 'true' 같은 헐렁한 값은 켜진 것으로 보지 않는다.
+    expect(repo.normalize({ proactiveOpenerEnabled: 'yes' }).proactiveOpenerEnabled).toBe(false)
+    expect(repo.normalize({ micEnabled: 'on' }).micEnabled).toBe(false)
+  })
+
+  it('알 수 없는 선톡 빈도는 daily로 눕힌다', () => {
+    const repo = createRepo()
+    expect(repo.normalize({ proactiveOpenerFrequency: 'hourly' }).proactiveOpenerFrequency).toBe('daily')
+    expect(repo.normalize({ proactiveOpenerFrequency: 'biDaily' }).proactiveOpenerFrequency).toBe('biDaily')
+  })
+
   it('rejects an unknown aiMode and falls back to default', () => {
     const repo = createRepo()
     expect(repo.normalize({ aiMode: 'gpt5' }).aiMode).toBe(SETTINGS_DEFAULTS.aiMode)

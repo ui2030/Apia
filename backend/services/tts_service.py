@@ -20,6 +20,8 @@ import asyncio
 import io
 import threading
 
+from services import speech_text
+
 # 정적 큐레이션 — edge_tts.list_voices()는 네트워크 호출이라 /voices 콜드패스에
 # 두지 않는다. 한국어 신경망 음성 3종이면 선택지로 충분하고, id 스킴
 # "edge:<ShortName>"이라 추가는 한 줄이다.
@@ -114,16 +116,25 @@ class TTSService:
         return DEFAULT_EDGE_VOICE
 
     async def synthesize(
-        self, text: str, voice_id: str = None, engine: str = None
+        self, text: str, voice_id: str = None, engine: str = None,
+        emotion: str = None
     ) -> tuple[bytes, str, bool]:
         """(audio, mime, fallback) — fallback=True는 "요청한 음성이 아닌
         대체 음성으로 말했다"는 뜻 (custom 변환 실패/미준비). 라우터가
         X-Apia-Tts-Fallback 헤더로 흘려 프런트가 정직하게 안내한다."""
+        # 유일한 정화·운율 지점. 아래 모든 엔진 경로(edge/pyttsx3/custom/cosyvoice)가
+        # 여기를 지나므로 호출자마다 정화를 반복하지 않는다. 말풍선 원문은 채팅
+        # 응답 쪽에 그대로 남아 있고 이 정화는 소리에만 적용된다.
+        text, rate, pitch = speech_text.speech_plan(text, emotion)
+        # 이모지·기호만 있던 응답 → 읽을 게 없다. 무음으로 침묵한다(엔진에
+        # 빈 문자열을 넘기면 edge는 예외, pyttsx3는 빈 wav로 갈려 로그만 더럽다).
+        if not text:
+            return self._silent_wav(0.2), "audio/wav", False
         if engine == "cosyvoice":
             return await self._synthesize_cosyvoice(text)
         if voice_id and str(voice_id).startswith("custom:"):
-            return await self._synthesize_custom(text, str(voice_id))
-        audio, mime = await self.synthesize_base(text, voice_id)
+            return await self._synthesize_custom(text, str(voice_id), (rate, pitch))
+        audio, mime = await self.synthesize_base(text, voice_id, (rate, pitch))
         return audio, mime, False
 
     async def _synthesize_cosyvoice(self, text: str) -> tuple[bytes, str, bool]:
@@ -180,7 +191,9 @@ class TTSService:
         print(f"[TTS] cosyvoice default reference generated: {cosy.DEFAULT_PROMPT_WAV}")
         return cosy.DEFAULT_PROMPT_WAV
 
-    async def _synthesize_custom(self, text: str, voice_id: str) -> tuple[bytes, str, bool]:
+    async def _synthesize_custom(
+        self, text: str, voice_id: str, prosody: tuple[str, str] = None
+    ) -> tuple[bytes, str, bool]:
         """custom:<voice_dir> — Edge 합성 후 seed-vc로 음색 변환.
 
         변환이 불가능한 모든 경우(미설치·참조 없음·모델 미로드·변환 실패)
@@ -192,7 +205,9 @@ class TTSService:
         from services import voice_manager
 
         dir_id = voice_id[len("custom:"):]
-        base_audio, base_mime = await self.synthesize_base(text)
+        # 운율은 Edge 합성(발음·억양 담당) 단계에 들어간다 — seed-vc는 음색만
+        # 바꾸므로 여기서 실린 억양이 변환 후에도 남는다.
+        base_audio, base_mime = await self.synthesize_base(text, None, prosody)
 
         if not voice_manager.validate_voice_dir(dir_id) or not clone.is_available():
             print(f"[TTS] custom voice unavailable ({voice_id}), fallback")
@@ -218,15 +233,23 @@ class TTSService:
             print(f"[TTS] clone conversion failed, fallback: {error}")
             return base_audio, base_mime, True
 
-    async def synthesize_base(self, text: str, voice_id: str = None) -> tuple[bytes, str]:
+    async def synthesize_base(
+        self, text: str, voice_id: str = None, prosody: tuple[str, str] = None
+    ) -> tuple[bytes, str]:
         """엔진 우선순위 edge→pyttsx3→silent (custom 변환의 입력이자
-        직접 선택 음성의 출력)."""
+        직접 선택 음성의 출력).
+
+        prosody=(rate, pitch)는 edge 경로에만 실린다 — pyttsx3는 문장 단위
+        피치 조절이 없고(폴백은 "발화 생존"이 목적), cosyvoice는 별 엔진이다.
+        """
         wants_system = bool(voice_id) and str(voice_id).startswith("system:")
 
         if self._edge_available and not wants_system:
             try:
                 data = await asyncio.wait_for(
-                    self._synthesize_edge(text, self._resolve_edge_voice(voice_id)),
+                    self._synthesize_edge(
+                        text, self._resolve_edge_voice(voice_id), prosody
+                    ),
                     timeout=EDGE_TIMEOUT_SEC,
                 )
                 # 렌더러가 비짐을 뽑으려면 wav여야 한다(모듈 docstring 참조).
@@ -270,10 +293,13 @@ class TTSService:
             print(f"[TTS] mp3->wav decode unavailable, lipsync falls back: {error}")
             return data, "audio/mpeg"
 
-    async def _synthesize_edge(self, text: str, voice: str) -> bytes:
+    async def _synthesize_edge(
+        self, text: str, voice: str, prosody: tuple[str, str] = None
+    ) -> bytes:
         import edge_tts
 
-        communicate = edge_tts.Communicate(text, voice)
+        rate, pitch = prosody or ("+0%", "+0Hz")
+        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
         chunks = []
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":

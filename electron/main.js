@@ -1,4 +1,4 @@
-const { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, screen, shell, Tray } = require('electron')
+const { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, Tray } = require('electron')
 app.commandLine.appendSwitch('allow-file-access-from-files')
 
 const path = require('path')
@@ -80,6 +80,11 @@ const {
   createCoursewareJob,
   attachReferenceCards
 } = require('./services/courseware')
+const {
+  createOpenerStore,
+  decideOpener,
+  pickTopic: pickOpenerTopic
+} = require('./services/proactiveOpener')
 const {
   DEADLINE_SEC: TRAINING_DEADLINE_SEC,
   RETURN_IDLE_SEC: TRAINING_RETURN_IDLE_SEC,
@@ -448,6 +453,232 @@ function stopCoursewareJob() {
   }
 }
 
+// ── 선톡(먼저 말 걸기) + 마이크(음성 입력 1단계) ─────────────────────────────
+//
+// 선톡: 하루 1회, 재석 중이고 대화 중이 아닐 때 Apia가 먼저 한 줄 건다. 화제는
+// 눈치 원장의 편한(thawed/neutral) 화제 + 교재 참조에서 고르고, 민감(frozen)은
+// 제외한다. 무응답도 신호 — 5분 무응답이면 그 화제에 회피 신호 1건을 남긴다.
+// 마이크: 원음 무저장(전사만), 제3자 음성 동의는 세션 단위·기본 OFF.
+const OPENER_STATE_PATH = path.join(app.getPath('userData'), 'apia-proactive-opener.json')
+const openerStore = createOpenerStore({ statePath: OPENER_STATE_PATH, log: { warn: logWarn } })
+
+// presence 피드가 갱신하는 최신 유휴초(재석 판정용). 피드가 꺼진 E2E에선 undefined로
+// 남아 자동 발화가 안 뜬다 — 테스트는 opener:fireNow(force)로 직접 쏜다.
+let lastIdleSec
+let lastUserMessageAt = 0        // 대화 중 판정용
+let openerPending = null         // 발화 후 응답/무시가 안 갈린 선톡 { topicId }
+let openerIgnoreTimer = null
+// 무응답 판정 대기. E2E는 짧게 줄여 무시→눈치 하락 경로를 몇 초 안에 검증한다.
+const OPENER_IGNORE_MS = Number(process.env.APIA_E2E_OPENER_IGNORE_MS) || 5 * 60000
+const PRESENT_MAX_IDLE_SEC = 300
+
+function safeLedgerState() {
+  try { return ledger.getState() } catch { return { topics: [] } }
+}
+function isMidConversation() {
+  try { if (ledgerTracker.hasPending()) return true } catch {}
+  return Date.now() - lastUserMessageAt < 10 * 60000
+}
+
+// 사용자가 직접 말을 보내면 대화 중으로 표시하고, 대기 중이던 선톡은 '응답'으로 확정.
+function onUserChatActivity() {
+  lastUserMessageAt = Date.now()
+  if (openerPending) {
+    if (openerIgnoreTimer) { clearTimeout(openerIgnoreTimer); openerIgnoreTimer = null }
+    openerPending = null
+    try { openerStore.noteReplied() } catch {}
+  }
+}
+
+function armOpenerIgnore(topicId) {
+  if (openerIgnoreTimer) clearTimeout(openerIgnoreTimer)
+  openerPending = { topicId: topicId || null, at: Date.now() }
+  openerIgnoreTimer = setTimeout(() => {
+    openerIgnoreTimer = null
+    const p = openerPending
+    openerPending = null
+    if (!p) return
+    // 무응답은 선톡 자신의 카운터에만 남긴다. 눈치 원장에는 **쓰지 않는다** —
+    // 원장은 실제로 관측한 교환만 담는 계측 기록이고, 여기서 만들 수 있는 건
+    // "지연 30초·호응 0"처럼 우리가 지어낸 수치다. 합성 신호를 섞으면 원장의
+    // 점수가 관측이 아니라 우리 추측을 반영하게 된다(계측 전용 원칙 위반).
+    try { openerStore.noteIgnored() } catch {}
+  }, OPENER_IGNORE_MS)
+  if (openerIgnoreTimer.unref) openerIgnoreTimer.unref()
+}
+
+// 선톡 텍스트를 독립 채팅창으로 보낸다(showInactive — 포커스는 뺏지 않는다).
+function deliverOpener(payload) {
+  try {
+    const win = ensureChatWindow()
+    const send = () => {
+      try { if (!win.isVisible()) win.showInactive() } catch {}
+      try { win.webContents.send('opener:say', payload) } catch {}
+    }
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send)
+    else send()
+  } catch (error) { logWarn('[OPENER_DELIVER_FAILED]', error?.message || error) }
+}
+
+async function fireOpener({ force = false } = {}) {
+  const settings = loadSettings()
+  const snap = openerStore.getState()
+  const decision = decideOpener({
+    now: Date.now(),
+    ledgerState: safeLedgerState(),
+    lastOpenerAt: snap.lastOpenerAt,
+    lastTopicId: snap.lastTopicId,
+    midConversation: isMidConversation(),
+    idleSec: lastIdleSec,
+    enabled: settings.proactiveOpenerEnabled === true, // 기본 OFF — 옵트인
+    frequency: settings.proactiveOpenerFrequency || 'daily'
+  })
+  if (!force && !decision.fire) return { fired: false, reason: decision.reason }
+  // decideOpener는 disabled/away/too-soon이면 화제 계산 전에 조기 반환한다. 강제
+  // 발화(설정 '지금 보내기'·테스트)는 그 게이트를 넘기므로 화제를 따로 고른다.
+  const topic = decision.topic || (force ? pickOpenerTopic(safeLedgerState(), snap.lastTopicId) : null)
+  let text = ''
+  let emotion = 'neutral'
+  try {
+    await backend.ensureAvailableForRequest()
+    const label = topic?.label || null
+    const message = label
+      ? `지금 사용자에게 네가 먼저 가볍게 말을 거는 상황이야. '${label}' 관련해서 자연스럽고 짧은 안부나 질문을 딱 한 문장만 해. 과거 기록을 인용하지 말고(예: "제 기록에 따르면" 같은 말 금지) 친구처럼 편하게 말해.`
+      : '지금 사용자에게 네가 먼저 가볍게 안부를 건네는 상황이야. 짧고 자연스러운 한 문장만. 기록을 인용하지 마.'
+    const body = attachReferenceCards(
+      { message, history: [], ai_mode: settings.aiMode, memory_turns: settings.memoryTurns, use_web: false },
+      courseware, settings.coursewareReferenceEnabled !== false
+    )
+    const res = await requestBackendJson('/chat', {
+      method: 'POST', timeout: chatTimeoutFor(settings.aiMode), body
+    })
+    text = String(res?.reply || '').trim()
+    if (res?.emotion) emotion = res.emotion
+  } catch (error) {
+    logWarn('[OPENER_GENERATE_FAILED]', error?.message || error)
+    return { fired: false, reason: 'generate-failed', error: error?.message || String(error) }
+  }
+  if (!text) return { fired: false, reason: 'empty' }
+  openerStore.noteSent(topic?.id || null)
+  deliverOpener({ text, emotion, topicId: topic?.id || null })
+  armOpenerIgnore(topic?.id || null)
+  return { fired: true, topic: topic?.id || null, text }
+}
+
+let openerTimer = null
+const OPENER_POLL_MS = 5 * 60000
+function startOpenerJob() {
+  if (openerTimer) return
+  openerTimer = setInterval(() => {
+    fireOpener().catch((error) => logWarn('[OPENER_JOB_WARN]', error?.message || error))
+  }, OPENER_POLL_MS)
+  if (openerTimer.unref) openerTimer.unref()
+}
+function stopOpenerJob() {
+  if (openerTimer) { clearInterval(openerTimer); openerTimer = null }
+  if (openerIgnoreTimer) { clearTimeout(openerIgnoreTimer); openerIgnoreTimer = null }
+}
+
+ipcMain.handle('opener:getState', () => {
+  try { return openerStore.getState() } catch (error) { return { error: error?.message || String(error) } }
+})
+ipcMain.handle('opener:fireNow', async () => {
+  try { return await fireOpener({ force: true }) } catch (error) { return { error: error?.message || String(error) } }
+})
+
+// ── 마이크: 세션 동의 게이트 + STT 중계 + 상태 카운트 ────────────────────────
+//
+// 제3자 음성 동의는 **세션 단위·기본 OFF**다. 변수라 앱을 다시 켜면 자동으로 꺼진다
+// (상시 켜둠 방지). 이 게이트가 OFF면 use #2(혼잣말→교재)는 아예 동작하지 않는다.
+let micThirdPartyConsent = false
+const MIC_AMBIENT_ENABLED = process.env.APIA_MIC_AMBIENT === '1'
+
+let micConsentDate = null
+let micTranscriptCount = 0 // status용(세션 카운트). 원문·원음은 세지도 남기지도 않는다.
+
+ipcMain.handle('mic:getState', () => ({
+  consent: micThirdPartyConsent,
+  consentDate: micConsentDate,
+  transcripts: micTranscriptCount,
+  present: Number.isFinite(lastIdleSec) ? lastIdleSec < PRESENT_MAX_IDLE_SEC : false,
+  // 제3자 청취(use #2)가 격리 상태인가 — 설정 창이 동의 행을 감출지 판단한다.
+  ambientIsolated: !MIC_AMBIENT_ENABLED
+}))
+
+ipcMain.handle('mic:setConsent', async (e, { on } = {}) => {
+  if (!on) { micThirdPartyConsent = false; return { consent: false, consentDate: micConsentDate } }
+  // 네이티브 확인 — 렌더러 confirm은 IPC를 직접 부르면 건너뛸 수 있는 장식이라
+  // 실제 게이트를 여기 둔다(기본 버튼 = 취소).
+  let confirmed = false
+  try {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const { response } = await dialog.showMessageBox(win || undefined, {
+      type: 'warning',
+      buttons: ['취소', '동의함'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '제3자 음성 동의',
+      message: '함께 있는 사람들의 동의를 받았습니까?',
+      detail: '상대방의 음성이 전사·학습에 쓰일 수 있습니다. 이 설정은 이번 실행 동안만 유지되고, 앱을 다시 켜면 자동으로 꺼집니다.'
+    })
+    confirmed = response === 1
+  } catch { confirmed = false }
+  micThirdPartyConsent = confirmed
+  if (confirmed) micConsentDate = new Date().toISOString().slice(0, 10)
+  return { consent: micThirdPartyConsent, consentDate: micConsentDate }
+})
+
+// STT 중계 — 렌더러가 VAD로 자른 발화 WAV를 받아 백엔드 로컬 whisper로 **전사만**
+// 하고 텍스트를 돌려준다. 원음은 디스크에 쓰지 않는다(메모리 버퍼→multipart→응답 후 GC).
+ipcMain.handle('stt:transcribe', async (e, { wav } = {}) => {
+  try {
+    if (!wav) return { text: '' }
+    await backend.ensureAvailableForRequest()
+    const form = new FormData()
+    form.append('file', new Blob([Buffer.from(wav)], { type: 'audio/wav' }), 'speech.wav')
+    const { controller, timer } = makeTimeoutController(60000)
+    try {
+      const response = await fetch(`${getBackendUrl()}/stt/transcribe`, {
+        method: 'POST', body: form, signal: controller.signal
+      })
+      if (!response.ok) return { text: '', error: response.statusText }
+      const data = await response.json()
+      const text = String(data?.text || '').trim()
+      // whisper 미설치/미로드 안내 문자열은 채팅으로 흘리지 않는다.
+      if (!text || text.startsWith('(Whisper')) return { text: '', unavailable: text.startsWith('(Whisper') }
+      micTranscriptCount += 1
+      return { text }
+    } finally { clearTimeout(timer) }
+  } catch (error) {
+    return { text: '', error: error?.message || String(error) }
+  }
+})
+
+// use #2 — 관전/유휴 중 혼잣말을 교재 재료로.
+//
+// **격리됨(기본 비활성).** 이 경로는 프라이버시 기준 두 개를 못 넘었다:
+//   ① 표시등 — 채팅창이 숨어 있을 때 듣는 용도인데, 표시등이 그 창에 있다.
+//      "듣고 있는지 화면으로 알 수 없는 청취"는 동의 문구로 대신할 수 없다.
+//   ② 원문 무저장 — 오디오 원음은 안 남기지만 **전사 텍스트를 교재에 적는다**.
+//      그 텍스트가 곁에 있던 제3자의 말일 수 있다.
+// 그래서 렌더러는 이제 이 IPC를 부르지 않고(창이 숨으면 캡처 자체가 멈춘다),
+// 핸들러도 APIA_MIC_AMBIENT=1 없이는 아무것도 저장하지 않는다. 설계가 정리되면
+// 플래그를 떼고 "듣는 중" 표시를 창 밖(트레이/오버레이)으로 옮기는 게 선행 조건.
+ipcMain.handle('mic:ambient', (e, { text } = {}) => {
+  if (!MIC_AMBIENT_ENABLED) return { stored: false, reason: 'isolated' }
+  const t = String(text || '').trim()
+  if (!t) return { stored: false }
+  if (!micThirdPartyConsent) return { stored: false, reason: 'no-consent' }
+  if (!(Number.isFinite(lastIdleSec) && lastIdleSec < PRESENT_MAX_IDLE_SEC)) {
+    return { stored: false, reason: 'away' }
+  }
+  try { courseware.appendExchange({ u: t, a: '' }) } catch (error) {
+    logWarn('[MIC_AMBIENT_APPEND_FAILED]', error?.message || error)
+    return { stored: false, reason: 'error' }
+  }
+  return { stored: true }
+})
+
 // ── 야간 학습기 + 그림자 모드 (A-3) ─────────────────────────────────────────
 //
 // 교재(A-1)를 실제로 로컬 학생 모델에 새기는 주 1회 재학습과, 그렇게 배운
@@ -809,6 +1040,7 @@ const CLAUDE_CODE_AUX_TIMEOUT = 30000
 
 ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
   ledgerTracker.noteUserMessage(message) // 계측 — 동기·비차단
+  onUserChatActivity()                    // 선톡 응답 확정 + 대화 중 표시
   try {
     await backend.ensureAvailableForRequest()
     const settings = loadSettings()
@@ -886,6 +1118,7 @@ async function* parseSSEFrames(body) {
 
 ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) => {
   ledgerTracker.noteUserMessage(message) // 계측 — 동기·비차단
+  onUserChatActivity()                    // 선톡 응답 확정 + 대화 중 표시
   const sender = event.sender
   const wcId = sender.id
 
@@ -1124,7 +1357,7 @@ ipcMain.handle('spectate:tick', async (e, context) => {
   }
 })
 
-ipcMain.handle('tts', async (e, { text, voice_id }) => {
+ipcMain.handle('tts', async (e, { text, voice_id, emotion }) => {
   try {
     await backend.ensureAvailableForRequest()
     const settings = loadSettings()
@@ -1145,7 +1378,9 @@ ipcMain.handle('tts', async (e, { text, voice_id }) => {
     const response = await requestBackend('/tts', {
       method: 'POST',
       timeout: engine ? 240000 : 30000,
-      body: { text, voice_id: voice_id ?? settings.voiceId ?? null, engine }
+      // emotion은 운율(rate/pitch)용 — 백엔드가 이모지·마크다운을 정화하면서
+      // 그 감정 정보를 목소리 톤으로 옮긴다. 없으면 텍스트에서 추정한다.
+      body: { text, voice_id: voice_id ?? settings.voiceId ?? null, engine, emotion: emotion ?? null }
     })
     const audio = Buffer.from(await response.arrayBuffer())
     return {
@@ -1761,6 +1996,13 @@ app.whenReady().then(async () => {
 
   registryService.ensureRegistry()
   settingsRepo.ensureRuntimeFiles()
+
+  // 마이크 권한 — 로컬 앱(원격 콘텐츠 없음)이라 getUserMedia 요청을 허용한다.
+  // 핸들러를 안 걸면 일부 환경에서 media 권한 체크가 거부돼 음성 입력이 죽는다.
+  try {
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => callback(true))
+    session.defaultSession.setPermissionCheckHandler(() => true)
+  } catch (error) { logWarn('[PERMISSION_HANDLER_WARN]', error?.message || error) }
   // ensureRunning() short-circuits when APIA_E2E_DISABLE_BACKEND=1 is set,
   // so this single call covers both production startup and the e2e skip.
   if (APIA_E2E_DISABLE_BACKEND) {
@@ -1795,6 +2037,7 @@ app.whenReady().then(async () => {
   startLedgerDailyJob()
   startCoursewareJob()
   startNightSchoolJob()
+  startOpenerJob()
 
   // Phase F1: drop the main overlay into the Windows wallpaper layer (behind
   // desktop icons). Codex MUST-FIX: lazy + graceful — if the native module
@@ -1861,6 +2104,7 @@ function startPresenceFeed() {
     // 같은 유휴초 피드를 원장도 본다 — 응답 대기 중 부재가 관측되면 그 교환의
     // 지연 신호를 무효화한다(자리를 비운 것은 회피가 아니다).
     ledgerTracker.notePresence(idleSec)
+    lastIdleSec = idleSec // 선톡 재석 판정 + 마이크 use #2 게이트가 본다
     const main = windows.getMain()
     if (!main || main.isDestroyed()) return
     try { main.webContents.send('presence:idle', { idleSec }) } catch {}
@@ -2283,6 +2527,27 @@ function ensureChatWindow() {
     }
   })
 
+  // 마이크 프라이버시 게이트 — 창이 보이는지는 **main만 확실히 안다**.
+  // 렌더러의 document.visibilityState는 환경(디버거 연결 등)에 따라 'visible'로
+  // 굳어 있을 수 있어, 그걸 믿으면 "숨었는데 계속 듣는" 창이 생긴다.
+  // 그래서 여기서 직접 알린다: 이 신호가 캡처 on/off와 표시등의 단일 출처다.
+  const notifyChatVisibility = (visible) => {
+    try {
+      if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.webContents.send('chat:visibility', { visible })
+      }
+    } catch {}
+  }
+  for (const [event, visible] of [['show', true], ['restore', true], ['focus', true],
+    ['hide', false], ['minimize', false], ['close', false]]) {
+    chatWindow.on(event, () => notifyChatVisibility(visible))
+  }
+  // 로드/리로드 직후에도 실제 표시 상태를 한 번 밀어준다 — 렌더러는 fail-closed
+  // 기본값(false)에서 시작하므로, 이 신호가 와야 보이는 창의 캡처가 열린다.
+  chatWindow.webContents.on('did-finish-load', () => {
+    notifyChatVisibility(chatWindow.isVisible())
+  })
+
   // Closing the X button should hide, not destroy — keeps reopen instant.
   chatWindow.on('close', (event) => {
     if (!quittingApia && chatWindow && !chatWindow.isDestroyed()) {
@@ -2417,6 +2682,7 @@ function shutdownOnce() {
     stopPresenceFeed()
     stopLedgerDailyJob()
     stopCoursewareJob()
+    stopOpenerJob()
     // 학습 자식이 실제로 끝날 때까지 기다린다(상한 TRAINER_GRACE_MS).
     try { await stopNightSchoolJob() } catch (error) { logWarn('[TRAINING_SHUTDOWN_WARN]', error?.message || error) }
     // 종료 = 대화 종료. 확정 안 된 마지막 교환은 버리고(종료≠회피) 일일 집계를

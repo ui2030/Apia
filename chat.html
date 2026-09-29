@@ -117,6 +117,9 @@
     .icon-btn:hover { background: rgba(124,58,237,0.55); }
     .icon-btn:active { transform: scale(0.95); }
     .icon-btn:disabled { opacity: 0.45; cursor: default; }
+    /* 듣는 중 인디케이터 — 마이크가 실제로 캡처 중일 때만 빨갛게 맥동한다. */
+    #mic-btn.listening { background: rgba(239,68,68,0.55); border-color: rgba(239,68,68,0.6); animation: micpulse 1s infinite; }
+    @keyframes micpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
   </style>
 </head>
 <body>
@@ -141,6 +144,7 @@
     </div>
     <div id="input-area">
       <input id="chat-input" type="text" placeholder="메시지 입력... (Enter)">
+      <button class="icon-btn" id="mic-btn" type="button" title="음성 듣기" style="display:none">🎤</button>
       <button class="icon-btn" id="send-btn" type="button" title="보내기">↵</button>
     </div>
   </div>

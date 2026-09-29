@@ -4,7 +4,16 @@
   <meta charset="UTF-8">
   <title>Apia 설정</title>
   <style>
+    /* 네이티브 위젯(select 팝업·스크롤바)을 다크로 그리게 한다. 이게 없으면
+       Chromium이 팝업을 밝은 테마 기본값(흰 바탕)으로 그리는데, 아래 select
+       규칙의 글자색이 흰색 계열이라 "항목이 안 보이는" 드롭다운이 된다. */
+    :root { color-scheme: dark; }
     * { margin:0; padding:0; box-sizing:border-box; }
+    /* hidden 속성이 실제로 숨기게 한다. .row{display:flex} 같은 작성자 규칙은
+       UA의 [hidden]{display:none}을 이긴다 — 그래서 `hidden`을 단 행들이
+       (복제 음성 미리듣기/삭제, provider 오류 줄 등) 계속 보이고 있었다.
+       JS는 el.hidden만 토글하므로 여기서 한 번에 막는다. */
+    [hidden] { display:none !important; }
     body { font-family:'Pretendard','Noto Sans KR',sans-serif; background:#0f0c1e; color:rgba(255,255,255,0.88); user-select:none; }
     .titlebar { -webkit-app-region:drag; height:36px; background:rgba(124,58,237,0.15); border-bottom:1px solid rgba(124,58,237,0.2); display:flex; align-items:center; padding:0 16px; justify-content:space-between; }
     .titlebar-title { font-size:13px; font-weight:600; color:#a78bfa; }
@@ -20,10 +29,14 @@
     .section { margin-bottom:20px; }
     .section-title { font-size:10px; font-weight:600; color:#a78bfa; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid rgba(124,58,237,0.2); }
     .row { display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid rgba(255,255,255,0.05); gap:10px; }
-    .row-label { font-size:12px; color:rgba(255,255,255,0.75); }
+    /* nowrap: 옆 상태 텍스트가 길면 flex가 라벨부터 짜부라뜨려 "기억 / 상태"로
+       접혔다. 접혀야 할 쪽은 설명·상태 문구지 항목 이름이 아니다. */
+    .row-label { font-size:12px; color:rgba(255,255,255,0.75); white-space:nowrap; }
     .row-sub { font-size:10px; color:rgba(255,255,255,0.35); margin-top:1px; }
 
-    .btn { padding:5px 11px; border-radius:7px; font-size:11px; cursor:pointer; border:none; font-family:inherit; transition:all 0.15s; }
+    /* nowrap + 안 줄어듦: .row가 flex라 옆 설명 텍스트가 버튼을 짜부라뜨려
+       "지금 / 요약"처럼 두세 줄로 접히던 걸 막는다. 접히는 쪽은 설명 텍스트. */
+    .btn { padding:5px 11px; border-radius:7px; font-size:11px; cursor:pointer; border:none; font-family:inherit; transition:all 0.15s; white-space:nowrap; flex-shrink:0; }
     .btn:active { transform:scale(0.97); }
     .btn-ghost { background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.12); color:rgba(255,255,255,0.7); }
     .btn-ghost:hover { background:rgba(255,255,255,0.12); }
@@ -109,6 +122,21 @@
       font-family:inherit;
       outline:none;
     }
+
+    /* .row는 flex다. select의 width:100%가 flex-basis가 되면 행 전체를 요구해서
+       왼쪽 라벨을 한 글자씩 접거나("현재 목소/리") 행 밖으로 삐져나간다
+       (빈도 행 → 창 전체에 가로 스크롤바). 행 안에서는 남는 폭만 먹게 한다. */
+    /* min-width 130: 설명 문구가 긴 행(관전 코멘트 모델)에서 select가 74px까지
+       쪼그라들어 선택값 끝 글자가 잘렸다. 바닥을 깔아 라벨 쪽이 먼저 접히게. */
+    .row > select { width:auto; flex:1 1 0; min-width:130px; }
+
+    /* select 본체는 반투명(rgba)이라 팝업에 그대로 쓰이면 흰 바탕이 된다 —
+       option은 불투명 색으로 못 박는다(color-scheme와 이중 안전장치). */
+    select option, select optgroup {
+      background:#171233;
+      color:rgba(255,255,255,0.9);
+    }
+    select option:disabled { color:rgba(255,255,255,0.35); }
 
     .textarea {
       resize:vertical;
@@ -358,8 +386,8 @@
     <div class="row">
       <div class="row-label">AI 모드</div>
       <select id="ai-mode">
-        <option value="auto">Auto (Recommended)</option>
-        <option value="local">로컬 (Qwen2.5)</option>
+        <option value="auto">자동 (권장)</option>
+        <option value="local">로컬 (내 PC 모델)</option>
         <option value="groq">Groq API</option>
         <option value="hf_api">HuggingFace API</option>
         <option value="claude">Claude API</option>
@@ -374,8 +402,8 @@
       </div>
       <select id="ai-mode-director">
         <option value="">기본(대화와 동일)</option>
-        <option value="auto">Auto</option>
-        <option value="local">로컬 (Qwen2.5)</option>
+        <option value="auto">자동</option>
+        <option value="local">로컬 (내 PC 모델)</option>
         <option value="groq">Groq API</option>
         <option value="hf_api">HuggingFace API</option>
         <option value="claude">Claude API</option>
@@ -390,7 +418,7 @@
       </div>
       <select id="ai-mode-spectate">
         <option value="">기본(대화와 동일)</option>
-        <option value="auto">Auto</option>
+        <option value="auto">자동</option>
         <option value="groq">Groq API</option>
         <option value="claude">Claude API</option>
         <option value="claude_code">Claude Code (구독 로그인)</option>
@@ -470,14 +498,14 @@
 
     <div id="provider-status" class="provider-status">
       <div class="provider-status-head">
-        <span class="provider-status-title">Provider status</span>
-        <button type="button" id="provider-status-refresh" class="btn btn-ghost provider-status-refresh">Refresh</button>
+        <span class="provider-status-title">AI 연결 상태</span>
+        <button type="button" id="provider-status-refresh" class="btn btn-ghost provider-status-refresh">새로고침</button>
       </div>
-      <div class="provider-status-row"><span class="ps-key">Active</span><span class="ps-val" id="ps-active">--</span></div>
-      <div class="provider-status-row" id="ps-auto-row" hidden><span class="ps-key">Auto target</span><span class="ps-val" id="ps-auto-target">--</span></div>
-      <div class="provider-status-row"><span class="ps-key">Available</span><span class="ps-val" id="ps-available">--</span></div>
-      <div class="provider-status-row"><span class="ps-key">Status</span><span class="ps-val" id="ps-state">--</span></div>
-      <div class="provider-status-row" id="ps-error-row" hidden><span class="ps-key">Error</span><span class="ps-val ps-error" id="ps-error">--</span></div>
+      <div class="provider-status-row"><span class="ps-key">사용 중</span><span class="ps-val" id="ps-active">--</span></div>
+      <div class="provider-status-row" id="ps-auto-row" hidden><span class="ps-key">자동 선택</span><span class="ps-val" id="ps-auto-target">--</span></div>
+      <div class="provider-status-row"><span class="ps-key">쓸 수 있음</span><span class="ps-val" id="ps-available">--</span></div>
+      <div class="provider-status-row"><span class="ps-key">상태</span><span class="ps-val" id="ps-state">--</span></div>
+      <div class="provider-status-row" id="ps-error-row" hidden><span class="ps-key">오류</span><span class="ps-val ps-error" id="ps-error">--</span></div>
       <div class="provider-status-hint" id="ps-hint" hidden></div>
     </div>
 
@@ -559,11 +587,11 @@
     <div class="row" style="flex-direction:column; align-items:stretch; gap:6px;">
       <div>
         <div class="row-label">캐릭터 목소리 만들기</div>
-        <div class="row-sub">캐릭터 음성 파일(mp3/wav, 5초~2분)을 올리면 그 목소리로 말해요. 인터넷 연결이 필요하고, 처음 한 번은 음성 모델 다운로드로 몇 분 걸려요.</div>
+        <div class="row-sub">캐릭터 음성 파일(mp3/wav)을 올리면 그 목소리로 말해요. 여러 개를 골라도 되고, 고른 순서대로 이어서 하나로 씁니다(5초 이상, 2분이 넘으면 앞 2분만 써요). 인터넷 연결이 필요하고, 처음 한 번은 음성 모델 다운로드로 몇 분 걸려요.</div>
       </div>
       <div style="display:flex; gap:6px; align-items:center;">
         <input type="text" id="voice-clone-name" placeholder="음성 이름 (예: 내 캐릭터)" style="flex:1; min-width:0;">
-        <input type="file" id="voice-clone-file" accept="audio/*" hidden>
+        <input type="file" id="voice-clone-file" accept="audio/*,.mp3,.wav" multiple hidden>
         <button type="button" class="btn btn-ghost" id="voice-clone-pick">파일 선택</button>
         <button type="button" class="btn btn-purple" id="voice-clone-start" disabled>만들기</button>
       </div>
@@ -848,12 +876,72 @@
     <div class="row-sub" id="training-note" style="margin-top:6px; display:none;"></div>
   </div>
 
+  <div class="section" id="proactive-section">
+    <div class="section-title">먼저 말 걸기 · 음성 입력</div>
+    <div class="helper-text" style="margin-bottom:8px;">
+      둘 다 <b>기본 꺼짐</b>입니다. 켜면 Apia가 <b>하루 1회</b> 자리에 있을 때 먼저 한 줄 말을 걸고, <b>말로</b> 답할 수 있어요.
+      마이크는 <b>채팅창이 열려 있을 때만</b> 듣고, 듣는 동안 채팅창의 🎤 버튼이 빨갛게 깜빡입니다.
+      창을 닫거나 숨기면 마이크를 완전히 놓습니다. <b>원음은 저장하지 않고</b> 받아 적은 글자만 씁니다.
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">먼저 말 걸기</div>
+        <div class="row-sub">하루 1회, 자리에 있고 대화 중이 아닐 때만 가볍게 한 줄 건네요. 기본 꺼짐</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="proactive-opener-toggle">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+    <div class="row">
+      <div class="row-label">빈도</div>
+      <select id="proactive-opener-frequency">
+        <option value="daily">하루 1회</option>
+        <option value="biDaily">이틀 1회</option>
+      </select>
+    </div>
+    <div class="row">
+      <div class="row-label">선톡 기록</div>
+      <span class="row-sub" id="opener-counts" style="font-size:11px;">—</span>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">음성 듣기 (마이크)</div>
+        <div class="row-sub">채팅창에서 말로 입력합니다. 무음이면 캡처하지 않아요(상시 녹음 아님). 기본 꺼짐</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="mic-enabled-toggle">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+    <!-- 제3자 청취(창이 숨은 동안 주변 소리를 교재로) 경로는 격리 상태다 —
+         표시등을 창 밖으로 옮기는 설계가 끝날 때까지 이 행은 감춘다.
+         main의 mic:getState가 ambientIsolated=false를 줄 때만 보인다. -->
+    <div class="row" id="mic-consent-row" hidden>
+      <div>
+        <div class="row-label">제3자 음성 동의 (세션 단위)</div>
+        <div class="row-sub" id="mic-consent-status">꺼짐 — 함께 있는 사람의 음성은 학습에 쓰지 않아요</div>
+      </div>
+      <button type="button" class="btn btn-ghost" id="mic-consent-btn" style="white-space:nowrap;">동의 켜기</button>
+    </div>
+    <div class="row">
+      <div class="row-label">전사 건수(이번 실행)</div>
+      <span class="row-sub" id="mic-transcript-count" style="font-size:11px;">—</span>
+    </div>
+  </div>
+
   <div class="section" id="ledger-section">
     <div class="section-title">성장 · 눈치 원장 (계측 전용)</div>
     <div class="helper-text" style="margin-bottom:8px;">
       대화 화제별로 <b>반응이 편했는지</b>를 수치로만 적어 두는 관찰 기록입니다.
-      <b>대화 원문은 저장하지 않고</b> 화제 이름과 숫자만 남아요. 지금은 기록·열람만 하며
-      캐릭터의 말이나 화제 선택에 <b>전혀 반영되지 않습니다</b>.
+      <b>대화 원문은 저장하지 않고</b> 화제 이름과 숫자만 남아요. 평소에는 기록·열람만 하며
+      캐릭터의 말투나 답변 내용에 <b>반영되지 않습니다</b>. 예외는 위의 <b>먼저 말 걸기</b>
+      하나뿐 — 그 기능을 켜 두면 <b>편한 화제</b> 중에서 말 걸 주제를 고를 때만 참고하고,
+      민감한 화제는 절대 고르지 않습니다.
       분류는 내 PC의 로컬 모델로만 하고, 원시 기록은 90일 뒤 자동으로 지워집니다.
     </div>
 
@@ -995,10 +1083,23 @@ async function init() {
         opt.textContent = w.name.length > 60 ? w.name.slice(0, 60) + '…' : w.name
         spectateSelect.appendChild(opt)
       }
+      // 빈 목록과 "스타일 때문에 안 보이는 목록"을 사용자가 구별할 수 있게
+      // 비어 있음을 항목으로 말해준다 (고를 수는 없게 disabled).
+      if (list.length === 0) {
+        const empty = document.createElement('option')
+        empty.disabled = true
+        empty.textContent = '(고를 수 있는 창이 없어요 — 창을 띄우고 새로고침)'
+        spectateSelect.appendChild(empty)
+      }
       if (keep && list.some((w) => w.id === keep)) spectateSelect.value = keep
     }
 
-    document.getElementById('spectate-refresh')?.addEventListener('click', refreshSpectateWindows)
+    document.getElementById('spectate-refresh')?.addEventListener('click', () => {
+      // 실패를 삼키면 버튼이 죽은 것처럼 보인다 — 토스트로 알린다.
+      refreshSpectateWindows().catch((error) => {
+        showToast(friendlyError(error, '창 목록을 못 받았어요'), 'error', 4000)
+      })
+    })
     spectateSelect?.addEventListener('change', async () => {
       const opt = spectateSelect.selectedOptions[0]
       const st = await window.api?.spectateSetSource?.(spectateSelect.value || null, opt?.textContent || '')
@@ -1154,6 +1255,47 @@ function bindLedgerPanel() {
     renderLedger(await window.api.ledger.reset())
   })
   window.api.ledger.getState().then(renderLedger).catch(() => {})
+
+  bindProactivePanel()
+}
+
+// ── 선톡 + 마이크 패널 ──────────────────────────────────────────────────────
+function renderMicConsent(st) {
+  // 격리 중이면 동의 행 자체를 보여주지 않는다 — 누를 수 있는데 아무 효과가
+  // 없는 버튼은 거짓말 UI다.
+  const row = document.getElementById('mic-consent-row')
+  if (row) row.hidden = st?.ambientIsolated !== false
+  const statusEl = document.getElementById('mic-consent-status')
+  const btn = document.getElementById('mic-consent-btn')
+  const on = st?.consent === true
+  if (statusEl) {
+    statusEl.textContent = on
+      ? `켜짐 (${st.consentDate || '오늘'}) — 앱을 다시 켜면 자동으로 꺼집니다`
+      : '꺼짐 — 함께 있는 사람의 음성은 학습에 쓰지 않아요'
+  }
+  if (btn) btn.textContent = on ? '동의 끄기' : '동의 켜기'
+  const countEl = document.getElementById('mic-transcript-count')
+  if (countEl) countEl.textContent = `${st?.transcripts || 0}건`
+}
+
+function renderOpenerCounts(st) {
+  const el = document.getElementById('opener-counts')
+  if (!el) return
+  if (!st || st.error) { el.textContent = '—'; return }
+  const c = st.counts || {}
+  const last = st.lastOpenerAt ? new Date(st.lastOpenerAt).toLocaleString('ko-KR') : '아직 없음'
+  el.textContent = `발송 ${c.sent || 0} · 응답 ${c.replied || 0} · 무시 ${c.ignored || 0} (마지막: ${last})`
+}
+
+function bindProactivePanel() {
+  window.api?.proactiveOpener?.getState?.().then(renderOpenerCounts).catch(() => {})
+  window.api?.mic?.getState?.().then(renderMicConsent).catch(() => {})
+  document.getElementById('mic-consent-btn')?.addEventListener('click', async () => {
+    const cur = await window.api?.mic?.getState?.().catch(() => null)
+    const next = !(cur?.consent === true)
+    const st = await window.api?.mic?.setConsent?.(next).catch(() => null)
+    renderMicConsent(st || { consent: false })
+  })
 }
 
 // ── 교재 파이프라인 패널 (읽기 전용 + "지금 변환") ──────────────────────────
@@ -1327,6 +1469,10 @@ function renderGrowthAnchors(state) {
   select.innerHTML = ''
   if (anchors.length === 0) {
     const opt = document.createElement('option')
+    // value를 비워둬야 아래 select.value = '' 가 이 항목을 고른다 — 안 그러면
+    // 안내 문구가 있는데도 빈칸으로 보인다.
+    opt.value = ''
+    opt.disabled = true
     opt.textContent = '보관된 앵커 없음'
     select.appendChild(opt)
   }
@@ -1529,7 +1675,7 @@ function makeImportedCharacterCard(character, active) {
         renderModels()
         showToast(`${name} 삭제됨`, 'warn', 2500)
       } catch (err) {
-        showToast('삭제 실패: ' + (err?.message || err), 'error')
+        showToast('삭제 실패: ' + friendlyError(err), 'error')
       }
     })
   }
@@ -1555,7 +1701,7 @@ async function selectBuiltin() {
       if (result && result.ok === false) throw new Error(result.error || '알 수 없는 오류')
       registryActiveId = null
     } catch (err) {
-      showToast('기본 캐릭터 적용 실패: ' + (err?.message || err), 'error', 4000)
+      showToast('기본 캐릭터 적용 실패: ' + friendlyError(err), 'error', 4000)
       renderModels()
       return
     }
@@ -1576,7 +1722,7 @@ async function selectImportedCharacter(characterId) {
       registryActiveId = characterId
     } catch (err) {
       ok = false
-      showToast('캐릭터 적용 실패: ' + (err?.message || err), 'error', 4000)
+      showToast('캐릭터 적용 실패: ' + friendlyError(err), 'error', 4000)
     }
   }
 
@@ -1714,7 +1860,7 @@ async function importFile(file) {
 
   } catch (err) {
     console.error('[Settings] import 실패:', err)
-    showToast('등록 실패: ' + (err?.message || err), 'error', 5000)
+    showToast('등록 실패: ' + friendlyError(err), 'error', 5000)
   } finally {
     if (stepTimer) clearInterval(stepTimer)
     setLoading(false)
@@ -1757,6 +1903,45 @@ function showToast(message, type = 'info', duration = 3000) {
   }, duration)
 }
 
+// ── 오류 문구 한국어화 ───────────────────────────────────────────────────
+// 백엔드/파이썬/네트워크 원문(영어 예외 문자열)이 사용자에게 그대로 보이면
+// 그냥 "고장"으로 읽힌다. 아는 패턴은 한국어 한 줄로 바꾸고, 원문은 버리지
+// 않고 툴팁(title)으로 남긴다 — 사용자는 읽을 필요 없고, 여기 오는 건
+// 문의 스크린샷 한 장으로 원인이 잡히게.
+const ERROR_PATTERNS = [
+  [/No module named ['"]?([\w.]+)/i, (m) => `필요한 부품(${m[1]})이 설치되지 않았어요`],
+  [/CUDA out of memory|OutOfMemoryError|DefaultCPUAllocator/i, () => '메모리가 부족해요 (다른 프로그램을 닫고 다시 시도해 주세요)'],
+  [/ECONNREFUSED|ConnectError|Connection refused|백엔드 (?:응답|연결)/i, () => '백엔드에 연결할 수 없어요'],
+  [/getaddrinfo|ENOTFOUND|Temporary failure in name resolution|SSLError|Max retries/i, () => '인터넷 연결에 실패했어요'],
+  [/AbortError|ETIMEDOUT|timed? ?out|ReadTimeout/i, () => '시간이 초과됐어요'],
+  [/401|Unauthorized|invalid[_ ]api[_ ]key|authentication_error|API key/i, () => 'API 키가 없거나 잘못됐어요'],
+  [/429|rate[_ ]limit/i, () => '요청이 너무 많아요 (잠시 뒤 다시)'],
+  [/ENOENT|FileNotFoundError|No such file/i, () => '파일을 찾을 수 없어요'],
+  [/EACCES|EPERM|PermissionError|Access is denied/i, () => '권한이 없어요'],
+  [/Format not recognised|Error opening|unsupported format/i, () => '음성 파일 형식을 읽을 수 없어요'],
+]
+
+// 이미 한국어인 메시지는 손대지 않는다 — 백엔드가 사용자용으로 쓴 문구가
+// 대부분이고, 그게 패턴 요약보다 항상 더 구체적이다.
+function friendlyError(error, fallback = '알 수 없는 오류예요') {
+  const raw = String(error?.message ?? error ?? '').trim()
+  if (!raw) return fallback
+  if (/[가-힣]/.test(raw)) return raw
+  for (const [re, make] of ERROR_PATTERNS) {
+    const m = raw.match(re)
+    if (m) return make(m)
+  }
+  return fallback
+}
+
+// 한 줄 요약을 엘리먼트에 쓰고 원문은 title로 붙인다.
+function setErrorText(el, error, fallback, prefix = '❌ ') {
+  if (!el) return
+  const raw = String(error?.message ?? error ?? '').trim()
+  el.textContent = prefix + friendlyError(error, fallback)
+  el.title = raw && raw !== el.textContent ? raw : ''
+}
+
 function applyToUI() {
   document.getElementById('always-on-top').checked = settings.alwaysOnTop !== false
   document.getElementById('char-scale').value = settings.charScale || 100
@@ -1779,6 +1964,10 @@ function applyToUI() {
   const refToggle = document.getElementById('courseware-reference-toggle')
   if (refToggle) refToggle.checked = settings.coursewareReferenceEnabled !== false
   document.getElementById('use-wallpaper-mode').checked = settings.useWallpaperMode !== false
+  document.getElementById('proactive-opener-toggle').checked = settings.proactiveOpenerEnabled === true
+  document.getElementById('proactive-opener-frequency').value =
+    settings.proactiveOpenerFrequency === 'biDaily' ? 'biDaily' : 'daily'
+  document.getElementById('mic-enabled-toggle').checked = settings.micEnabled === true
 }
 
 document.getElementById('char-scale').addEventListener('input', e => {
@@ -1904,17 +2093,28 @@ function renderAutoTargetRow(status) {
   const target = status.auto_target
   setProviderStatusValue(
     'ps-auto-target',
-    target ? target : '(no candidate)',
+    target ? target : '(후보 없음)',
     target ? null : 'ps-state-fallback'
   )
 }
 
+// "로컬 (…)" 드롭다운 라벨은 백엔드 MODEL_ID에서 파생한다 — 모델을 갈아끼워도
+// UI가 구모델 이름을 계속 말하지 않게(단일 출처). 백엔드가 못 뜨면 마크업의
+// 중립 문구("로컬 (내 PC 모델)")가 그대로 남는다.
+function applyLocalModelLabel(modelId) {
+  const short = String(modelId || '').split('/').pop().replace(/-Instruct.*$/i, '')
+  if (!short) return
+  for (const opt of document.querySelectorAll('select option[value="local"]')) {
+    opt.textContent = `로컬 (${short})`
+  }
+}
+
 async function refreshProviderStatus() {
   if (typeof window.api.getWarmupStatus !== 'function') {
-    setProviderStatusValue('ps-active', 'unavailable', 'ps-state-unreachable')
+    setProviderStatusValue('ps-active', '확인 불가', 'ps-state-unreachable')
     return
   }
-  setProviderStatusValue('ps-state', 'Checking...', null)
+  setProviderStatusValue('ps-state', '확인 중…', null)
   let status
   try {
     status = await window.api.getWarmupStatus()
@@ -1928,12 +2128,14 @@ async function refreshProviderStatus() {
   if (!status) {
     setProviderStatusValue('ps-active', '--', null)
     setProviderStatusValue('ps-available', '--', null)
-    setProviderStatusValue('ps-state', 'Backend unreachable', 'ps-state-unreachable')
+    setProviderStatusValue('ps-state', '백엔드에 연결할 수 없어요', 'ps-state-unreachable')
     if (errorRow) errorRow.hidden = true
     renderProviderHint(null)
     clearProviderStatusAutoRefresh() // no point auto-retrying against a dead backend
     return
   }
+
+  applyLocalModelLabel(status.model_id)
 
   const activeMode = status.mode || '--'
   const available = Array.isArray(status.available_modes) ? status.available_modes : []
@@ -1942,13 +2144,13 @@ async function refreshProviderStatus() {
   setProviderStatusValue('ps-active', activeMode, null)
   setProviderStatusValue(
     'ps-available',
-    available.length ? available.join(', ') : '(none)',
+    available.length ? available.join(', ') : '(없음)',
     null
   )
   renderAutoTargetRow(status)
 
   if (status.warming) {
-    setProviderStatusValue('ps-state', 'Warming...', 'ps-state-warming')
+    setProviderStatusValue('ps-state', '준비 중…', 'ps-state-warming')
     // Schedule a single follow-up refresh so the user sees warming → ready
     // without manually clicking. 2s lands well after Groq init (~100-500ms)
     // and most Claude first-request paths; slow stacks still need a manual
@@ -1960,22 +2162,25 @@ async function refreshProviderStatus() {
       refreshProviderStatus()
     }, 2000)
   } else if (activeMode === 'fallback' || (available.length === 0 && initialized.length === 0)) {
-    setProviderStatusValue('ps-state', 'No provider available', 'ps-state-fallback')
+    setProviderStatusValue('ps-state', '쓸 수 있는 AI가 없어요', 'ps-state-fallback')
     clearProviderStatusAutoRefresh()
   } else if (initialized.length > 0) {
     // Only call it Ready when a provider has actually been initialized.
     // available_modes alone means "prereqs satisfied" — the first /chat
     // request still pays the init cost.
-    setProviderStatusValue('ps-state', 'Ready', 'ps-state-ready')
+    setProviderStatusValue('ps-state', '준비됨', 'ps-state-ready')
     clearProviderStatusAutoRefresh()
   } else {
-    setProviderStatusValue('ps-state', 'Idle (not warmed)', null)
+    setProviderStatusValue('ps-state', '대기 중 (아직 안 켜짐)', null)
     clearProviderStatusAutoRefresh()
   }
 
   if (status.last_error) {
     if (errorRow) errorRow.hidden = false
-    setProviderStatusValue('ps-error', String(status.last_error), 'ps-error')
+    setProviderStatusValue('ps-error', friendlyError(status.last_error), 'ps-error')
+    // 원문은 툴팁으로만 — 사용자는 한 줄 요약을 읽고, 문의 때는 여기 hover.
+    const psErrorEl = document.getElementById('ps-error')
+    if (psErrorEl) psErrorEl.title = String(status.last_error)
   } else if (errorRow) {
     errorRow.hidden = true
   }
@@ -2021,7 +2226,7 @@ async function pickCosyvoicePrompt(file) {
     cosyvoicePromptName = file.name
     updateCosyvoiceRow()
   } catch (error) {
-    label.textContent = `❌ ${error?.message || error}`
+    setErrorText(label, error, '참조 음성 저장에 실패했어요')
   }
 }
 
@@ -2047,11 +2252,19 @@ async function loadVoices() {
 }
 
 // ── 음성 복제 (캐릭터 목소리 만들기) ─────────────────────────────────────
-// 흐름: 파일 선택 → 브라우저 디코드(decodeAudioData — mp3/wav/ogg 전부) →
-// 22.05kHz mono WAV 재인코딩 → base64 IPC 업로드 → job 진행률 1초 폴링 →
-// 완료 시 목록 갱신 + 자동 선택. 백엔드 ffmpeg 의존 없이 포맷을 흡수한다.
+// 흐름: 파일 선택(여러 개 가능) → 브라우저 디코드(decodeAudioData — mp3/wav/ogg
+// 전부) → 22.05kHz mono로 순서대로 이어붙여 단일 WAV 재인코딩 → base64 IPC
+// 업로드 → job 진행률 1초 폴링 → 완료 시 목록 갱신 + 자동 선택.
+// 백엔드 ffmpeg 의존 없이 포맷을 흡수한다.
+//
+// 왜 렌더러에서 이어붙이나: seed-vc의 convert_voice(source, target)는 참조를
+// 파일 하나만 받는다(다중 참조 API 없음). 이미 여기서 22.05k mono로 정규화해
+// 보내는 계약이니, 같은 OfflineAudioContext에 시간순으로 배치하면 리샘플·연결이
+// 한 번에 끝나고 백엔드는 손대지 않아도 된다(단일 파일 경로도 그대로 동작).
 
 const VOICE_CLONE_TARGET_SR = 22050
+const VOICE_CLONE_MIN_SEC = 5
+const VOICE_CLONE_MAX_SEC = 120
 const VOICE_CLONE_STATUS_LABELS = {
   preparing: '준비 중…',
   validating: '음성 파일 확인 중…',
@@ -2061,26 +2274,92 @@ const VOICE_CLONE_STATUS_LABELS = {
   error: '실패했어요'
 }
 
-async function fileToCloneWavBase64(file, minSec = 5) {
+async function decodeCloneFile(file) {
   const arrayBuf = await file.arrayBuffer()
   const probe = new AudioContext()
-  let decoded
   try {
-    decoded = await probe.decodeAudioData(arrayBuf)
+    return await probe.decodeAudioData(arrayBuf)
   } finally {
     probe.close().catch(() => {})
   }
-  if (decoded.duration < minSec) throw new Error(`음성이 너무 짧아요 (${decoded.duration.toFixed(1)}초). ${minSec}초 이상 필요해요.`)
-  if (decoded.duration > 120) throw new Error(`음성이 너무 길어요 (${Math.round(decoded.duration)}초). 2분 이하로 잘라 주세요.`)
+}
 
-  const frames = Math.ceil(decoded.duration * VOICE_CLONE_TARGET_SR)
+/** 사용 구간(초). 2분이 넘어도 막지 않고 앞 2분만 쓴다. */
+function cloneUsedSec(totalSec) {
+  return Math.min(totalSec, VOICE_CLONE_MAX_SEC)
+}
+
+// ── 참조 음성 전처리 ────────────────────────────────────────────────────
+// seed-vc는 참조의 음색을 그대로 베낀다 — 참조에 낀 빈 구간·작은 녹음 레벨까지
+// 통계에 섞여 들어간다. 그래서 두 가지만 손본다:
+//   ① 앞뒤 무음 트림 — 음색 정보가 0인 구간이 참조 통계를 흐리는 것을 막는다
+//   ② 피크 정규화 — 작게 녹음된 참조를 일정한 레벨로 (SNR이 아니라 레벨 문제)
+// ponytail: 내부 노이즈 게이트도 만들어 재 봤지만(잡음 바닥 1.6배 미만 감쇠)
+// 변환 결과의 스펙트럼 지표가 나아지지 않았고 약한 말소리를 깎을 위험만 있어
+// 뺐다. 실제 잡음 제거가 필요하면 참조 녹음 단계에서 해결할 문제다.
+const CLONE_PREP_FRAME = 512          // ~23ms @22.05k
+const CLONE_PREP_SILENCE_MULT = 1.6   // 잡음 바닥의 이 배수 미만이면 무음으로 본다
+const CLONE_PREP_PEAK = 0.95
+
+function preprocessReferencePcm(pcm, { normalize = true, trim = true } = {}) {
+  const n = pcm.length
+  if (n === 0) return pcm
+  const count = Math.ceil(n / CLONE_PREP_FRAME)
+  const rms = new Float32Array(count)
+  for (let f = 0; f < count; f++) {
+    const start = f * CLONE_PREP_FRAME
+    const end = Math.min(n, start + CLONE_PREP_FRAME)
+    let sum = 0
+    for (let i = start; i < end; i++) sum += pcm[i] * pcm[i]
+    rms[f] = Math.sqrt(sum / Math.max(1, end - start))
+  }
+  // 무음 기준 = 조용한 쪽 10% 프레임의 값 × 1.6. 무음 구간이 없으면 0에 가까워
+  // 트림이 아무것도 안 자른다(안전한 실패).
+  const sorted = Array.from(rms).sort((a, b) => a - b)
+  const threshold = (sorted[Math.floor(sorted.length * 0.1)] || 0) * CLONE_PREP_SILENCE_MULT
+
+  let first = 0
+  let last = count - 1
+  if (trim) {
+    while (first < count && rms[first] <= threshold) first++
+    while (last > first && rms[last] <= threshold) last--
+    if (first >= count) { first = 0; last = count - 1 } // 전부 조용하면 트림 취소
+  }
+  const out = pcm.slice(first * CLONE_PREP_FRAME, Math.min(n, (last + 1) * CLONE_PREP_FRAME))
+
+  if (normalize) {
+    let peak = 0
+    for (let i = 0; i < out.length; i++) peak = Math.max(peak, Math.abs(out[i]))
+    if (peak > 0.001) {
+      const g = CLONE_PREP_PEAK / peak
+      for (let i = 0; i < out.length; i++) out[i] *= g
+    }
+  }
+  return out
+}
+
+/** AudioBuffer 여러 개를 시간순으로 이어붙여 22.05k mono WAV base64로. */
+async function buffersToCloneWavBase64(buffers, minSec = VOICE_CLONE_MIN_SEC, prep = {}) {
+  const totalSec = buffers.reduce((sum, b) => sum + b.duration, 0)
+  if (totalSec < minSec) throw new Error(`음성이 너무 짧아요 (${totalSec.toFixed(1)}초). 합쳐서 ${minSec}초 이상 필요해요.`)
+  // 길이 상한은 거절 사유가 아니다 — 전부 받아 놓고 앞 2분만 렌더한다.
+  // (사용자가 3분 파일을 가져와도 직접 잘라 오라고 되돌려 보내지 않는다.)
+  const usedSec = cloneUsedSec(totalSec)
+
+  const frames = Math.ceil(usedSec * VOICE_CLONE_TARGET_SR)
   const off = new OfflineAudioContext(1, frames, VOICE_CLONE_TARGET_SR)
-  const srcNode = off.createBufferSource()
-  srcNode.buffer = decoded
-  srcNode.connect(off.destination)
-  srcNode.start()
+  let offsetSec = 0
+  for (const buffer of buffers) {
+    if (offsetSec >= usedSec) break
+    const srcNode = off.createBufferSource()
+    srcNode.buffer = buffer
+    srcNode.connect(off.destination)
+    // 마지막으로 걸치는 파일은 남은 만큼만 — 2분 경계에서 잘린다.
+    srcNode.start(offsetSec, 0, Math.min(buffer.duration, usedSec - offsetSec))
+    offsetSec += buffer.duration
+  }
   const rendered = await off.startRendering()
-  const pcm = rendered.getChannelData(0)
+  const pcm = preprocessReferencePcm(rendered.getChannelData(0), prep)
 
   const buf = new ArrayBuffer(44 + pcm.length * 2)
   const dv = new DataView(buf)
@@ -2102,30 +2381,102 @@ async function fileToCloneWavBase64(file, minSec = 5) {
   return btoa(bin)
 }
 
+/** 단일 파일 경로 (CosyVoice 참조 음성이 이걸 쓴다). */
+async function fileToCloneWavBase64(file, minSec = VOICE_CLONE_MIN_SEC) {
+  return buffersToCloneWavBase64([await decodeCloneFile(file)], minSec)
+}
+
 let voiceCloneBusy = false
+// 선택된 참조 음성들. FileList는 항목 제거가 안 되니 우리가 들고 있는다.
+// { name, sec, buffer } — buffer는 선택 시 한 번만 디코드해 재사용.
+let voiceCloneItems = []
+
+function renderVoiceCloneFiles() {
+  const listEl = document.getElementById('voice-clone-file-label')
+  const startBtn = document.getElementById('voice-clone-start')
+  if (!listEl) return
+  listEl.innerHTML = ''
+  listEl.hidden = voiceCloneItems.length === 0
+
+  const totalSec = voiceCloneItems.reduce((sum, it) => sum + it.sec, 0)
+  const tooShort = totalSec < VOICE_CLONE_MIN_SEC
+  const overLong = totalSec > VOICE_CLONE_MAX_SEC
+  // 짧은 건 진짜로 못 만들지만(막는다), 긴 건 우리가 앞 2분만 쓰면 되는
+  // 일이다 — 사용자에게 파일을 잘라 오라고 시키지 않는다.
+  if (startBtn) startBtn.disabled = voiceCloneBusy || voiceCloneItems.length === 0 || tooShort
+
+  voiceCloneItems.forEach((item, index) => {
+    const row = document.createElement('div')
+    row.style.cssText = 'display:flex; align-items:center; gap:6px;'
+    const label = document.createElement('span')
+    label.style.cssText = 'flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'
+    label.textContent = `${item.name} (${item.sec.toFixed(1)}초)`
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'btn btn-red'
+    remove.textContent = '✕'
+    remove.title = '목록에서 빼기'
+    remove.addEventListener('click', () => {
+      if (voiceCloneBusy) return
+      voiceCloneItems.splice(index, 1)
+      renderVoiceCloneFiles()
+    })
+    row.appendChild(label)
+    row.appendChild(remove)
+    listEl.appendChild(row)
+  })
+
+  const total = document.createElement('div')
+  total.id = 'voice-clone-total'
+  // 초과는 경고(노랑)지 오류(빨강)가 아니다 — 그냥 앞 2분만 쓴다는 안내.
+  total.style.cssText = `margin-top:2px; color:${tooShort ? '#fca5a5' : overLong ? '#fcd34d' : '#6ee7b7'};`
+  const mins = (totalSec / 60).toFixed(1)
+  total.textContent = `총 ${totalSec.toFixed(1)}초` + (
+    tooShort ? ` — 너무 짧아요 (${VOICE_CLONE_MIN_SEC}초 이상 필요)` :
+    overLong ? ` — 총 ${mins}분 중 앞 2분만 사용해요` :
+    ' — 권장 범위(5초~2분)'
+  )
+  listEl.appendChild(total)
+}
+
+async function addVoiceCloneFiles(fileList) {
+  const doneEl = document.getElementById('voice-clone-done')
+  for (const file of fileList) {
+    try {
+      const buffer = await decodeCloneFile(file)
+      voiceCloneItems.push({ name: file.name, sec: buffer.duration, buffer })
+    } catch (error) {
+      if (doneEl) {
+        doneEl.hidden = false
+        setErrorText(doneEl, error, `'${file.name}'을 읽을 수 없어요`)
+      }
+    }
+  }
+  renderVoiceCloneFiles()
+}
 
 async function startVoiceClone() {
   if (voiceCloneBusy) return
-  const fileInput = document.getElementById('voice-clone-file')
-  const file = fileInput.files?.[0]
   const name = document.getElementById('voice-clone-name').value.trim()
   const statusEl = document.getElementById('voice-clone-status')
   const barEl = document.getElementById('voice-clone-bar')
   const wrapEl = document.getElementById('voice-clone-progress-wrap')
   const doneEl = document.getElementById('voice-clone-done')
   const startBtn = document.getElementById('voice-clone-start')
-  if (!file) return
+  if (voiceCloneItems.length === 0) return
 
   voiceCloneBusy = true
   startBtn.disabled = true
   doneEl.hidden = true
+  doneEl.title = ''
   wrapEl.hidden = false
   barEl.style.width = '0%'
   statusEl.textContent = '음성 합성 중입니다…'
 
   try {
-    const wavBase64 = await fileToCloneWavBase64(file)
-    const res = await window.api.voiceCloneUpload(name || file.name.replace(/\.[^.]+$/, ''), wavBase64)
+    const wavBase64 = await buffersToCloneWavBase64(voiceCloneItems.map(it => it.buffer))
+    const fallbackName = voiceCloneItems[0].name.replace(/\.[^.]+$/, '')
+    const res = await window.api.voiceCloneUpload(name || fallbackName, wavBase64)
     if (res?.error || !res?.job_id) throw new Error(res?.error || '업로드에 실패했어요')
 
     const result = await new Promise((resolve, reject) => {
@@ -2158,14 +2509,15 @@ async function startVoiceClone() {
     updateCustomVoiceActions()
     wrapEl.hidden = true
     doneEl.hidden = false
+    doneEl.title = ''
     doneEl.textContent = '✅ 완성! 아래 미리듣기로 확인하고, "저장 및 적용"을 누르면 이 목소리로 말해요.'
   } catch (e) {
     wrapEl.hidden = true
     doneEl.hidden = false
-    doneEl.textContent = `❌ ${e?.message || e}`
+    setErrorText(doneEl, e, '음성 복제에 실패했어요')
   } finally {
     voiceCloneBusy = false
-    startBtn.disabled = !fileInput.files?.length
+    renderVoiceCloneFiles()
   }
 }
 
@@ -2175,20 +2527,52 @@ function updateCustomVoiceActions() {
   if (row) row.hidden = !String(sel.value || '').startsWith('custom:')
 }
 
+// 미리듣기는 **오디오 핸들 하나**만 쓴다. 연타하면 겹쳐 울리던 게 아니라
+// 앞 재생을 끊고 새로 시작한다(같은 음성이 두 겹으로 들리면 판정을 못 한다).
+// 재생 중 같은 버튼을 다시 누르면 정지 토글.
+let clonePreviewAudio = null
+let clonePreviewUrl = null
+let clonePreviewPending = false // 응답 대기 중 취소용
+
+function stopClonePreview() {
+  // 아직 응답을 기다리는 요청도 같이 취소한다 — 안 그러면 음성을 지우거나 바꾼
+  // 뒤에 도착한 오디오가 뒤늦게 울린다.
+  clonePreviewPending = false
+  if (clonePreviewAudio) {
+    try { clonePreviewAudio.onended = null; clonePreviewAudio.pause() } catch {}
+    clonePreviewAudio = null
+  }
+  if (clonePreviewUrl) { URL.revokeObjectURL(clonePreviewUrl); clonePreviewUrl = null }
+  const btn = document.getElementById('voice-clone-preview-btn')
+  if (btn) btn.textContent = '미리듣기'
+}
+
 async function playClonePreview() {
+  // 재생 중 = 정지 토글. 아직 응답을 기다리는 중이어도 눌러서 취소할 수 있다.
+  if (clonePreviewAudio || clonePreviewPending) { clonePreviewPending = false; stopClonePreview(); return }
   const sel = document.getElementById('voice-select')
-  const r = await window.api.voiceClonePreview(sel.value)
+  clonePreviewPending = true
+  const r = await window.api.voiceClonePreview(sel.value).catch(() => null)
+  // 기다리는 동안 사용자가 취소했으면 소리를 내지 않는다.
+  if (!clonePreviewPending) return
+  clonePreviewPending = false
   if (!r?.audio) return
+  stopClonePreview()
   const bytes = Uint8Array.from(atob(r.audio), c => c.charCodeAt(0))
-  const url = URL.createObjectURL(new Blob([bytes], { type: r.mime || 'audio/wav' }))
-  const audio = new Audio(url)
-  audio.onended = () => URL.revokeObjectURL(url)
-  audio.play().catch(() => URL.revokeObjectURL(url))
+  clonePreviewUrl = URL.createObjectURL(new Blob([bytes], { type: r.mime || 'audio/wav' }))
+  const audio = new Audio(clonePreviewUrl)
+  clonePreviewAudio = audio
+  audio.onended = () => { if (clonePreviewAudio === audio) stopClonePreview() }
+  audio.onerror = () => { if (clonePreviewAudio === audio) stopClonePreview() }
+  const btn = document.getElementById('voice-clone-preview-btn')
+  if (btn) btn.textContent = '정지'
+  audio.play().catch(() => stopClonePreview())
 }
 
 async function deleteCloneVoice() {
   const sel = document.getElementById('voice-select')
   if (!String(sel.value || '').startsWith('custom:')) return
+  stopClonePreview() // 지운 음성이 계속 울고 있으면 곤란하다
   await window.api.voiceCloneDelete(sel.value)
   sel.value = ''
   await loadVoices()
@@ -2198,12 +2582,12 @@ async function deleteCloneVoice() {
 document.getElementById('voice-clone-pick').addEventListener('click', () => {
   document.getElementById('voice-clone-file').click()
 })
-document.getElementById('voice-clone-file').addEventListener('change', (e) => {
-  const file = e.target.files?.[0]
-  const label = document.getElementById('voice-clone-file-label')
-  label.hidden = !file
-  if (file) label.textContent = `선택됨: ${file.name}`
-  document.getElementById('voice-clone-start').disabled = !file
+document.getElementById('voice-clone-file').addEventListener('change', async (e) => {
+  const picked = [...(e.target.files || [])]
+  // input을 비워둔다 — 같은 파일을 다시 고를 수 있고, 목록의 진실은
+  // voiceCloneItems 하나뿐이다(제거 후 재선택이 엉키지 않는다).
+  e.target.value = ''
+  await addVoiceCloneFiles(picked)
 })
 document.getElementById('voice-clone-start').addEventListener('click', startVoiceClone)
 document.getElementById('tts-engine')?.addEventListener('change', updateCosyvoiceRow)
@@ -2213,7 +2597,16 @@ document.getElementById('cosyvoice-prompt-pick')?.addEventListener('click', () =
 document.getElementById('cosyvoice-prompt-file')?.addEventListener('change', (e) => {
   pickCosyvoicePrompt(e.target.files?.[0])
 })
-document.getElementById('voice-select').addEventListener('change', updateCustomVoiceActions)
+document.getElementById('voice-select').addEventListener('change', () => {
+  stopClonePreview() // 다른 음성을 고르면 앞 미리듣기는 끝난 얘기
+  updateCustomVoiceActions()
+})
+// 테스트 훅 — 인라인 스크립트라 import가 안 되니 순수 함수만 노출한다.
+window.__apiaVoiceClone = {
+  preprocessReferencePcm,
+  cloneUsedSec,
+  isPreviewPlaying: () => !!clonePreviewAudio || clonePreviewPending
+}
 document.getElementById('voice-clone-preview-btn').addEventListener('click', playClonePreview)
 document.getElementById('voice-clone-delete-btn').addEventListener('click', deleteCloneVoice)
 
@@ -2261,6 +2654,9 @@ async function save() {
     // 교재 패널이 제거된 배포본(window.api.courseware 없음)에선 기본 ON 유지.
     coursewareReferenceEnabled:
       document.getElementById('courseware-reference-toggle')?.checked !== false,
+    proactiveOpenerEnabled: document.getElementById('proactive-opener-toggle').checked,
+    proactiveOpenerFrequency: document.getElementById('proactive-opener-frequency').value,
+    micEnabled: document.getElementById('mic-enabled-toggle').checked,
   }
 
   // 개발자 전용 로컬 엔진 필드는 게이트가 꺼지면 DOM에 없다. 그럴 땐 payload에서
@@ -2321,12 +2717,12 @@ function bindBackendEnvControls() {
       try {
         const result = await window.api.openBackendDataDir()
         if (!result?.ok) {
-          showToast('폴더를 열지 못했습니다: ' + (result?.error || '알 수 없는 오류'), 'error')
+          showToast('폴더를 열지 못했습니다: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error')
           return
         }
         showToast('backend.env 폴더를 열었습니다.', 'info', 1800)
       } catch (err) {
-        showToast('폴더 열기 실패: ' + (err?.message || err), 'error')
+        showToast('폴더 열기 실패: ' + friendlyError(err), 'error')
       }
     })
   }
@@ -2337,7 +2733,7 @@ function bindBackendEnvControls() {
       try {
         const result = await window.api.openBackendEnvFile()
         if (!result?.ok) {
-          showToast('backend.env 파일을 열지 못했습니다: ' + (result?.error || '알 수 없는 오류'), 'error')
+          showToast('backend.env 파일을 열지 못했습니다: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error')
           return
         }
         if (result.missing) {
@@ -2348,7 +2744,7 @@ function bindBackendEnvControls() {
           showToast('backend.env 파일을 열었습니다.', 'info', 1800)
         }
       } catch (err) {
-        showToast('파일 열기 실패: ' + (err?.message || err), 'error')
+        showToast('파일 열기 실패: ' + friendlyError(err), 'error')
       }
     })
   }
@@ -2459,7 +2855,7 @@ async function persistBackendEnvUpdates({ onPhase } = {}) {
   try {
     const result = await window.api.saveBackendEnvKeys(updates)
     if (!result?.ok) {
-      showToast('API 키 저장 실패: ' + (result?.error || '알 수 없는 오류'), 'error', 5000)
+      showToast('API 키 저장 실패: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error', 5000)
       return false
     }
     const writtenCount = result.written?.length || 0
@@ -2484,7 +2880,7 @@ async function persistBackendEnvUpdates({ onPhase } = {}) {
     }
     return true
   } catch (err) {
-    showToast('API 키 저장 실패: ' + (err?.message || err), 'error', 5000)
+    showToast('API 키 저장 실패: ' + friendlyError(err), 'error', 5000)
     return false
   }
 }
@@ -2514,10 +2910,10 @@ async function triggerBackendRestart() {
       showToast('백엔드 재시작 완료. 새 키가 적용되었습니다.', 'info', 2800)
       return true
     }
-    showToast('백엔드 재시작 실패: ' + (result?.error || '알 수 없는 오류'), 'error', 5000)
+    showToast('백엔드 재시작 실패: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error', 5000)
     return false
   } catch (err) {
-    showToast('백엔드 재시작 실패: ' + (err?.message || err), 'error', 5000)
+    showToast('백엔드 재시작 실패: ' + friendlyError(err), 'error', 5000)
     return false
   }
 }
@@ -2551,11 +2947,13 @@ function bindDataPanelControls() {
       if (result?.summary_id != null) {
         showToast('새 요약 ' + result.summary_id + '번 생성', 'info', 2500)
       } else {
-        const reason = result?.stats?.last_error || '아직 임계치에 못 미쳤어요'
+        const reason = result?.stats?.last_error
+          ? friendlyError(result.stats.last_error)
+          : '아직 임계치에 못 미쳤어요'
         showToast('요약 안 만들어짐: ' + reason, 'info', 3500)
       }
     } catch (err) {
-      showToast('요약 실패: ' + (err?.message || err), 'error', 4000)
+      showToast('요약 실패: ' + friendlyError(err), 'error', 4000)
     } finally {
       summarize.disabled = false
       refreshDataPanelStats()
@@ -2579,7 +2977,7 @@ function bindDataPanelControls() {
         showToast('폴더 추가 실패', 'error', 3500)
       }
     } catch (err) {
-      showToast('폴더 추가 실패: ' + (err?.message || err), 'error', 4000)
+      showToast('폴더 추가 실패: ' + friendlyError(err), 'error', 4000)
     } finally {
       addBtn.disabled = false
       refreshFilesPanel()
@@ -2606,7 +3004,7 @@ function bindDataPanelControls() {
         showToast('저장된 조각이 없어요. 텍스트가 너무 짧을 수 있습니다.', 'info', 3000)
       }
     } catch (err) {
-      showToast('텍스트 저장 실패: ' + (err?.message || err), 'error', 4000)
+      showToast('텍스트 저장 실패: ' + friendlyError(err), 'error', 4000)
     } finally {
       ingestBtn.disabled = false
       refreshFilesPanel()
@@ -2622,7 +3020,7 @@ function bindDataPanelControls() {
       const result = await window.api.store.embeddingWarmup()
       renderEmbeddingStatus(result)
     } catch (err) {
-      if (statusEl) statusEl.textContent = '실패: ' + (err?.message || err)
+      setErrorText(statusEl, err, '임베딩 모델을 받지 못했어요', '실패: ')
     } finally {
       warmupBtn.disabled = false
     }
@@ -2650,8 +3048,9 @@ async function refreshMemoryPanel() {
     const stats = await window.api.store.memoryStats()
     if (!stats) { el.textContent = '백엔드 응답 없음'; return }
     if (!stats.enabled) { el.textContent = '기억 꺼짐'; return }
-    const lastErr = stats.last_error ? ` · 최근 오류: ${stats.last_error}` : ''
-    el.textContent = `turn ${stats.turn_count} · 요약 ${stats.summary_count}` + lastErr
+    const lastErr = stats.last_error ? ` · 최근 오류: ${friendlyError(stats.last_error)}` : ''
+    el.textContent = `대화 ${stats.turn_count}턴 · 요약 ${stats.summary_count}개` + lastErr
+    el.title = stats.last_error ? String(stats.last_error) : ''
   } catch {
     el.textContent = '읽기 실패'
   }
@@ -2744,8 +3143,9 @@ async function refreshWebPanel() {
     const stats = await window.api.store.webStats()
     if (!stats) { el.textContent = '백엔드 응답 없음'; return }
     const label = stats.enabled ? '사용 가능' : '비활성'
-    const reason = stats.last_error ? ` · ${stats.last_error}` : ''
+    const reason = stats.last_error ? ` · ${friendlyError(stats.last_error)}` : ''
     el.textContent = `${label} · 공급자 ${stats.provider}` + reason
+    el.title = stats.last_error ? String(stats.last_error) : ''
   } catch {
     el.textContent = '읽기 실패'
   }
@@ -2761,11 +3161,12 @@ function renderEmbeddingStatus(payload) {
   if (!el) return
   if (!payload) { el.textContent = '백엔드 응답 없음'; return }
   if (payload.error) {
-    el.textContent = '오류: ' + payload.error
+    setErrorText(el, payload.error, '임베딩 모델을 준비할 수 없어요', '오류: ')
     return
   }
+  el.title = ''
   if (payload.loaded) {
-    el.textContent = `준비됨 (${payload.model_name}, dim ${payload.dim})`
+    el.textContent = `준비됨 (${payload.model_name}, ${payload.dim}차원)`
   } else if (payload.loading) {
     el.textContent = '받는 중…'
   } else {
@@ -2914,7 +3315,7 @@ async function persistPersonaOverrides() {
     await window.api.setCharacterPersonalityOverrides(personaActiveCharacterId, overrides)
   } catch (error) {
     if (typeof showToast === 'function') {
-      showToast('컨셉 저장 실패: ' + (error?.message || error), 'error', 4000)
+      showToast('컨셉 저장 실패: ' + friendlyError(error), 'error', 4000)
     }
   }
 }

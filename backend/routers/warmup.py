@@ -8,8 +8,9 @@ claude_service의 provider init이 lazy로 바뀐 뒤, 첫 /chat 요청이 init 
 
 같은 흐름으로 voice.py의 TTSService/VoiceManager도 lazy라(pyttsx3 init은 OS에 따라
 무겁다) 워밍업 시 함께 prime한다. stt.py의 WhisperService는 여기서 prime하지 않는다 —
-/stt/transcribe 호출자가 없어(마이크는 브라우저 Web Speech API) ~500MB 모델을
-아무도 안 쓸 목적으로 올리게 된다.
+마이크(음성 입력)는 **기본 OFF**라 대부분의 실행에서 한 번도 안 쓰는데 ~500MB를
+미리 올리게 된다. ponytail: 켠 사용자는 첫 발화에서 ~10s 로드를 한 번 기다린다.
+그게 불편하다면 settings.micEnabled가 true일 때만 prime하도록 조건을 달 것.
 
 POST /warmup : 비동기로 워밍업 시작. 이미 ready면 즉시 ready 반환, 워밍 중이면 warming.
 GET  /warmup : 현재 initialized_modes / 활성 mode / warming 여부 조회.
@@ -42,10 +43,9 @@ async def _prime_all_services() -> None:
     # sibling 취소를 막고, 실패한 prime은 로깅만 한 뒤 흘려보낸다 — 진짜 깨졌다면
     # 첫 사용 시점에 다시 시도된다.
     #
-    # stt.prime()은 뺐다: /stt/transcribe를 부르는 코드가 하나도 없고(마이크는
-    # 브라우저 Web Speech API로 처리) whisper.load_model('small')은 ~500MB를
-    # 아무도 안 쓸 목적으로 올린다. 라우터 자체는 계약 테스트용으로 남기고,
-    # 혹시 다시 쓰이면 첫 요청 때 lazy로 로드된다.
+    # stt.prime()은 뺐다: 마이크는 기본 OFF라 대부분의 실행에서 /stt/transcribe가
+    # 한 번도 안 불리는데 whisper.load_model('small')은 ~500MB를 올린다.
+    # 마이크를 켠 사용자는 첫 발화에서 lazy 로드를 한 번 기다린다(알려진 상한).
     results = await asyncio.gather(voice.prime(), return_exceptions=True)
     for name, result in zip(("voice",), results):
         if isinstance(result, BaseException):

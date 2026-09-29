@@ -29,7 +29,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('chat-stream-error', listener)
     return () => ipcRenderer.removeListener('chat-stream-error', listener)
   },
-  tts: (text, voice_id) => ipcRenderer.invoke('tts', { text, voice_id }),
+  // emotion(선택) = 이 발화의 감정 라벨. 운율(피치·속도)에만 쓰인다.
+  tts: (text, voice_id, emotion) => ipcRenderer.invoke('tts', { text, voice_id, emotion }),
   // J단계 — LLM 행동 디렉터(채팅과 분리). raw JSON 문자열 또는 null.
   directorDecide: (context) => ipcRenderer.invoke('director:decide', context),
   getVoices: () => ipcRenderer.invoke('get-voices'),
@@ -138,6 +139,35 @@ contextBridge.exposeInMainWorld('api', {
     trainNow: () => ipcRenderer.invoke('nightSchool:trainNow'),
     setPromotion: (type, enabled) => ipcRenderer.invoke('nightSchool:setPromotion', { type, enabled }),
     rewind: (version) => ipcRenderer.invoke('nightSchool:rewind', { version })
+  },
+
+  // 선톡(먼저 말 걸기). getState=카운트 열람, fireNow=강제 발화(설정/테스트).
+  // onProactiveOpener=발화 텍스트 구독(해제 함수 반환).
+  proactiveOpener: {
+    getState: () => ipcRenderer.invoke('opener:getState'),
+    fireNow: () => ipcRenderer.invoke('opener:fireNow')
+  },
+  onProactiveOpener: (cb) => {
+    const listener = (_e, payload) => cb(payload)
+    ipcRenderer.on('opener:say', listener)
+    return () => ipcRenderer.removeListener('opener:say', listener)
+  },
+
+  // 마이크(음성 입력 1단계). transcribe=VAD로 자른 WAV를 백엔드 로컬 STT로 전사만.
+  // setConsent(true)=제3자 음성 동의(세션·네이티브 다이얼로그). ambient=혼잣말→교재
+  // (동의+재석 시에만 main이 저장). 원음은 어디에도 저장하지 않는다.
+  // 채팅창 표시/숨김 통보 — 마이크 캡처 게이트가 이걸 단일 출처로 쓴다.
+  onChatVisibility: (cb) => {
+    const listener = (_e, payload) => cb(payload)
+    ipcRenderer.on('chat:visibility', listener)
+    return () => ipcRenderer.removeListener('chat:visibility', listener)
+  },
+
+  mic: {
+    getState: () => ipcRenderer.invoke('mic:getState'),
+    setConsent: (on) => ipcRenderer.invoke('mic:setConsent', { on }),
+    transcribe: (wav) => ipcRenderer.invoke('stt:transcribe', { wav }),
+    ambient: (text) => ipcRenderer.invoke('mic:ambient', { text })
   },
 
   notifyCharacter: (payload) => ipcRenderer.invoke('character:notify', payload),

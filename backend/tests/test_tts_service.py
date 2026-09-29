@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 from services.tts_service import DEFAULT_EDGE_VOICE, EDGE_VOICES, TTSService
 from services import voice_clone_service as clone
 from services import voice_manager
+from services import speech_text
 
 
 def make_service(edge: bool = True, pyttsx3: bool = True) -> TTSService:
@@ -35,8 +36,8 @@ def make_service(edge: bool = True, pyttsx3: bool = True) -> TTSService:
 def stub_edge(svc: TTSService, *, data: bytes = b"mp3-bytes", fail: bool = False):
     calls = []
 
-    async def _fake(text: str, voice: str) -> bytes:
-        calls.append({"text": text, "voice": voice})
+    async def _fake(text: str, voice: str, prosody=None) -> bytes:
+        calls.append({"text": text, "voice": voice, "prosody": prosody})
         if fail:
             raise RuntimeError("offline")
         return data
@@ -275,3 +276,51 @@ def test_custom_voice_missing_reference_falls_back(monkeypatch, tmp_path):
     (tmp_path / dir_id / "reference.wav").unlink()
     audio, mime, fallback = asyncio.run(svc.synthesize("안녕", f"custom:{dir_id}"))
     assert fallback is True
+
+
+# ── 정화 + 운율 (발주서 12 §A) ──────────────────────────────────────────
+# synthesize()가 유일한 정화 지점이라는 계약을 여기서 못박는다.
+
+def test_synthesize_strips_emoji_and_markdown_before_engine(monkeypatch):
+    svc = make_service()
+    edge_calls = stub_edge(svc)
+    stub_mp3_decode(monkeypatch)
+    asyncio.run(svc.synthesize("**반가워요** 😊 ㅋㅋ", None))
+    assert edge_calls[0]["text"] == "반가워요"
+
+
+def test_synthesize_passes_emotion_prosody_to_edge(monkeypatch):
+    svc = make_service()
+    edge_calls = stub_edge(svc)
+    stub_mp3_decode(monkeypatch)
+    asyncio.run(svc.synthesize("그랬구나", None, None, "sad"))
+    assert edge_calls[0]["prosody"] == speech_text.PROSODY["sad"]
+
+
+def test_synthesize_infers_prosody_from_text_when_no_label(monkeypatch):
+    svc = make_service()
+    edge_calls = stub_edge(svc)
+    stub_mp3_decode(monkeypatch)
+    asyncio.run(svc.synthesize("ㅋㅋㅋㅋ 대박", None))
+    assert edge_calls[0]["prosody"] == speech_text.PROSODY["happy"]
+
+
+def test_emoji_only_reply_is_silent_not_read_aloud(monkeypatch):
+    """이모지만 있는 응답은 침묵한다 — 엔진을 아예 부르지 않는다."""
+    svc = make_service()
+    edge_calls = stub_edge(svc)
+    audio, mime, fallback = asyncio.run(svc.synthesize("😊🎉", None))
+    assert edge_calls == []
+    assert mime == "audio/wav" and fallback is False
+    assert audio.startswith(b"RIFF")
+
+
+def test_custom_voice_path_also_sanitizes(monkeypatch, tmp_path):
+    """복제 음성도 같은 정화를 지난다 — Edge 합성 입력이 이미 깨끗하다."""
+    svc = make_service()
+    edge_calls = stub_edge(svc)
+    stub_mp3_decode(monkeypatch)
+    dir_id, _, _ = _custom_env(monkeypatch, tmp_path, loaded=False)
+    asyncio.run(svc.synthesize("웃겨요 ㅋㅋㅋ 😂", f"custom:{dir_id}"))
+    assert edge_calls[0]["text"] == "웃겨요"
+    assert edge_calls[0]["prosody"] == speech_text.PROSODY["happy"]
