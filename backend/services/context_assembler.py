@@ -30,6 +30,10 @@ SECTION_FILES = "파일"
 # A-2 — electron이 교재에서 검색해 보낸 참조 카드. 이 섹션은 점수 기반 cap을
 # 타지 않는다(이미 상위 3장으로 잘려서 온다). 대신 프롬프트의 **맨 뒤**에 붙는다.
 SECTION_COURSEWARE = "교재"
+# 관전 — 사용자가 지금 보고 있는 창. 교재보다도 **뒤**다: 25초마다 바뀌는 가장
+# 휘발성 높은 섹션이 맨 뒤에 있어야 앞쪽 프리픽스가 가장 오래 살아남는다.
+# 교재와 같이 점수 cap 바깥(이미 1~3건으로 잘려서 온다).
+SECTION_SPECTATE = "관전"
 
 # Conservative overhead estimate for section labels + separator the prompt
 # builder adds *around* each section: "## <hint>\n…\n\n" — the hint is the

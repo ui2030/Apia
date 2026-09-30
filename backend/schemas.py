@@ -12,7 +12,7 @@ dict returns (voice/warmup/stt). Future-you grepping for "what does /warmup
 actually return" should hit this file first.
 """
 
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -48,6 +48,13 @@ class ChatRequest(BaseModel):
     # A-2: 비어 있으면(=기본) 프롬프트는 기존과 바이트 동일하다. 개수·길이는
     # 라우터에서 자른다 — 카드 하나가 길다고 대화 전체를 422로 떨구지 않는다.
     reference_cards: List[ReferenceCard] = Field(default_factory=list)
+    # 관전 중이면 electron이 보는 창 제목 + 최근 관찰을 함께 싣는다.
+    #   {"window": str, "observations": [{"text": str, "age_sec": int}, ...]}
+    # 없으면(=미관전) 프롬프트는 기존과 바이트 동일하다.
+    # **일부러 느슨한 타입이다**: 관전 문맥은 대화의 부속물이라 모양이 깨졌다고
+    # 422로 대화 전체를 떨구면 안 된다(참조 카드와 같은 원칙). 검증은 라우터의
+    # _spectate_block이 하고, 알아볼 수 없는 값은 조용히 버린다.
+    spectate: Any = None
 
 
 class DirectorRequest(BaseModel):

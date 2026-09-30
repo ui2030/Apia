@@ -884,7 +884,12 @@ const servingGate = createServingGate({
  * 규칙은 여기 한 곳에만 둔다.
  */
 async function prepareExchange(message, baseBody, settings) {
-  const body = attachReferenceCards(baseBody, courseware, settings.coursewareReferenceEnabled !== false)
+  // 관전 중이면 보고 있는 창 + 최근 관찰을 함께 싣는다. 관전이 꺼져 있으면
+  // 키 자체가 안 붙는다(= 예전과 같은 요청).
+  const body = attachSpectateContext(
+    attachReferenceCards(baseBody, courseware, settings.coursewareReferenceEnabled !== false),
+    { active: spectateIsActive(), window: spectate.sourceName, notes: spectate.notes }
+  )
   const hasReferenceCards = Array.isArray(body.reference_cards) && body.reference_cards.length > 0
   const type = classifyUtterance(message, { hasReferenceCards })
   let served = null
@@ -1240,25 +1245,40 @@ ipcMain.handle('director:decide', async (e, context) => {
 //   3. 일시정지는 디스크에 남아 재시작해도 유지되고, 정지 중엔 캡처 호출 자체를
 //      하지 않는다(찍고 버리는 게 아니라 안 찍는다).
 //   4. 캡처가 도는 동안 코너 창에 상시 표시가 켜진다.
+//   5. 관전이 켜져 있는 동안은 **관찰 문장**(이미지가 아니라 VLM이 쓴 한 줄)과
+//      창 제목이 채팅 요청에도 실린다 — 화면 질문에 지어내지 않으려면 채팅
+//      모델도 같은 것을 봐야 한다. 관전을 끄거나 창을 해제하면 즉시 멈춘다.
 const { listWindows: listCaptureWindows, createCaptureGate } = require('./services/screenCapture')
+const { attachSpectateContext, noteObservation } = require('./services/spectateContext')
 
 const spectate = {
   gate: createCaptureGate({ desktopCapturer }),
   sourceId: null,
   sourceName: '',
-  fullscreenWarned: false
+  fullscreenWarned: false,
+  // 관전이 이미 본 화면의 최근 관찰(최신이 앞). 채팅 요청에 실어 보낼 용도로만
+  // 쓰고 디스크에는 안 내려간다 — 캡처를 저장하지 않는 프라이버시 계약과 같은 선.
+  notes: [],
+  // 소스를 바꿀 때마다 오른다. tick이 자기 세대를 달고 나가고 관찰이 그걸 달고
+  // 돌아오므로, 창을 바꾼 뒤 뒤늦게 도착한 옛 관찰을 걸러낼 수 있다.
+  generation: 0
 }
 
 function spectateIsPaused() {
   return loadSettings().spectatePaused === true
 }
 
+function spectateIsActive() {
+  return !!spectate.sourceId && !spectateIsPaused()
+}
+
 // 캡처 표시 + 렌더러 상태 동기화. 창이 없으면 조용히 넘어간다.
 function broadcastSpectateState() {
   const payload = {
-    active: !!spectate.sourceId && !spectateIsPaused(),
+    active: spectateIsActive(),
     paused: spectateIsPaused(),
-    sourceName: spectate.sourceName || ''
+    sourceName: spectate.sourceName || '',
+    generation: spectate.generation
   }
   for (const w of [windows.getMain(), cornerWindow]) {
     if (w && !w.isDestroyed()) {
@@ -1288,7 +1308,22 @@ ipcMain.handle('spectate:setSource', (e, { id, name } = {}) => {
   spectate.sourceName = typeof name === 'string' ? name.slice(0, 120) : ''
   spectate.gate.reset()
   spectate.fullscreenWarned = false
+  // 다른 창으로 옮겼으면 이전 관찰은 이제 거짓이다 — 남겨두면 채팅이 엉뚱한
+  // 창을 설명한다(관전을 끈 경우도 여기로 온다). 비우는 것만으로는 부족해서
+  // 세대를 올린다: 이미 떠 있는 tick이 늦게 돌아와 다시 채우는 것을 막는다.
+  spectate.notes = []
+  spectate.generation += 1
   return broadcastSpectateState()
+})
+
+// 렌더러가 관측 하나를 정규화(parseSpectate)한 직후 여기에 남긴다. 침묵한
+// 관측도 남긴다 — "화면에 뭐가 보이나"는 코멘트를 했는지와 무관하다.
+// gen은 그 관측을 만든 tick이 달고 나간 세대다(옛 세대면 버린다).
+ipcMain.handle('spectate:note', (e, { text, gen } = {}) => {
+  spectate.notes = noteObservation(
+    spectate.notes, { text, gen }, spectate.generation, Date.now()
+  )
+  return spectate.notes.length
 })
 
 ipcMain.handle('spectate:pause', (e, paused) => setSpectatePaused(paused))
@@ -1300,6 +1335,9 @@ ipcMain.handle('spectate:state', () => broadcastSpectateState())
 ipcMain.handle('spectate:tick', async (e, context) => {
   if (spectateIsPaused()) return { status: 'paused' }
   if (!spectate.sourceId) return { status: 'no-source' }
+  // 이 tick이 어느 소스를 보고 있었는지. 결과에 실어 보내고 관찰이 돌아올 때
+  // 다시 받는다 — 도중에 창이 바뀌었으면 그 관찰은 버려진다.
+  const gen = spectate.generation
 
   let shot
   try {
@@ -1350,7 +1388,7 @@ ipcMain.handle('spectate:tick', async (e, context) => {
     const diff = Number.isFinite(shot.diff) ? shot.diff : -1
     // 관전 전용 모델을 고른 경우엔 '우회'가 아니라 사용자의 명시 선택이다.
     const localBypassed = !settings.aiModeSpectate && settings.aiMode === 'local'
-    return { status: 'ok', raw: r.raw, diff, localBypassed }
+    return { status: 'ok', raw: r.raw, diff, localBypassed, gen }
   } catch (error) {
     logWarn('[SPECTATE_VLM_FAIL]', error?.message || error)
     return { status: 'error', error: 'vlm call failed' }

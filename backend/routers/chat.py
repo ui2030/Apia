@@ -28,6 +28,7 @@ from services.claude_service import ClaudeService
 from services.context_assembler import (
     SECTION_COURSEWARE,
     SECTION_FILES,
+    SECTION_SPECTATE,
     assemble_context_blocks,
     file_recalls_to_items,
     memory_recalls_to_items,
@@ -60,6 +61,11 @@ def _flatten_field(text: str) -> str:
     return " ".join(_CONTROL_RE.sub(" ", text or "").replace('"', "'").split())
 
 
+def _cap_quoted(line: str, limit: int) -> str:
+    """인용으로 끝나는 한 줄을 상한에 맞춘다 — 잘려도 인용은 닫는다."""
+    return line if len(line) <= limit else line[:limit - 1] + '"'
+
+
 def _reference_block(cards) -> Optional[str]:
     """참조 카드 → 시스템 프롬프트 섹션 본문. 쓸 게 없으면 None.
 
@@ -72,10 +78,57 @@ def _reference_block(cards) -> Optional[str]:
         u, a = _flatten_field(card.u), _flatten_field(card.a)
         if not u and not a:
             continue
-        line = f'- "{u}" → "{a}"'
-        if len(line) > _REFERENCE_MAX_CHARS:
-            line = line[:_REFERENCE_MAX_CHARS - 1] + '"'  # 잘려도 인용은 닫는다
-        lines.append(line)
+        lines.append(_cap_quoted(f'- "{u}" → "{a}"', _REFERENCE_MAX_CHARS))
+    return "\n".join(lines) or None
+
+
+# 관전 문맥 상한. electron이 이미 3건으로 잘라 보내지만 프롬프트에 그대로 들어가는
+# 값이라 라우터에서도 자른다(참조 카드와 같은 신뢰 경계 규약).
+_SPECTATE_MAX_OBSERVATIONS = 3
+_SPECTATE_MAX_CHARS = 240  # 정규화·직렬화가 끝난 **관찰 한 줄 전체** 기준
+_SPECTATE_WINDOW_MAX_CHARS = 140
+
+
+def _spectate_age(value) -> int:
+    """경과초 → 0 이상의 정수. 알아볼 수 없으면 0 — 시각을 지어내는 것보다 '방금'이 낫다."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _spectate_block(spectate) -> Optional[str]:
+    """관전 문맥 → 시스템 프롬프트 섹션 본문. 쓸 게 없으면 None.
+
+    스키마가 아니라 **여기서** 검증한다(ChatRequest.spectate는 Any). 관전 문맥은
+    대화의 부속물이라, 모양이 깨진 값 하나로 422를 내서 대화 자체를 못 하게 만드는
+    것이 가장 나쁜 결과다 — 알아볼 수 없는 값은 조용히 버리고 대화는 계속한다.
+
+    창 제목도 관찰 문장도 **사용자 화면에서 읽어온 글자**다 = 신뢰 경계 바깥.
+    웹페이지 제목 하나로 "이전 지시를 무시하라"를 심을 수 있으므로 참조 카드와
+    똑같이 한 줄씩 인용에 가둔다(평탄화 + 줄 전체 기준 절단).
+    """
+    if not isinstance(spectate, dict):
+        return None
+    lines = []
+    # 문자열이 아닌 값은 통째로 버린다 — dict를 str()로 눌러 담으면 프롬프트에
+    # 쓰레기가 남을 뿐 정보가 되지 않는다.
+    window_raw = spectate.get("window")
+    window = _flatten_field(window_raw) if isinstance(window_raw, str) else ""
+    if window:
+        lines.append(_cap_quoted(f'- 보고 있는 창: "{window}"', _SPECTATE_WINDOW_MAX_CHARS))
+    observations = spectate.get("observations")
+    if not isinstance(observations, list):
+        observations = []
+    for obs in observations[:_SPECTATE_MAX_OBSERVATIONS]:
+        if not isinstance(obs, dict):
+            continue
+        text_raw = obs.get("text")
+        text = _flatten_field(text_raw) if isinstance(text_raw, str) else ""
+        if not text:
+            continue
+        age = _spectate_age(obs.get("age_sec"))
+        lines.append(_cap_quoted(f'- {age}초 전 관찰: "{text}"', _SPECTATE_MAX_CHARS))
     return "\n".join(lines) or None
 
 
@@ -144,6 +197,11 @@ async def _gather_context(req: ChatRequest, request: Request) -> Tuple[Any, Any,
     reference = _reference_block(req.reference_cards)
     if reference:
         context_blocks[SECTION_COURSEWARE] = reference
+
+    # 관전도 점수 cap 바깥 + 맨 뒤(교재 뒤). 미관전이면 키 자체가 안 생긴다.
+    spectate = _spectate_block(req.spectate)
+    if spectate:
+        context_blocks[SECTION_SPECTATE] = spectate
 
     return memory, web, (context_blocks or None), web_results
 

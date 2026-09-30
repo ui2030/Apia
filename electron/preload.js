@@ -99,6 +99,9 @@ contextBridge.exposeInMainWorld('api', {
   spectateListWindows: () => ipcRenderer.invoke('spectate:listWindows'),
   spectateSetSource: (id, name) => ipcRenderer.invoke('spectate:setSource', { id, name }),
   spectateTick: (context) => ipcRenderer.invoke('spectate:tick', context),
+  // 관전 관찰 한 건을 main에 남긴다 — 채팅 요청이 화면 문맥을 실을 수 있게.
+  // gen은 그 관측을 만든 tick이 돌려준 세대(창이 바뀌었으면 main이 버린다).
+  spectateNote: (text, gen) => ipcRenderer.invoke('spectate:note', { text, gen }),
   spectatePause: (paused) => ipcRenderer.invoke('spectate:pause', paused),
   spectateState: () => ipcRenderer.invoke('spectate:state'),
   onSpectateState: (cb) => {

@@ -312,6 +312,10 @@ if (typeof window !== 'undefined') {
   window.__spectateForce = async () => {
     const result = await window.api?.spectateTick?.(spectateGate.context())
     const observation = parseSpectate(spectateRawOf(result), Date.now())
+    if (observation) {
+      observation.gen = result?.gen
+      noteSpectateObservation(observation)
+    }
     const verdict = observation ? spectateGate.consider(observation) : null
     if (verdict?.speak) applySpectateVerdict(verdict)
     return { status: result?.status, diff: result?.diff, verdict }
@@ -588,7 +592,13 @@ const spectateRunner = createDirectorRunner({
         return window.api.spectateTick(spectateGate.context())
       }
     : null,
-  parse: (raw, now) => parseSpectate(spectateRawOf(raw), now),
+  // 관측에 tick의 세대를 달아 둔다 — main이 "창 바뀌기 전 tick의 뒤늦은 관찰"을
+  // 걸러낼 수 있어야 한다(parseSpectate는 raw만 보므로 여기서 붙인다).
+  parse: (raw, now) => {
+    const observation = parseSpectate(spectateRawOf(raw), now)
+    if (observation) observation.gen = raw?.gen
+    return observation
+  },
   isSkipResult: isSpectateSkip,
   minIntervalMs: 25000,
   jitterMs: 15000,
@@ -622,11 +632,20 @@ window.api?.onSpectateFullscreenHint?.(() => {
   showBubble('화면이 안 보여요. 게임을 전체화면 대신 창모드(테두리 없는 창)로 바꿔주세요.', 9000)
 })
 
+// 관측을 main에 남긴다 — 채팅 뇌가 "지금 무슨 화면을 보는지" 알아야 화면 질문에
+// 지어내지 않는다. 말하지 않은 관측도 남긴다(발화 여부와 무관한 정보다).
+// summary가 화면 설명이고 comment는 혼잣말이라 summary를 먼저 쓴다.
+function noteSpectateObservation(observation) {
+  const text = observation?.summary || observation?.comment
+  if (text) window.api?.spectateNote?.(text, observation.gen)?.catch?.(() => {})
+}
+
 function runSpectate() {
   if (!window.api?.spectateTick) return
   Promise.resolve(spectateRunner.maybeRun()).then((observation) => {
     if (!observation || observation === lastSpectateSeen) return
     lastSpectateSeen = observation
+    noteSpectateObservation(observation)
 
     const verdict = spectateGate.consider(observation)
     if (!verdict.speak) {
