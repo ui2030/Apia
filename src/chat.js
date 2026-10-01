@@ -4,6 +4,7 @@ import { setEmotion, requestFaceCamera } from './characterController.js'
 import { analyzeWav, playTimeline, stopTimeline } from './lipsyncRuntime.js'
 import { createTouchClassifier } from './touchInteraction.js'
 import { toUserMessage, isActiveFrame, createSpeechQueue, parseSfx, SFX_KINDS, pollWhileVisible } from './chatShared.js'
+import { createMicController } from './micListener.js'
 
 // Step 3: character raycaster injected by main.js. null = wallpaper mode
 // active (or just no character loaded) — click-through manager skips the
@@ -23,7 +24,6 @@ const state = {
   ttsEnabled: true,
   memoryTurns: 10,
   useWebDefault: false,
-  isListening: false,
   isSending: false,
   speechReturnState: null,
   // SSE 스트리밍 진행 상태(요청당 1개). requestId로 늦은 델타를 거른다.
@@ -96,6 +96,8 @@ function applyRuntimeSettings(settings = {}) {
     const toggle = document.getElementById('chat-web-toggle')
     if (toggle) toggle.checked = state.useWebDefault
   }
+
+  if (typeof settings.micEnabled === 'boolean') _mic.setEnabled(settings.micEnabled)
 }
 
 async function hydrateSettings() {
@@ -243,7 +245,7 @@ function setupUI() {
   })
   sendBtn?.addEventListener('click', () => sendMessage(chatInput?.value || ''))
 
-  setupSTT(micBtn)
+  setupMic(micBtn)
 }
 
 // 채팅 패널 열고/닫기 — state.chatOpen을 항상 동기화한다(Codex MUST-FIX: 외부
@@ -259,6 +261,8 @@ export function setChatOpen(open) {
     document.getElementById('chat-input')?.focus()
     if (typeof _onUserCall === 'function') _onUserCall()
   }
+  // 패널이 곧 표시등이다 — 닫으면 마이크를 완전히 놓고, 열면 (켜 둔 경우) 듣는다.
+  _mic.sync()
 }
 
 function setComposerBusy(isBusy) {
@@ -606,31 +610,44 @@ export function speakAmbient(rawText, talkMotion = null) {
   return speakText(text, talkMotion, { priority: 'ambient', sfx })
 }
 
-function setupSTT(micBtn) {
-  if (!micBtn) return
-  if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-    micBtn.title = '마이크 미지원'; return
-  }
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-  const rec = new SR()
-  rec.lang = 'ko-KR'; rec.continuous = false; rec.interimResults = false
-  rec.onresult = e => {
-    const text = e.results[0][0].transcript
-    const inp = document.getElementById('chat-input')
-    if (inp) inp.value = text
+// ── 마이크 ───────────────────────────────────────────────────────────────────
+//
+// 구 Web Speech API 경로는 제거됐다: 브라우저가 음성을 **구글 클라우드로 보내서**
+// 전사하는 구조라, "음성은 이 PC 밖으로 나가지 않는다"는 계약을 정면으로 깼다.
+// 지금은 벽지 채팅창과 **같은** 로컬 경로다(VAD로 자른 WAV → 백엔드 whisper).
+//
+// 이 표면의 "표시등이 보인다" = 채팅 패널이 열려 있고 창이 숨지 않음. 벽지모드는
+// CSS로 패널 자체가 없으니 그때도 듣지 않는다.
+const _mic = createMicController({
+  onText: (text) => {
+    const input = document.getElementById('chat-input')
+    if (input) input.value = text
     sendMessage(text)
-  }
-  rec.onend = () => { state.isListening=false; micBtn.classList.remove('listening') }
-  rec.onerror = () => { state.isListening=false; micBtn.classList.remove('listening') }
+  },
+  isSurfaceVisible: () => state.chatOpen && !document.hidden
+    && !document.body.classList.contains('wallpaper-mode'),
+  getButton: () => document.getElementById('mic-btn')
+})
 
+// 벽지모드 전환은 패널(=표시등)을 CSS로 없앤다 — main.js가 클래스를 바꾼 **직후**
+// 불러 캡처가 따라 멈추게 한다(표시등 = 캡처의 동어반복).
+export function syncMic() { _mic.sync() }
+
+function setupMic(micBtn) {
+  if (!micBtn) return
+  // 버튼 = 멈춤 토글("귀 닫아"). 마스터 on/off는 설정 창에서.
   micBtn.addEventListener('click', () => {
-    if (state.isListening) rec.stop()
-    else {
-      state.isListening=true; micBtn.classList.add('listening')
-      rec.start()
-      _showBubble?.('듣고 있어요... 🎤', 2000)
-    }
+    if (!_mic.isEnabled()) { window.api?.openSettings?.(); return }
+    _mic.togglePause()
   })
+  document.addEventListener('visibilitychange', () => _mic.sync())
+  // 테스트 훅 — 벽지 채팅창(chatRenderer)과 같은 이름·같은 계약.
+  window.__apiaMic = {
+    transcribeAndRoute: _mic.transcribeAndRoute,
+    routeTranscript: _mic.routeTranscript,
+    shouldListen: _mic.shouldListen
+  }
+  _mic.sync()
 }
 
 const MAX_MSG_ROWS = 200 // L단계 — 채팅 DOM 무한 누적 방지(오래된 행 프루닝)

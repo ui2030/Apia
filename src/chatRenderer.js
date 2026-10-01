@@ -16,7 +16,7 @@
 
 import { analyzeWav } from './lipsyncRuntime.js'
 import { toUserMessage, isActiveFrame, createSpeechQueue, pollWhileVisible } from './chatShared.js'
-import { createMicListener } from './micListener.js'
+import { createMicController } from './micListener.js'
 
 const state = {
   history: [],
@@ -33,12 +33,9 @@ const state = {
   // TTS 백그라운드 재생 중단용 공유 경로(task 2).
   activeAudio: null,
   abortSpeak: null,
-  // 마이크(음성 입력). micEnabled=설정 마스터, micPaused=세션 멈춤("귀 닫아"),
-  // micWindowVisible=main이 알려주는 이 창의 표시 상태(캡처 게이트).
-  micEnabled: false,
-  micPaused: false,
-  // fail-closed: main의 첫 chat:visibility 신호가 오기 전까지는 "안 보임"으로
-  // 간주한다 — show:false로 뜬 창이 로드 직후 첫 신호 전에 듣기 시작하는 틈 차단.
+  // 마이크 캡처 게이트 — main이 알려주는 이 창의 표시 상태가 단일 출처다.
+  // fail-closed: 첫 chat:visibility 신호가 오기 전까지는 "안 보임"으로 간주한다
+  // — show:false로 뜬 창이 로드 직후 첫 신호 전에 듣기 시작하는 틈 차단.
   micWindowVisible: false
 }
 
@@ -99,10 +96,7 @@ function applyRuntimeSettings(settings = {}) {
     const toggle = document.getElementById('chat-web-toggle')
     if (toggle) toggle.checked = state.useWebDefault
   }
-  if (typeof settings.micEnabled === 'boolean') {
-    state.micEnabled = settings.micEnabled
-    syncMic()
-  }
+  if (typeof settings.micEnabled === 'boolean') _mic.setEnabled(settings.micEnabled)
 }
 
 async function loadVoices() {
@@ -408,93 +402,40 @@ function handleOpener(payload) {
 
 // ── 마이크 ───────────────────────────────────────────────────────────────────
 //
-// 프라이버시 계약(발주서 12 §C-2):
-//   ① 기본 OFF — settings.micEnabled를 사용자가 직접 켠다.
-//   ② 표시등 — 듣는 동안 이 창의 🎤 버튼이 빨갛게 맥동한다. 그래서 **캡처는
-//      이 창이 화면에 보일 때만 돈다**: 창이 숨으면 마이크를 완전히 놓는다
-//      (OS 마이크 표시까지 꺼진다). "표시등이 안 보이는데 듣고 있는" 상태를
-//      만들지 않는 유일한 방법이다. 표시 여부는 main의 chat:visibility가
-//      단일 출처다 — 렌더러 visibilityState는 환경에 따라 거짓말을 한다.
-//   ③ 원음 무저장 — micListener가 세그먼트를 넘기는 즉시 버퍼를 비우고,
-//      main의 stt:transcribe도 디스크에 쓰지 않는다. 남는 건 전사 텍스트뿐.
-let _mic = null
-
-function isEarClosePhrase(text) {
-  return /귀\s*(좀\s*)?닫아|그만\s*들어/.test(String(text || ''))
-}
-
-// 지금 실제로 들어도 되는 상태인가. 표시등이 보이는 조건과 **같은 식**이어야
-// 한다 — 둘이 갈라지는 순간 "몰래 듣는" 창이 생긴다.
-function micShouldListen() {
-  return state.micEnabled && !state.micPaused && state.micWindowVisible
-}
-
-function updateMicIndicator() {
-  const btn = document.getElementById('mic-btn')
-  if (!btn) return
-  btn.style.display = state.micEnabled ? '' : 'none'
-  btn.classList.toggle('listening', micShouldListen() && !!_mic?.isRunning?.())
-  btn.title = !state.micEnabled ? '음성 듣기 꺼짐(설정에서 켜기)'
-    : state.micPaused ? '멈춤 — 눌러서 다시 듣기'
-      : '듣는 중 — 눌러서 멈춤("귀 닫아")'
-}
-
-// 전사된 텍스트는 채팅 입력으로만 간다("내가 말하면 받아 적어 전송").
-// 창이 숨으면 애초에 캡처가 멈추므로 여기 도착할 일이 없다.
-function routeTranscript(text) {
-  const t = String(text || '').trim()
-  if (!t) return
-  if (isEarClosePhrase(t)) { state.micPaused = true; syncMic(); return }
-  if (!state.micWindowVisible) return
-  const input = document.getElementById('chat-input')
-  if (input) input.value = t
-  sendMessage(t)
-}
-
-async function transcribeAndRoute(wav) {
-  try {
-    const r = await window.api?.mic?.transcribe?.(wav)
-    routeTranscript(r?.text)
-  } catch (error) {
-    console.warn('[chatRenderer] transcribe failed', error)
-  }
-}
-
-function syncMic() {
-  if (micShouldListen()) {
-    if (!_mic) {
-      _mic = createMicListener({
-        onSegment: (wav) => { if (micShouldListen()) transcribeAndRoute(wav) },
-        onError: (error) => console.warn('[chatRenderer] mic error', error)
-      })
-    }
-    if (!_mic.isRunning()) _mic.start().then(() => updateMicIndicator())
-    else updateMicIndicator()
-  } else {
-    // 멈춤은 일시정지가 아니라 완전 정지 — 스트림을 놓아 OS 마이크 표시도 끈다.
-    _mic?.stop?.()
-    if (!state.micEnabled) state.micPaused = false
-    updateMicIndicator()
-  }
-}
+// 프라이버시 계약은 createMicController(micListener.js)가 한 곳에서 지킨다.
+// 이 창이 주는 건 "보인다"의 정의뿐: **main의 chat:visibility가 단일 출처**다
+// — 렌더러 visibilityState는 환경에 따라 거짓말을 한다. 창이 숨으면 캡처를
+// 완전히 놓아 OS 마이크 표시까지 꺼진다.
+const _mic = createMicController({
+  onText: (text) => {
+    const input = document.getElementById('chat-input')
+    if (input) input.value = text
+    sendMessage(text)
+  },
+  isSurfaceVisible: () => state.micWindowVisible,
+  getButton: () => document.getElementById('mic-btn')
+})
 
 function setupMic() {
   const btn = document.getElementById('mic-btn')
   if (!btn) return
   // 버튼 = 멈춤 토글("귀 닫아"). 마스터 on/off는 설정 창에서.
   btn.addEventListener('click', () => {
-    if (!state.micEnabled) { window.api?.openSettings?.(); return }
-    state.micPaused = !state.micPaused
-    syncMic()
+    if (!_mic.isEnabled()) { window.api?.openSettings?.(); return }
+    _mic.togglePause()
   })
   // 창이 숨거나 다시 보이면 캡처를 따라간다(표시등 = 캡처의 동어반복).
   window.api?.onChatVisibility?.(({ visible }) => {
     state.micWindowVisible = visible !== false
-    syncMic()
+    _mic.sync()
   })
   // 테스트 훅 — 가짜 STT(WAV → 실제 transcribe IPC) 또는 전사 텍스트 직접 라우팅.
-  window.__apiaMic = { transcribeAndRoute, routeTranscript, shouldListen: micShouldListen }
-  updateMicIndicator()
+  window.__apiaMic = {
+    transcribeAndRoute: _mic.transcribeAndRoute,
+    routeTranscript: _mic.routeTranscript,
+    shouldListen: _mic.shouldListen
+  }
+  _mic.sync()
 }
 
 init()

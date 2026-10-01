@@ -23,7 +23,7 @@ import { parseSpectate, createCommentGate, isSpectateSkip, spectateRawOf } from 
 import { setExpressionEmotion, updateExpression, resetExpression } from './expressionRuntime.js'
 import { playTimeline, stopTimeline, updateMouthMMD, updateMouthVRM } from './lipsyncRuntime.js'
 import { initWorld, updateWorldLabels } from './world.js'
-import { initChat, setCharacterRaycaster, setChatOpen, speakAmbient } from './chat.js'
+import { initChat, setCharacterRaycaster, setChatOpen, speakAmbient, syncMic } from './chat.js'
 import { MotionManager } from './motionManager.js'
 import { createDirectorRunner, applyDirective, buildDirectorContext } from './behaviorDirector.js'
 import { createActivityRunner } from './activityRunner.js'
@@ -2400,6 +2400,8 @@ window.api?.onWallpaperOpaque?.((on) => {
   // Hide the interactive HUD (chat, buttons, labels) when it's a real wallpaper
   // — it's behind icons + click-through, so it can't be used anyway.
   try { document.body.classList.toggle('wallpaper-mode', on === true) } catch {}
+  // 패널(=마이크 표시등)이 CSS로 사라졌으니 캡처도 따라 멈춘다. 클래스 토글 **뒤**.
+  try { syncMic() } catch {}
 })
 
 if (window.api) {

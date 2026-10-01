@@ -191,6 +191,35 @@ def test_chat_caps_observations_and_line_length(client, fake_claude):
         assert line.endswith('"')                # 잘려도 인용은 닫힌다
 
 
+def test_bad_observations_do_not_eat_the_three_slots(client, fake_claude):
+    """불량 항목은 **슬롯을 먹지 않는다** — 건너뛰고 유효 관찰 3건을 채운다.
+
+    먼저 3건으로 자른 뒤 버리면, 앞쪽에 쓰레기 두 개가 끼어 있을 때 멀쩡한 관찰이
+    한 건만 프롬프트에 들어간다(관전 버퍼는 최신이 앞이라 실제로 일어날 순서다).
+    """
+    fake_claude.chat.reset_mock()
+    res = client.post("/chat", json={
+        "message": "질문",
+        "history": [],
+        "spectate": {"observations": [
+            "문자열",                       # dict 아님
+            {"text": ""},                    # 빈 문장
+            {"text": "첫째", "age_sec": 1},
+            None,
+            {"text": "둘째", "age_sec": 2},
+            {"text": "셋째", "age_sec": 3},
+            {"text": "넷째", "age_sec": 4},  # 상한 밖 — 안 들어간다
+        ]},
+    })
+    assert res.status_code == 200
+    lines = _last_blocks(fake_claude)[SECTION_SPECTATE].splitlines()
+    assert lines == [
+        '- 1초 전 관찰: "첫째"',
+        '- 2초 전 관찰: "둘째"',
+        '- 3초 전 관찰: "셋째"',
+    ]
+
+
 def test_negative_age_is_flattened_to_zero(client, fake_claude):
     """시계가 어긋나 음수가 와도 '-3초 전' 같은 헛소리를 프롬프트에 넣지 않는다."""
     fake_claude.chat.reset_mock()

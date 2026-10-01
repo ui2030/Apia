@@ -606,6 +606,12 @@ ipcMain.handle('mic:getState', () => ({
 }))
 
 ipcMain.handle('mic:setConsent', async (e, { on } = {}) => {
+  // ambient(use #2)가 격리돼 있으면 이 동의는 아무것도 열지 않는다 — mic:ambient와
+  // **같은 계약**으로 거절한다(효과 없는 동의를 받아 저장한 척하지 않는다).
+  if (!MIC_AMBIENT_ENABLED) {
+    micThirdPartyConsent = false
+    return { consent: false, stored: false, reason: 'isolated', ambientIsolated: true }
+  }
   if (!on) { micThirdPartyConsent = false; return { consent: false, consentDate: micConsentDate } }
   // 네이티브 확인 — 렌더러 confirm은 IPC를 직접 부르면 건너뛸 수 있는 장식이라
   // 실제 게이트를 여기 둔다(기본 버튼 = 취소).
@@ -1291,6 +1297,9 @@ function broadcastSpectateState() {
 function setSpectatePaused(paused) {
   patchSettings({ spectatePaused: !!paused })
   spectate.gate.reset() // 재개 시 첫 프레임은 무조건 새 프레임으로 취급
+  // 세대도 올린다: 멈추는 순간 떠 있던 tick이 몇 초 뒤 돌아와 관찰을 남기면,
+  // 재개 후 "멈춰 있던 동안의 화면"이 새 관찰인 척 섞여 든다(setSource와 같은 함정).
+  spectate.generation += 1
   return broadcastSpectateState()
 }
 
@@ -1510,7 +1519,11 @@ ipcMain.handle('get-voices', async () => {
 ipcMain.handle('warmup', async () => {
   try {
     await backend.ensureAvailableForRequest()
-    return await requestBackendJson('/warmup', { method: 'POST', timeout: 3000 })
+    // 마이크를 켠 사용자만 whisper를 함께 프라임한다 — 첫 발화 ~10s 대기 제거.
+    // 꺼져 있으면 ~500MB를 올리지 않는다(리소스 원칙). 설정은 여기가 단일 출처라
+    // 어느 렌더러가 불러도 같은 판단이 나간다.
+    const mic = loadSettings().micEnabled === true
+    return await requestBackendJson(`/warmup?mic=${mic}`, { method: 'POST', timeout: 3000 })
   } catch {
     return null
   }
@@ -2439,6 +2452,10 @@ async function syncWallpaperMode() {
     try { live.webContents?.send('wallpaper:opaque', false) } catch {}
     // 오버레이 모드는 메인 창 자체 버튼을 쓰므로 코너 창 제거.
     destroyCornerWindow()
+    // 벽지 전용 채팅창도 숨긴다 — 오버레이 모드의 채팅 표면은 인월드 패널이라
+    // (toggleChatWindow와 같은 판단), 둘이 같이 보이면 마이크가 이중 청취해
+    // 한 발화가 두 번 전송된다. hide가 chat:visibility(false)를 쏴 캡처도 놓는다.
+    try { if (chatWindow && !chatWindow.isDestroyed()) chatWindow.hide() } catch {}
   }
 }
 

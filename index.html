@@ -244,7 +244,8 @@
     </div>
     <div id="input-area">
       <input id="chat-input" type="text" placeholder="메시지 입력... (Enter)">
-      <button class="icon-btn" id="mic-btn">
+      <!-- 마이크는 기본 OFF다 — 켠 사용자에게만 컨트롤러가 버튼을 보여준다. -->
+      <button class="icon-btn" id="mic-btn" type="button" title="음성 듣기" style="display:none">
         <svg width="13" height="15" viewBox="0 0 13 15" fill="none">
           <rect x="4" y="0" width="5" height="9" rx="2.5" fill="rgba(255,255,255,0.8)"/>
           <path d="M1 7C1 10.3 12 10.3 12 7" stroke="rgba(255,255,255,0.8)" stroke-width="1.2" fill="none" stroke-linecap="round"/>

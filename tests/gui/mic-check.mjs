@@ -2,7 +2,8 @@
 //
 //   단언 1: stt:transcribe(WAV) → 백엔드 전사 텍스트를 돌려준다(가짜 STT)
 //   단언 2: 전사 텍스트 라우팅 → 채팅 입력으로 전송(chatStreamStart 발생)
-//   단언 3: 제3자 청취(use #2 ambient)는 격리 상태 — 동의와 무관하게 저장 0
+//   단언 3: 제3자 청취(use #2 ambient)는 격리 상태 — 저장 0이고 동의 설정도 같은
+//           계약({stored:false, reason:'isolated'})으로 거절한다
 //   단언 4: "귀 닫아"는 전송하지 않고 캡처를 멈춘다
 //   단언 5: 표시등 = 캡처의 동어반복 — 창이 숨으면 듣지 않고, 버튼도 안 켜진다
 //   단언 6: micEnabled를 안 켠 사용자에겐 🎤 버튼 자체가 안 보인다
@@ -82,8 +83,11 @@ try {
   // 단언 3 — 제3자 청취(use #2)는 격리됐다. 동의를 켜려 해도 저장되지 않는다.
   const amb = await chatWin.evaluate(() => window.api.mic.ambient('혼잣말 테스트'))
   const micState = await chatWin.evaluate(() => window.api.mic.getState())
+  // 동의 설정도 **같은 계약**으로 거절한다 — 효과가 없는 동의를 받아두지 않는다.
+  const consent = await chatWin.evaluate(() => window.api.mic.setConsent(true))
   const ambientIsolatedOk =
-    amb?.stored === false && amb?.reason === 'isolated' && micState?.ambientIsolated === true
+    amb?.stored === false && amb?.reason === 'isolated' && micState?.ambientIsolated === true &&
+    consent?.stored === false && consent?.reason === 'isolated' && consent?.consent === false
 
   // 단언 6 — 버튼 가시성은 micEnabled를 따른다(여기선 켠 사용자라 보인다).
   const btnShownOk = await chatWin.evaluate(() => {

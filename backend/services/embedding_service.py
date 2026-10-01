@@ -91,9 +91,17 @@ class EmbeddingService:
                 # storage correctly without hardcoding per-model.
                 # sentence-transformers 5.x가 get_sentence_embedding_dimension을
                 # get_embedding_dimension으로 개명(구명은 경고 후 6.x에서 제거).
-                get_dim = getattr(
-                    model, "get_embedding_dimension", model.get_sentence_embedding_dimension
+                # 2단계로 본다 — getattr의 기본값을 `model.구메서드`로 쓰면 그 표현식이
+                # **먼저** 평가돼서, 구명이 사라진 판에서는 신 메서드가 있어도
+                # AttributeError로 죽는다.
+                get_dim = getattr(model, "get_embedding_dimension", None) or getattr(
+                    model, "get_sentence_embedding_dimension", None
                 )
+                if get_dim is None:
+                    raise AttributeError(
+                        "sentence-transformers model exposes neither "
+                        "get_embedding_dimension nor get_sentence_embedding_dimension"
+                    )
                 self._dim = int(get_dim())
             except Exception as exc:  # noqa: BLE001 — boundary surface
                 self._error = f"{type(exc).__name__}: {exc}"

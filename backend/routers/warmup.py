@@ -7,10 +7,10 @@ claude_service의 provider init이 lazy로 바뀐 뒤, 첫 /chat 요청이 init 
 초기화되고, 첫 /chat 호출 시점엔 캐시된 mode가 그대로 재사용된다.
 
 같은 흐름으로 voice.py의 TTSService/VoiceManager도 lazy라(pyttsx3 init은 OS에 따라
-무겁다) 워밍업 시 함께 prime한다. stt.py의 WhisperService는 여기서 prime하지 않는다 —
-마이크(음성 입력)는 **기본 OFF**라 대부분의 실행에서 한 번도 안 쓰는데 ~500MB를
-미리 올리게 된다. ponytail: 켠 사용자는 첫 발화에서 ~10s 로드를 한 번 기다린다.
-그게 불편하다면 settings.micEnabled가 true일 때만 prime하도록 조건을 달 것.
+무겁다) 워밍업 시 함께 prime한다. stt.py의 WhisperService는 **마이크를 켠 사용자에게만**
+prime한다(`POST /warmup?mic=true` — electron이 settings.micEnabled를 실어 보낸다):
+whisper.load_model('small')은 ~500MB라 안 쓸 사람에게 올리면 낭비지만, 켠 사람이
+첫 발화에서 ~10s를 기다리는 것도 그대로 둘 이유가 없다.
 
 POST /warmup : 비동기로 워밍업 시작. 이미 ready면 즉시 ready 반환, 워밍 중이면 warming.
 GET  /warmup : 현재 initialized_modes / 활성 mode / warming 여부 조회.
@@ -22,7 +22,7 @@ from typing import Optional
 from fastapi import APIRouter, Request
 
 from ai_config import MODEL_ID
-from routers import voice
+from routers import stt, voice
 from routers.chat import claude
 from schemas import WarmupPostResponse, WarmupStatusResponse
 
@@ -38,27 +38,32 @@ def _resolve_target_mode(mode: str) -> str:
     return mode
 
 
-async def _prime_all_services() -> None:
+async def _prime_all_services(mic: bool = False) -> None:
     # prime이 실패해도 나머지 warmup 흐름은 살아남아야 한다. return_exceptions=True로
     # sibling 취소를 막고, 실패한 prime은 로깅만 한 뒤 흘려보낸다 — 진짜 깨졌다면
     # 첫 사용 시점에 다시 시도된다.
     #
-    # stt.prime()은 뺐다: 마이크는 기본 OFF라 대부분의 실행에서 /stt/transcribe가
-    # 한 번도 안 불리는데 whisper.load_model('small')은 ~500MB를 올린다.
-    # 마이크를 켠 사용자는 첫 발화에서 lazy 로드를 한 번 기다린다(알려진 상한).
-    results = await asyncio.gather(voice.prime(), return_exceptions=True)
-    for name, result in zip(("voice",), results):
+    # stt.prime()은 mic=True일 때만: whisper.load_model('small')이 ~500MB라
+    # 마이크를 안 켠 사용자(기본값)에게 올리면 순수 낭비다. 켠 사용자에게는 여기서
+    # 미리 올려 첫 발화의 ~10s 대기를 없앤다.
+    names = ["voice"]
+    tasks = [voice.prime()]
+    if mic:
+        names.append("stt")
+        tasks.append(stt.prime())
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for name, result in zip(names, results):
         if isinstance(result, BaseException):
             _log.warning("%s.prime() failed during warmup", name, exc_info=result)
 
 
-async def _run_warmup(mode: str) -> None:
+async def _run_warmup(mode: str, mic: bool = False) -> None:
     # provider init 직렬화는 ClaudeService.ensure_mode가 자체 _init_lock으로 처리한다
     # (chat 핸들러도 같은 lock에 들어와 race가 닫힌다). 라우터에서 추가 lock을 잡으면
     # voice/stt prime이 같이 묶여 contention만 늘기 때문에 여기선 안 잡는다.
     if not claude.is_mode_initialized(mode):
         await claude.ensure_mode(mode)
-    await _prime_all_services()
+    await _prime_all_services(mic)
 
 
 def _on_warm_done(task: asyncio.Task) -> None:
@@ -82,7 +87,10 @@ def _is_warming() -> bool:
 
 
 @router.post("", response_model=WarmupPostResponse)
-async def warmup():
+async def warmup(mic: bool = False):
+    """mic — 호출자(electron)가 settings.micEnabled를 실어 보낸다. True면 whisper도
+    미리 올려 첫 발화 대기를 없앤다. 기본 False = 마이크를 안 쓰는 실행에는 ~500MB를
+    올리지 않는다(리소스 원칙)."""
     global _warm_task, _last_error
     target = _resolve_target_mode(claude.default_mode)
 
@@ -90,7 +98,7 @@ async def warmup():
         # claude mode는 준비됨. 나머지 deferred service도 prime 보장 — 멱등이라
         # 첫 호출 후엔 거의 무료. 한쪽이 실패해도 다른 쪽 + 호출자 응답에 영향 없게
         # return_exceptions=True.
-        await _prime_all_services()
+        await _prime_all_services(mic)
         return {"status": "ready", "mode": claude.mode}
 
     if not _is_warming():
@@ -98,7 +106,7 @@ async def warmup():
         # 커밋한다. requested("auto") 그대로 넘기면 readiness 체크와 실제 init이
         # 다른 mode를 가리키는 TOCTOU 갭이 생긴다.
         _last_error = None  # 재시도 진행 중에는 이전 실패를 노출하지 않는다
-        _warm_task = asyncio.create_task(_run_warmup(target))
+        _warm_task = asyncio.create_task(_run_warmup(target, mic))
         _warm_task.add_done_callback(_on_warm_done)
 
     return {"status": "warming", "mode": target}

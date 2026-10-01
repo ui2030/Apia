@@ -129,6 +129,25 @@ def test_chat_caps_the_whole_serialized_card_not_each_field(client, fake_claude)
         assert line.endswith('"')                # 잘려도 인용은 닫힌다
 
 
+def test_truncated_card_keeps_the_quoted_envelope():
+    """상한에 걸려 잘려도 봉투(`- "` … `"`)는 그대로다.
+
+    봉투가 깨지면 카드 내용이 인용 밖으로 나와 줄머리를 차지한다 = 지시문 행세.
+    끝만 보는 위 테스트와 달리 **여는 쪽**까지 단언한다(_cap_quoted가 뒤에서만
+    자르므로 여는 봉투는 어떤 상한에서도 살아 있어야 한다).
+    """
+    from routers.chat import _REFERENCE_MAX_CHARS, _reference_block  # noqa: PLC0415
+
+    class _Card:
+        def __init__(self, u, a):
+            self.u, self.a = u, a
+
+    body = _reference_block([_Card("긴" * 600, "짧" * 600)])
+    assert len(body) == _REFERENCE_MAX_CHARS      # 실제로 절단이 일어났다
+    assert body.count("\n") == 0                  # 카드 한 장 = 한 줄
+    assert body.startswith('- "') and body.endswith('"')
+
+
 # ── 3. 오염된 카드 (프롬프트 인젝션) ────────────────────────────────────────
 #
 # 카드 본문은 교사 모델이 쓴 텍스트라 신뢰 경계 바깥이다. 개행 + `##` 헤딩 +

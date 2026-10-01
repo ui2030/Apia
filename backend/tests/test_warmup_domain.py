@@ -219,3 +219,93 @@ def test_ensure_mode_to_local_does_not_release_it(local_service, monkeypatch):
 
     assert service._ensure_mode("local") == "local"
     assert service._model is not None  # 바로 쓸 건데 내렸다 다시 올리면 손해
+
+
+# ── 마이크 프라임 게이트 (POST /warmup?mic=) ─────────────────────────────────
+#
+# whisper는 ~500MB다. 안 쓰는 사람에게 올리면 낭비, 켠 사람이 첫 발화에서 ~10s를
+# 기다리면 결함 — 그래서 호출자가 실어 보낸 mic 플래그 하나로 갈린다.
+
+@pytest.mark.asyncio
+async def test_prime_skips_whisper_when_mic_is_off(monkeypatch):
+    from routers import stt, voice, warmup  # noqa: PLC0415
+
+    primed = []
+
+    async def _voice():
+        primed.append("voice")
+
+    async def _stt():
+        primed.append("stt")
+
+    monkeypatch.setattr(voice, "prime", _voice)
+    monkeypatch.setattr(stt, "prime", _stt)
+
+    await warmup._prime_all_services()
+    assert primed == ["voice"]
+
+
+@pytest.mark.asyncio
+async def test_prime_loads_whisper_when_mic_is_on(monkeypatch):
+    from routers import stt, voice, warmup  # noqa: PLC0415
+
+    primed = []
+
+    async def _voice():
+        primed.append("voice")
+
+    async def _stt():
+        primed.append("stt")
+
+    monkeypatch.setattr(voice, "prime", _voice)
+    monkeypatch.setattr(stt, "prime", _stt)
+
+    await warmup._prime_all_services(mic=True)
+    assert sorted(primed) == ["stt", "voice"]
+
+
+@pytest.mark.asyncio
+async def test_prime_survives_a_failing_whisper_load(monkeypatch):
+    """whisper prime이 터져도 voice prime과 warmup 흐름은 살아남는다."""
+    from routers import stt, voice, warmup  # noqa: PLC0415
+
+    primed = []
+
+    async def _voice():
+        primed.append("voice")
+
+    async def _stt():
+        raise RuntimeError("no whisper here")
+
+    monkeypatch.setattr(voice, "prime", _voice)
+    monkeypatch.setattr(stt, "prime", _stt)
+
+    await warmup._prime_all_services(mic=True)  # 예외가 새어 나오지 않는다
+    assert primed == ["voice"]
+
+
+def test_post_warmup_parses_the_mic_query_flag(client, monkeypatch):
+    """`POST /warmup?mic=true` — 플래그가 실제로 stt prime까지 도달한다.
+
+    electron이 settings.micEnabled를 이 쿼리로 싣는다(main.js `warmup` 핸들러).
+    """
+    from routers import stt, voice  # noqa: PLC0415
+
+    primed = []
+
+    async def _voice():
+        primed.append("voice")
+
+    async def _stt():
+        primed.append("stt")
+
+    monkeypatch.setattr(voice, "prime", _voice)
+    monkeypatch.setattr(stt, "prime", _stt)
+
+    assert client.post("/warmup?mic=false").status_code == 200
+    off = list(primed)
+    primed.clear()
+    assert client.post("/warmup?mic=true").status_code == 200
+
+    assert "stt" not in off
+    assert "stt" in primed

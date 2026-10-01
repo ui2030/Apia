@@ -120,7 +120,13 @@ def _spectate_block(spectate) -> Optional[str]:
     observations = spectate.get("observations")
     if not isinstance(observations, list):
         observations = []
-    for obs in observations[:_SPECTATE_MAX_OBSERVATIONS]:
+    # 상한은 **유효 관찰** 기준이다. 먼저 자르고 나서 버리면 불량 항목 하나가
+    # 슬롯을 먹어 멀쩡한 관찰이 프롬프트에 못 들어간다(창 제목은 별도 줄이라 무관).
+    # 훑는 범위 자체는 여전히 유한하다 — 신뢰 경계 바깥 입력이라 무한 스캔은 안 준다.
+    kept = 0
+    for obs in observations[: _SPECTATE_MAX_OBSERVATIONS * 4]:
+        if kept >= _SPECTATE_MAX_OBSERVATIONS:
+            break
         if not isinstance(obs, dict):
             continue
         text_raw = obs.get("text")
@@ -129,6 +135,7 @@ def _spectate_block(spectate) -> Optional[str]:
             continue
         age = _spectate_age(obs.get("age_sec"))
         lines.append(_cap_quoted(f'- {age}초 전 관찰: "{text}"', _SPECTATE_MAX_CHARS))
+        kept += 1
     return "\n".join(lines) or None
 
 

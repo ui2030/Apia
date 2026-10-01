@@ -57,8 +57,11 @@ anthropic>=0.18.0
 groq>=0.4.0
 
 # ── 임베딩 (장기 기억 / 파일 이해 / 웹 검색 결과 의미 비교) ──
-# sentence-transformers는 첫 실행 때 모델(~90MB)을 HuggingFace에서 다운받아
-# 캐시하고, 이후엔 오프라인으로도 동작한다. all-MiniLM-L6-v2가 기본.
+# sentence-transformers는 첫 실행 때 모델(~480MB)을 HuggingFace에서 다운받아
+# 캐시하고, 이후엔 오프라인으로도 동작한다. 기본 모델은
+# paraphrase-multilingual-MiniLM-L12-v2(384차원, 한국어 포함 다국어) —
+# embedding_service.DEFAULT_MODEL_NAME이 단일 출처이고 APIA_EMBEDDING_MODEL로 교체 가능.
+# 영어 전용 all-MiniLM-L6-v2(~90MB)는 한국어 의미 신호를 너무 잃어서 기본에서 내렸다.
 # 상한 <6: 6.x는 transformers>=5 / huggingface_hub>=1.3을 요구해 위 두 핀과
 # 정면충돌한다(음성 복제 동반 사망). 5.7은 transformers 4.53과 함께 돈다.
 sentence-transformers>=2.7.0,<6

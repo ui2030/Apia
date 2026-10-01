@@ -1,4 +1,5 @@
-// src/micListener.js — 마이크 캡처 + VAD(음성 활동 감지) + WAV 인코딩.
+// src/micListener.js — 마이크 캡처 + VAD(음성 활동 감지) + WAV 인코딩 +
+// 두 채팅 표면이 공유하는 마이크 컨트롤러(createMicController, 파일 맨 아래).
 //
 // 발주서 2단계: 기본 입력 마이크만, VAD로 발화 구간만 열고 무음이면 캡처 안 함
 // (상시 녹음 아님). 발화 한 구간이 끝나면 그 PCM만 WAV로 묶어 onSegment로 넘긴다.
@@ -102,16 +103,27 @@ export function createMicListener({ onSegment, onError, vad = {} } = {}) {
   let running = false
   let sampleRate = 16000
   let chunks = [] // 현재 발화 구간의 Float32 프레임들
+  // getUserMedia 대기 중 stop()이 끼어드는 레이스 차단용 세대 토큰. 대기가 끝났을 때
+  // 세대가 바뀌어 있으면(그새 stop 또는 새 start) 방금 받은 스트림을 즉시 반납한다 —
+  // 안 그러면 "표시등은 꺼졌는데 OS 마이크는 켜진" 캡처가 남는다(astra MUST-FIX).
+  let epoch = 0
 
   async function start() {
     if (running) return true
+    const myEpoch = ++epoch
+    let acquired
     try {
       // 기본 마이크만. video 없음, 시스템/루프백 오디오 없음.
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      acquired = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
     } catch (error) {
       onError?.(error)
       return false
     }
+    if (myEpoch !== epoch) {
+      try { acquired.getTracks().forEach((t) => t.stop()) } catch {}
+      return false
+    }
+    stream = acquired
     ctx = new (window.AudioContext || window.webkitAudioContext)()
     sampleRate = ctx.sampleRate
     source = ctx.createMediaStreamSource(stream)
@@ -149,6 +161,7 @@ export function createMicListener({ onSegment, onError, vad = {} } = {}) {
   }
 
   function stop() {
+    epoch++ // 대기 중인 start()가 있으면 무효화(스트림은 그쪽이 반납)
     running = false
     try { node && (node.onaudioprocess = null) } catch {}
     try { source?.disconnect() } catch {}
@@ -163,4 +176,86 @@ export function createMicListener({ onSegment, onError, vad = {} } = {}) {
   // 화면 밖에서도 정직해진다. 다시 켤 때 getUserMedia를 한 번 더 부르는 비용은
   // 그 정직함 값으로 싸다.
   return { start, stop, isRunning: () => running }
+}
+
+// ── 마이크 컨트롤러 (두 채팅 표면 공용) ──────────────────────────────────────
+//
+// 프라이버시 계약(발주서 12 §C-2)이 **여기 한 곳에** 있다. 벽지 채팅창
+// (chatRenderer.js)과 인월드 채팅(chat.js)이 각자 이 판단을 들고 있으면 한쪽만
+// 고쳐져서 "표시등이 안 보이는데 듣고 있는 창"이 생긴다.
+//   ① 기본 OFF — settings.micEnabled를 사용자가 직접 켠다.
+//   ② 표시등 = 캡처의 동어반복 — 표시등(🎤)이 실제로 보이는 상태에서만 캡처가
+//      돈다. "보인다"의 정의만 표면마다 달라서 isSurfaceVisible로 주입받는다
+//      (벽지 창은 main의 chat:visibility, 인월드는 패널 열림 + 창 비은닉).
+//      fail-closed: 아직 모르면 false를 돌려줄 것.
+//   ③ 원음 무저장 — createMicListener가 세그먼트를 넘기는 즉시 버퍼를 비우고,
+//      main의 stt:transcribe도 디스크에 쓰지 않는다. 남는 건 전사 텍스트뿐.
+//
+// onText(text) — 전사된 한 문장. 표면이 자기 채팅 전송 경로로 흘린다.
+// getButton() — 표시등으로 쓸 🎤 버튼(없어도 동작은 한다).
+const EAR_CLOSE_RE = /귀\s*(좀\s*)?닫아|그만\s*들어/
+
+export function createMicController({ onText, isSurfaceVisible, getButton } = {}) {
+  let enabled = false
+  let paused = false
+  let mic = null
+
+  const shouldListen = () => enabled && !paused && isSurfaceVisible?.() === true
+
+  function updateIndicator() {
+    const btn = getButton?.()
+    if (!btn) return
+    btn.style.display = enabled ? '' : 'none'
+    btn.classList.toggle('listening', shouldListen() && !!mic?.isRunning?.())
+    btn.title = !enabled ? '음성 듣기 꺼짐(설정에서 켜기)'
+      : paused ? '멈춤 — 눌러서 다시 듣기'
+        : '듣는 중 — 눌러서 멈춤("귀 닫아")'
+  }
+
+  function sync() {
+    if (shouldListen()) {
+      if (!mic) {
+        mic = createMicListener({
+          onSegment: (wav) => { if (shouldListen()) transcribeAndRoute(wav) },
+          onError: (error) => console.warn('[mic] capture error', error)
+        })
+      }
+      if (!mic.isRunning()) mic.start().then(() => updateIndicator())
+      else updateIndicator()
+    } else {
+      // 멈춤은 일시정지가 아니라 완전 정지 — 스트림을 놓아 OS 마이크 표시도 끈다.
+      mic?.stop?.()
+      if (!enabled) paused = false
+      updateIndicator()
+    }
+  }
+
+  // 전사된 텍스트는 채팅 입력으로만 간다("내가 말하면 받아 적어 전송").
+  // "귀 닫아"는 전송하지 않고 멈춤으로만 쓴다 — 멈추라는 말이 대화로 새지 않게.
+  function routeTranscript(text) {
+    const t = String(text || '').trim()
+    if (!t) return
+    if (EAR_CLOSE_RE.test(t)) { paused = true; sync(); return }
+    if (!shouldListen()) return
+    onText?.(t)
+  }
+
+  async function transcribeAndRoute(wav) {
+    try {
+      const r = await window.api?.mic?.transcribe?.(wav)
+      routeTranscript(r?.text)
+    } catch (error) {
+      console.warn('[mic] transcribe failed', error)
+    }
+  }
+
+  return {
+    sync,
+    setEnabled(on) { enabled = on === true; sync() },
+    togglePause() { paused = !paused; sync() },
+    isEnabled: () => enabled,
+    shouldListen,
+    routeTranscript,
+    transcribeAndRoute
+  }
 }
