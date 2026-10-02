@@ -28,7 +28,7 @@ async def classify(req: ClassifyRequest) -> ClassifyResponse:
     if not req.text.strip() or not req.topics:
         return ClassifyResponse(raw=None, reason="empty request")
     try:
-        raw = await claude.classify_topic(req.text, req.topics)
+        raw = await claude.classify_topic(req.text, req.topics, req.ai_mode)
         return ClassifyResponse(raw=raw)
     except Exception as error:  # noqa: BLE001
         logger.debug("[classify] failed: %r", error)

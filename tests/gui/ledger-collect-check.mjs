@@ -4,6 +4,7 @@
 //   단언 2: 비스트리밍(send-message) 경로도 같은 신호를 만든다
 //   단언 3: 분류가 3초 걸려도 채팅 응답은 기다리지 않는다 (비동기 큐)
 //   단언 4: 원장 파일 어디에도 발화 원문이 없다
+//   단언 5: 계측 분류 요청에 ai_mode가 실리지 않는다(사용자 발화는 로컬 전용)
 import { launchApia } from './helpers/launchApia.mjs'
 import { createServer } from 'node:http'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
@@ -13,6 +14,7 @@ import { join } from 'node:path'
 
 const CLASSIFY_DELAY_MS = 3000
 const SECRET = '이건원장에절대남으면안되는문장'
+const classifyBodies = []
 
 const server = createServer((req, res) => {
   const chunks = []
@@ -24,6 +26,7 @@ const server = createServer((req, res) => {
       return res.end(JSON.stringify({ status: 'ok' }))
     }
     if (req.url === '/classify') {
+      classifyBodies.push(body)
       // 일부러 느리게 — 채팅이 이걸 기다리면 단언 3이 깨진다.
       await new Promise((r) => setTimeout(r, CLASSIFY_DELAY_MS))
       const topic = String(body.text || '').includes('[game]') ? 'game' : 'work'
@@ -95,9 +98,10 @@ try {
   const noTextOk = !rawText.includes('보고서') && !rawText.includes('어제') && !rawText.includes(SECRET)
 
   console.log(`streamStart ms = ${JSON.stringify(streamTiming)}  sendMessage ms = ${sendTiming}  (classify delay = ${CLASSIFY_DELAY_MS})`)
+  const localOnlyOk = classifyBodies.length > 0 && classifyBodies.every((b) => !('ai_mode' in b))
   console.log(`signals = ${JSON.stringify(signals, null, 2)}`)
-  console.log(`\ncollectOk=${collectOk} shiftOk=${shiftOk} latencyOk=${latencyOk} nonBlockingOk=${nonBlockingOk} noTextOk=${noTextOk}`)
-  ok = collectOk && shiftOk && latencyOk && nonBlockingOk && noTextOk
+  console.log(`\ncollectOk=${collectOk} shiftOk=${shiftOk} latencyOk=${latencyOk} nonBlockingOk=${nonBlockingOk} noTextOk=${noTextOk} localOnlyOk=${localOnlyOk} (classify calls=${classifyBodies.length})`)
+  ok = collectOk && shiftOk && latencyOk && nonBlockingOk && noTextOk && localOnlyOk
 } finally {
   await cleanup()
   await new Promise((resolve) => server.close(resolve))

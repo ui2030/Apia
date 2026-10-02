@@ -21,6 +21,7 @@ const {
   engagementDensity,
   median,
   parseClassification,
+  ledgerVeto,
   EMA_ALPHA,
   SCHEMA_VERSION
 } = require('../electron/services/topicLedger')
@@ -560,7 +561,10 @@ describe('30교환 시나리오', () => {
     const ledger = createTopicLedger({ ledgerPath, now: () => clock.t })
 
     // 화제는 발화 텍스트에서 결정론적으로 정한다(가짜 로컬 분류기).
-    const classify = async (text) => {
+    const argCounts = []
+    const classify = async (...args) => {
+      argCounts.push(args.length)
+      const [text] = args
       if (text.startsWith('[work]')) return { topic_id: 'work', confidence: 0.92 }
       if (text.startsWith('[game]')) return { topic_id: 'game', confidence: 0.88 }
       return null
@@ -597,6 +601,10 @@ describe('30교환 시나리오', () => {
     }
     const golden = JSON.parse(await readFile(GOLDEN_PATH, 'utf-8'))
     expect(actual).toEqual(golden)
+    // 계측 경로는 분류기를 원문 한 인자로만 부른다 — main의 classifyTopic은 옵션
+    // ({aiMode})이 없으면 ai_mode를 싣지 않으므로 사용자 발화는 로컬 전용으로 남는다.
+    expect(argCounts.length).toBeGreaterThan(0)
+    expect(argCounts.every((n) => n === 1)).toBe(true)
 
     // 골든이 "그냥 현재 동작"이 아니라 기대한 방향인지 한 번 더 못박는다.
     const state = ledger.getState()
@@ -608,5 +616,35 @@ describe('30교환 시나리오', () => {
     expect(work.score).toBeGreaterThan(game.score)
     expect(state.events.demote).toBe(1)
     expect(state.events.promote).toBe(1)
+  })
+})
+
+// ── 7. 관전 거부권(읽기 전용 결정) ─────────────────────────────────────────
+
+describe('ledgerVeto', () => {
+  it('수동 sensitive는 무조건 거부', () => {
+    expect(ledgerVeto({ id: 'game', state: 'thawed', goldLabel: 'sensitive' }))
+      .toEqual({ veto: true, reason: 'gold-sensitive' })
+  })
+  it('수동 neutral은 자동 동결보다 우선해 허용', () => {
+    expect(ledgerVeto({ id: 'game', state: 'frozen', goldLabel: 'neutral' }))
+      .toEqual({ veto: false, reason: 'gold-override' })
+  })
+  it('수동 joke_ok도 자동 동결보다 우선해 허용', () => {
+    expect(ledgerVeto({ id: 'game', state: 'frozen', goldLabel: 'joke_ok' }))
+      .toEqual({ veto: false, reason: 'gold-override' })
+  })
+  it('frozen이면 거부', () => {
+    expect(ledgerVeto({ id: 'game', state: 'frozen', goldLabel: null }))
+      .toEqual({ veto: true, reason: 'frozen' })
+  })
+  it('thawed·neutral·pending·행 없음은 허용', () => {
+    for (const state of ['thawed', 'neutral', 'pending']) {
+      expect(ledgerVeto({ id: 'game', state, goldLabel: null }).veto).toBe(false)
+    }
+    expect(ledgerVeto(undefined)).toEqual({ veto: false, reason: 'no-row' })
+  })
+  it('분류 실패(null)는 허용 — fail-open', () => {
+    expect(ledgerVeto(null)).toEqual({ veto: false, reason: 'unclassified' })
   })
 })

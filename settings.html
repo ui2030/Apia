@@ -1069,6 +1069,11 @@ async function init() {
       } else {
         spectateStatus.textContent = '선택 안 함 — 관전이 꺼져 있어요'
       }
+      // 눈치 원장이 막은 마지막 코멘트 — 사유와 화제만(원문 없음).
+      if (st?.lastVeto) {
+        spectateStatus.textContent += ' · 최근 참은 말: ' + st.lastVeto.reason + '/' + (st.lastVeto.topicId || '?')
+          + ' (' + new Date(st.lastVeto.at).toLocaleTimeString() + ')'
+      }
       if (spectatePausedToggle) spectatePausedToggle.checked = st?.paused === true
     }
 

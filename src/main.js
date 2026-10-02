@@ -317,8 +317,9 @@ if (typeof window !== 'undefined') {
       noteSpectateObservation(observation)
     }
     const verdict = observation ? spectateGate.consider(observation) : null
-    if (verdict?.speak) applySpectateVerdict(verdict)
-    return { status: result?.status, diff: result?.diff, verdict }
+    const vetoed = verdict?.speak ? await spectateVetoed(verdict.comment) : false
+    if (verdict?.speak && !vetoed) applySpectateVerdict(verdict)
+    return { status: result?.status, diff: result?.diff, verdict, vetoed }
   }
   window.__setInertialization = (on) => setInertializationEnabled(on)
   // G단계 E2E — expression-check가 감정→모프 연동을 단언한다.
@@ -642,7 +643,7 @@ function noteSpectateObservation(observation) {
 
 function runSpectate() {
   if (!window.api?.spectateTick) return
-  Promise.resolve(spectateRunner.maybeRun()).then((observation) => {
+  Promise.resolve(spectateRunner.maybeRun()).then(async (observation) => {
     if (!observation || observation === lastSpectateSeen) return
     lastSpectateSeen = observation
     noteSpectateObservation(observation)
@@ -652,8 +653,23 @@ function runSpectate() {
       console.log('[spectate] silent:', verdict.reason, '| interest', observation.interest)
       return
     }
+    if (await spectateVetoed(verdict.comment)) return
     applySpectateVerdict(verdict)
   }).catch(() => {})
+}
+
+// 눈치 원장 거부권 — 게이트를 통과한 코멘트라도 사용자가 시큰둥해하는 화제면
+// 조용히 넘긴다(거부 사실도 말하지 않는다). 4s 안에 답이 없거나 실패하면 허용
+// — fail-open, 관전 러너 35s 상한 안에서 끝난다.
+const SPECTATE_VETO_BUDGET_MS = 4000
+async function spectateVetoed(comment) {
+  if (!window.api?.spectateLedgerVeto) return false
+  const r = await Promise.race([
+    window.api.spectateLedgerVeto(comment, SPECTATE_VETO_BUDGET_MS).catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), SPECTATE_VETO_BUDGET_MS))
+  ])
+  if (r?.veto) console.log(`[spectate] veto: ${r.reason}/${r.topicId}`)
+  return r?.veto === true
 }
 
 // 관측이 침묵 게이트를 통과했을 때의 연출. runSpectate와 E2E 훅이 공유한다.

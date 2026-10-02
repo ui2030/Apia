@@ -1022,7 +1022,7 @@ class ClaudeService:
             self.mode = prev_mode  # _initialize_mode의 mode 변이를 무조건 되돌린다
 
     async def classify_topic(
-        self, text: str, topics: List[str]
+        self, text: str, topics: List[str], ai_mode: Optional[str] = None
     ) -> str:
         """화제 분류. local이 아니면 RuntimeError — 폴백으로 클라우드에 새지 않는다.
 
@@ -1030,18 +1030,36 @@ class ClaudeService:
         provider를 대신 init하고** self.mode를 바꾼다. 계측용 부수 호출이 대화용
         provider 상태를 건드리면 안 되므로 여기서 미리 끊고, init 자체도 폴백
         없는 `_ensure_local_no_fallback`으로만 한다.
+
+        ai_mode가 오면(관전 거부권 — Apia 자신의 코멘트) describe_screen처럼 그
+        provider로 분류한다. 사용자 발화 계측은 ai_mode를 싣지 않는다.
         """
+        payload = (
+            "Topic ids: " + json.dumps(topics, ensure_ascii=False)
+            + "\nMessage: " + (text or "")[:600]
+            + "\nJSON:"
+        )
+        if ai_mode:
+            active_mode = await self.ensure_mode(ai_mode)
+            if active_mode == "claude":
+                return await self._summarize_claude(self.CLASSIFY_SYSTEM, payload)
+            if active_mode == "groq":
+                return await self._summarize_groq(self.CLASSIFY_SYSTEM, payload)
+            if active_mode == "hf_api":
+                return await self._summarize_hf_api(self.CLASSIFY_SYSTEM, payload)
+            if active_mode == "local":
+                return await self._summarize_local(self.CLASSIFY_SYSTEM, payload)
+            if active_mode == "claude_code":
+                return await self._summarize_claude_code(self.CLASSIFY_SYSTEM, payload)
+            if active_mode == "ollama_vlm":
+                return await self._summarize_ollama(self.CLASSIFY_SYSTEM, payload)
+            raise RuntimeError(f"unsupported mode for classify: {active_mode}")
         if "local" not in self.list_available_modes():
             raise RuntimeError("local provider unavailable for topic classification")
         async with self._init_lock:
             ok = await asyncio.to_thread(self._ensure_local_no_fallback)
         if not ok:
             raise RuntimeError("local provider init failed for topic classification")
-        payload = (
-            "Topic ids: " + json.dumps(topics, ensure_ascii=False)
-            + "\nMessage: " + (text or "")[:600]
-            + "\nJSON:"
-        )
         return await self._summarize_local(self.CLASSIFY_SYSTEM, payload)
 
     # ── 그림자 모드 (A-3) ───────────────────────────────────────────────────
@@ -1340,6 +1358,30 @@ class ClaudeService:
                 f"is Ollama running? try `ollama pull {OLLAMA_VLM_MODEL}`)"
             )
             raise RuntimeError(f"ollama_vlm vision failed: {error}{hint}") from error
+
+    async def _summarize_ollama(self, system: str, user: str) -> str:
+        """텍스트 전용 Ollama 호출(관전 거부권 분류). 비전 경로와 같은 서버·모델."""
+        import httpx
+
+        payload = {
+            "model": OLLAMA_VLM_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+            "options": {"num_predict": 80, "temperature": 0.2},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._OLLAMA_TIMEOUT_SEC) as client:
+                response = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
+                response.raise_for_status()
+                content = ((response.json() or {}).get("message") or {}).get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise RuntimeError("empty content")
+            return content.strip()
+        except Exception as error:  # noqa: BLE001
+            raise RuntimeError(f"ollama summarize failed: {error}") from error
 
     async def _summarize_claude(self, system: str, user: str) -> str:
         def _call():

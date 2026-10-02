@@ -456,6 +456,27 @@ function createTopicLedger({ ledgerPath, now = () => Date.now(), fsImpl = fs, lo
   return { load, flush, recordSignal, aggregate, setGoldLabel, removeTopic, reset, getState }
 }
 
+// ── 원장 거부권 (읽기 전용) ─────────────────────────────────────────────────
+
+/**
+ * 관전 코멘트를 말하기 직전, 그 화제 행(getState().topics의 한 줄)을 보고 입을
+ * 다물지 정한다. 원장을 바꾸지 않는 순수 함수다.
+ *  - 수동 라벨이 자동 상태보다 우선: sensitive면 거부, neutral/joke_ok면 허용.
+ *  - frozen이면 거부. 그 외(pending/neutral/thawed/행 없음)는 허용.
+ *  - 분류 실패(null)는 허용 — fail-open. 관전은 보조 기능이라 분류가 죽어
+ *    영영 벙어리가 되는 쪽이 더 조잡하다.
+ * @param {object|null|undefined} topicRow  null = 분류 실패, undefined = 행 없음
+ * @returns {{veto:boolean, reason:string}}
+ */
+function ledgerVeto(topicRow) {
+  if (topicRow === null) return { veto: false, reason: 'unclassified' }
+  const gold = topicRow?.goldLabel
+  if (gold === 'sensitive') return { veto: true, reason: 'gold-sensitive' }
+  if (gold === 'neutral' || gold === 'joke_ok') return { veto: false, reason: 'gold-override' }
+  if (topicRow?.state === 'frozen') return { veto: true, reason: 'frozen' }
+  return { veto: false, reason: topicRow?.state || 'no-row' }
+}
+
 // ── 교환 추적기 ─────────────────────────────────────────────────────────────
 
 /**
@@ -595,5 +616,6 @@ module.exports = {
   parseClassification,
   dayKeyOf,
   createTopicLedger,
-  createExchangeTracker
+  createExchangeTracker,
+  ledgerVeto
 }

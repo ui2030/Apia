@@ -95,6 +95,36 @@ def test_classify_local_init_failure_does_not_pollute_provider_state():
     service._summarize_local.assert_not_awaited()  # 실패 시 추론까지 못 간다
 
 
+def test_classify_route_forwards_ai_mode_only_when_given(client, fake_claude):
+    """ai_mode 없으면 None(로컬 전용 계측), 있으면 그대로 넘긴다(관전 거부권)."""
+    fake_claude.classify_topic = AsyncMock(return_value="{}")
+    client.post("/classify", json={"text": "안녕", "topics": ["game"]})
+    assert fake_claude.classify_topic.call_args.args[2] is None
+    client.post("/classify", json={"text": "보스전이다!", "topics": ["game"], "ai_mode": "groq"})
+    assert fake_claude.classify_topic.call_args.args[2] == "groq"
+
+
+def test_classify_with_ai_mode_uses_that_provider_not_local():
+    """관전 코멘트 분류: 요청 provider로 보내고 로컬 경로는 건드리지 않는다."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    real_class = _real_class()
+    for mode, method in (("groq", "_summarize_groq"), ("ollama_vlm", "_summarize_ollama")):
+        service = object.__new__(real_class)
+        service.ensure_mode = AsyncMock(return_value=mode)
+        service.list_available_modes = MagicMock(return_value=["local", mode])
+        service._summarize_local = AsyncMock()
+        setattr(service, method, AsyncMock(return_value='{"topic_id":"game","confidence":0.9}'))
+
+        raw = asyncio.run(real_class.classify_topic(service, "보스전이다!", ["game"], mode))
+
+        assert raw == '{"topic_id":"game","confidence":0.9}'
+        service.ensure_mode.assert_awaited_once_with(mode)
+        getattr(service, method).assert_awaited_once()
+        service._summarize_local.assert_not_awaited()
+
+
 def _real_class():
     """conftest가 sys.modules의 services.claude_service를 stub으로 갈아끼웠기
     때문에 진짜 클래스는 파일에서 직접 로드한다."""

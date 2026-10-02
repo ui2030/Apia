@@ -73,7 +73,9 @@ const {
   dayKeyOf,
   parseClassification,
   createTopicLedger,
-  createExchangeTracker
+  createExchangeTracker,
+  ledgerVeto,
+  MIN_CONFIDENCE: LEDGER_MIN_CONFIDENCE
 } = require('./services/topicLedger')
 const {
   createCoursewareStore,
@@ -323,12 +325,18 @@ const ledger = createTopicLedger({ ledgerPath: LEDGER_PATH, log: { warn: logWarn
 // 모델이 없으면 그냥 null이고, 그 교환은 원장에 남지 않는다. 여기서
 // ensureAvailableForRequest를 부르지 않는 게 중요하다: 계측이 백엔드를
 // 깨우는 부수효과를 만들면 안 된다.
-async function classifyTopic(text) {
+//
+// aiMode는 관전 거부권 전용이다(Apia 자신의 코멘트를 관전 provider로 분류).
+// 계측기(ledgerTracker)는 classify(text) 한 인자로만 부르므로 사용자 발화는
+// 계속 로컬 전용이다 — ai_mode 키 자체가 안 붙는다.
+async function classifyTopic(text, { aiMode } = {}) {
   try {
     const res = await requestBackendJson('/classify', {
       method: 'POST',
       timeout: 60000,
-      body: { text, topics: LEDGER_TOPIC_IDS }
+      body: aiMode
+        ? { text, topics: LEDGER_TOPIC_IDS, ai_mode: aiMode }
+        : { text, topics: LEDGER_TOPIC_IDS }
     })
     return parseClassification(res?.raw, LEDGER_TOPIC_IDS)
   } catch {
@@ -1267,7 +1275,20 @@ const spectate = {
   notes: [],
   // 소스를 바꿀 때마다 오른다. tick이 자기 세대를 달고 나가고 관찰이 그걸 달고
   // 돌아오므로, 창을 바꾼 뒤 뒤늦게 도착한 옛 관찰을 걸러낼 수 있다.
-  generation: 0
+  generation: 0,
+  // 마지막 원장 거부 { reason, topicId, at } — 관제판 표시용. 원문은 없다.
+  lastVeto: null
+}
+
+// 관전 호출이 쓸 provider. 관전 전용 모델을 명시했으면 그대로 쓴다 — 사용자가
+// 관전 드롭다운에서 고른 것은 이미 비전 가능한 모델뿐이라 우회할 이유가 없다.
+// 미지정('')이면 예전 그대로: 전역 aiMode를 쓰되 로컬 LLM만 강제 비활성한다 —
+// 관전은 사용자가 게임/영상을 돌리는 중에 도는 기능이라 7B 로컬 모델이 VRAM을
+// 같이 먹으면 둘 다 죽는다. 사용자 설정은 건드리지 않고 이 호출만 auto로
+// 우회한다(되돌리기 곤란한 설정 변경 금지).
+function spectateAiMode(settings) {
+  return settings.aiModeSpectate
+    || (settings.aiMode === 'local' ? 'auto' : settings.aiMode)
 }
 
 function spectateIsPaused() {
@@ -1284,7 +1305,8 @@ function broadcastSpectateState() {
     active: spectateIsActive(),
     paused: spectateIsPaused(),
     sourceName: spectate.sourceName || '',
-    generation: spectate.generation
+    generation: spectate.generation,
+    lastVeto: spectate.lastVeto
   }
   for (const w of [windows.getMain(), cornerWindow]) {
     if (w && !w.isDestroyed()) {
@@ -1335,6 +1357,35 @@ ipcMain.handle('spectate:note', (e, { text, gen } = {}) => {
   return spectate.notes.length
 })
 
+// 관전 코멘트가 게이트를 통과한 뒤, 말하기 직전의 원장 거부권. 코멘트는 Apia
+// 자신의 출력이고 관전 provider가 이미 만든 문장이라 같은 provider로 분류해도
+// 새로 나가는 것이 없다(관전 중엔 로컬 LLM이 VRAM 때문에 우회돼 있다).
+// 원문은 분류 프롬프트로만 흘러가고 여기 저장하지 않는다.
+ipcMain.handle('spectate:ledgerVeto', async (e, { comment, budgetMs } = {}) => {
+  const text = typeof comment === 'string' ? comment.slice(0, 600) : ''
+  const startedAt = Date.now()
+  const cls = text ? await classifyTopic(text, { aiMode: spectateAiMode(loadSettings()) }) : null
+  // 렌더러는 budgetMs 뒤 fail-open으로 이미 말했다. 그 뒤에 도착한 거부는 효력도
+  // 없고 lastVeto로 남기면 관제판이 "참았다"고 거짓말한다 — 조용히 버린다.
+  if (Number.isFinite(budgetMs) && Date.now() - startedAt > budgetMs) {
+    return { veto: false, reason: 'late', topicId: null }
+  }
+  // 저신뢰 분류는 분류 실패와 같게 본다(계측기와 같은 문턱) — 어림짐작으로 입을 막지 않는다.
+  let row = null
+  if (cls && cls.confidence >= LEDGER_MIN_CONFIDENCE) {
+    try { row = ledger.getState().topics.find((t) => t.id === cls.topic_id) } catch { row = undefined }
+  }
+  const verdict = ledgerVeto(row)
+  const topicId = row === null ? null : cls.topic_id
+  if (verdict.veto) {
+    spectate.lastVeto = { reason: verdict.reason, topicId, at: Date.now() }
+    broadcastSpectateState()
+  } else if (verdict.reason === 'unclassified') {
+    logInfo('[SPECTATE_VETO] unclassified (fail-open)')
+  }
+  return { ...verdict, topicId }
+})
+
 ipcMain.handle('spectate:pause', (e, paused) => setSpectatePaused(paused))
 ipcMain.handle('spectate:state', () => broadcastSpectateState())
 
@@ -1372,14 +1423,7 @@ ipcMain.handle('spectate:tick', async (e, context) => {
   if (shot.status !== 'ok') return shot // no-source | no-change
 
   const settings = loadSettings()
-  // 관전 전용 모델을 명시했으면 그대로 쓴다 — 사용자가 관전 드롭다운에서 고른
-  // 것은 이미 비전 가능한 모델뿐이라 우회할 이유가 없다.
-  // 미지정('')이면 예전 그대로: 전역 aiMode를 쓰되 로컬 LLM만 강제 비활성한다 —
-  // 관전은 사용자가 게임/영상을 돌리는 중에 도는 기능이라 7B 로컬 모델이 VRAM을
-  // 같이 먹으면 둘 다 죽는다. 사용자 설정은 건드리지 않고 이 호출만 auto로
-  // 우회한다(되돌리기 곤란한 설정 변경 금지).
-  const aiMode = settings.aiModeSpectate
-    || (settings.aiMode === 'local' ? 'auto' : settings.aiMode)
+  const aiMode = spectateAiMode(settings)
 
   try {
     await backend.ensureAvailableForRequest()

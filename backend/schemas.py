@@ -75,6 +75,9 @@ class ClassifyRequest(BaseModel):
     # 들고 있어서 요청마다 실려 온다. text는 프롬프트로만 흘러가고 버려진다.
     text: str = ""
     topics: List[str] = Field(default_factory=list)
+    # None = 로컬 전용(사용자 발화 계측). 값이 있으면 그 provider로 분류 — 관전
+    # 거부권이 Apia 자신의 코멘트를 관전 provider로 분류할 때만 싣는다.
+    ai_mode: Optional[str] = None
 
 
 class ClassifyResponse(BaseModel):
