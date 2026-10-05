@@ -199,8 +199,10 @@ class VoiceManager:
         if duration < MIN_REF_SEC:
             raise RuntimeError(f"음성이 너무 짧아요 ({duration:.1f}초). {MIN_REF_SEC:.0f}초 이상 필요해요.")
         if duration > MAX_REF_SEC:
-            # 자르지 않고 거부 — 어떤 구간을 쓸지는 사용자가 정하는 게 맞다
-            raise RuntimeError(f"음성이 너무 길어요 ({duration:.0f}초). {MAX_REF_SEC:.0f}초 이하로 잘라 주세요.")
+            # 설정 창의 약속("2분이 넘으면 앞 2분만 써요")과 같은 규칙 — 거부하지 않고
+            # 앞 MAX_REF_SEC초만 쓴다. 어느 구간을 쓸지는 UI에서 사용자가 정해 보낸다.
+            data = data[: int(MAX_REF_SEC * sr)]
+            duration = len(data) / float(sr)
 
         voice_dir.mkdir(exist_ok=True)
         buffer = io.BytesIO()

@@ -41,7 +41,9 @@ OUTPUT_SR = 22050  # seed-vc v1 (f0_condition=False) bigvgan 출력 샘플레이
 # 줄지만 변환 시간이 거의 선형으로 늘어 CLONE_TIMEOUT_SEC(20s)를 넘길 수 있다.
 # 환경변수로 뺀 이유는 실기에서 귀로 비교해 고를 값이기 때문 — 실측은
 # scripts/voice-quality-lab.py, 기본값 변경은 실청취 후에.
-DIFFUSION_STEPS = int(os.getenv("APIA_SEEDVC_DIFFUSION_STEPS", "") or 10)
+# 25: 사용자 청취 기준 10에선 기계음이 또렷(약 30%), 25면 크게 줄고 문장당 ~1.75s로
+# 여전히 실시간 범위(apia-voice-lab 03_clone_steps 비교, 2026-10-06). 50은 체감 이득 적고 2배 느림.
+DIFFUSION_STEPS = int(os.getenv("APIA_SEEDVC_DIFFUSION_STEPS", "") or 25)
 
 
 def _import_engine():
