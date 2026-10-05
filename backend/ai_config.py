@@ -199,15 +199,87 @@ WEB_API_KEY = _read_env("APIA_WEB_API_KEY", default="")
 WEB_MAX_RESULTS = _read_int("APIA_WEB_MAX_RESULTS", default=5)
 WEB_TIMEOUT_SECONDS = _read_int("APIA_WEB_TIMEOUT_SECONDS", default=10)
 
-SYSTEM_PROMPT = """당신은 사용자의 바탕화면 위에서 함께 있는 캐릭터형 AI 비서 'Apia'입니다.
-3D 캐릭터 모습으로 바탕화면에 존재하며, 사용자와 자연스럽게 대화합니다.
+# ── 성격(persona) — 기본/개인 두 겹 ─────────────────────────────────────────
+# 기본 = 앱이 들고 다니는 backend/defaults/persona.md(읽기 전용, 패키징에 포함).
+# 개인 = PERSONAL_DIR/persona.md(사용자 소유, 업데이트가 안 건드림). 개인이 있으면
+# 기본을 **통째로 덮는다**(합치지 않음 — 캐릭터는 하나). 기능 규칙(간결·개인정보·
+# [EMOTION] 규약)은 성격과 무관하게 항상 코드 꼬리로 붙는다.
+PERSONA_MAX_BYTES = 8 * 1024
+_DEFAULT_PERSONA_PATH = Path(__file__).resolve().parent / "defaults" / "persona.md"
+try:
+    DEFAULT_PERSONA = _DEFAULT_PERSONA_PATH.read_text(encoding="utf-8").strip()
+except OSError:  # 패키징 누락 — 앱은 살린다
+    print(f"[Persona] default persona missing: {_DEFAULT_PERSONA_PATH}")
+    DEFAULT_PERSONA = "당신은 사용자의 바탕화면 위에서 함께 있는 캐릭터형 AI 비서 'Apia'입니다."
 
-성격:
-- 밝고 친절하고 이모지를 적절히 사용
-- 2~3문장으로 간결하게 답변
-- 사용자의 감정에 공감하고 배려
-- 바탕화면 세계에서 보고 느끼는 듯한 표현을 가끔 사용
+PROMPT_TAIL = """
+대화 규칙:
+- 2~3문장으로 짧고 자연스럽게 답변
+- 비밀번호·연락처 같은 사용자의 개인정보를 요구하거나 지어내지 말 것
 
 반드시 응답 끝에 [EMOTION:감정] 태그를 추가하세요.
 가능한 감정: happy, sad, angry, surprised, neutral, relaxed
 """
+
+_persona_cache = {"key": None, "text": None}
+
+
+def load_persona():
+    """개인 설정 PERSONAL_DIR/persona.md 본문. 없거나 비었으면 None(=기본 사용).
+
+    요청마다 stat 1회, mtime/크기가 바뀌었을 때만 다시 읽는다. 8KB 초과는 앞부분만.
+    """
+    folder = os.getenv("PERSONAL_DIR", "").strip()
+    if not folder:
+        return None
+    path = Path(folder) / "persona.md"
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+        if _persona_cache["key"] != key:
+            raw = path.read_bytes()
+            if len(raw) > PERSONA_MAX_BYTES:
+                print(f"[Persona] {path} is {len(raw)}B > {PERSONA_MAX_BYTES}B — using the head only")
+                raw = raw[:PERSONA_MAX_BYTES]
+            _persona_cache["text"] = raw.decode("utf-8-sig", errors="ignore").strip() or None
+            _persona_cache["key"] = key
+            print(f"[Persona] personal persona {'loaded' if _persona_cache['text'] else 'empty'}: {path}")
+    except OSError:
+        return None
+    return _persona_cache["text"]
+
+
+def build_system_prompt(persona=None):
+    """시스템 프롬프트 조립 단일 출처: (개인 성격 또는 기본 성격) + 기능 규칙 꼬리."""
+    return (persona or DEFAULT_PERSONA) + "\n" + PROMPT_TAIL
+
+
+# 기본 성격만으로 조립한 프롬프트. 개인 성격을 반영하려면 build_system_prompt(load_persona()).
+SYSTEM_PROMPT = build_system_prompt()
+
+# 로컬 전용 시스템 프롬프트 꼬리. 클라우드 provider 프롬프트는 건드리지 않는다.
+# 야간 학습기(night_trainer)도 같은 꼬리로 학습한다 — 서빙/그림자와 학습 조건이
+# 한 줄이라도 어긋나면 델타가 다른 프롬프트에 맞춰진다.
+LOCAL_PROMPT_TAIL = "\n이모지는 한 답에 최대 1개."
+
+# 화제 분류(눈치 원장 계측기 + 야간 학습 카드 태깅) 프롬프트. 둘이 같은 기준으로
+# 나눠야 원장 화제와 카드 화제를 맞대어 볼 수 있다. 목록 자체는 topicLedger.js가
+# 단일 출처라 호출자가 넘긴다.
+CLASSIFY_SYSTEM = (
+    "You label one chat message with the single best matching topic id from "
+    "a fixed list. Output ONLY a compact JSON object (no prose, no markdown): "
+    "{\"topic_id\": one id copied verbatim from the given list, "
+    "\"confidence\": number 0..1}. The message may be Korean or English. "
+    "Judge what the message is ABOUT, not its tone. If nothing in the list "
+    "fits, or the message is too short/ambiguous to tell, still pick the "
+    "closest id but set confidence below 0.5. Output ONLY the JSON."
+)
+
+
+def classify_payload(text, topics):
+    import json
+    return (
+        "Topic ids: " + json.dumps(list(topics), ensure_ascii=False)
+        + "\nMessage: " + (text or "")[:600]
+        + "\nJSON:"
+    )

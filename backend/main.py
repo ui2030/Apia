@@ -58,6 +58,8 @@ async def lifespan(app: FastAPI):
     # download fires on the first /store/embedding/warmup or actual embed
     # request, so a backend that never needs embeddings starts in <1s.
     data_dir = _resolve_data_dir()
+    from ai_config import load_persona
+    load_persona()  # 시작 시 1회 읽어 로그로 남긴다. 이후엔 mtime 바뀔 때만 재로드.
     store_service = StoreService(data_dir / "apia.db")
     try:
         await store_service.initialize()

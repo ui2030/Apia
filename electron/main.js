@@ -775,7 +775,9 @@ function runTrainer({ adoptedDelta, since }) {
       '--stop-file', stopPath,
       // 부모가 크래시하면 STOP 파일을 써 줄 주체가 없다. 학습기가 직접 감시한다.
       '--parent-pid', String(process.pid),
-      '--deadline-sec', String(TRAINING_DEADLINE_SEC)
+      '--deadline-sec', String(TRAINING_DEADLINE_SEC),
+      // 카드 화제 태깅 — 목록은 topicLedger.js가 단일 출처(/classify와 같은 방식)
+      '--topics', LEDGER_TOPIC_IDS.join(',')
     ]
     if (adoptedDelta) args.push('--adopted-delta', adoptedDelta)
     if (since) args.push('--since', since)
@@ -860,8 +862,12 @@ function localStudentReply(message, timeout) {
  *
  * 로컬 모델을 올리지 않는다(백엔드가 떠 있는지만 보고 판단은 백엔드가 한다).
  * 델타가 없거나 그 유형이 이미 승격됐으면 아예 부르지 않는다.
+ *
+ * topicPromise = 원장 계측기의 이 교환 화제 분류(noteReplyDone 반환값). 그게
+ * 끝난 **뒤에** 생성한다 — 분류와 그림자는 같은 로컬 잠금을 쓰므로 동시에
+ * 들어가면 그림자가 "local path busy"로 버려진다. 화제는 그 결과를 재사용한다.
  */
-function recordShadow(message, reply, type) {
+function recordShadow(message, reply, type, topicPromise = null) {
   const delta = nightSchool.adoptedDelta()
   if (!delta) return nightSchool.noteShadowDormant('채택 델타 없음')
   if (!message || !reply) return
@@ -870,7 +876,11 @@ function recordShadow(message, reply, type) {
   // 유형에서 그림자를 계속 돌리면 다음 발화의 서빙이 그 생성에 막혀 API로
   // 새는 악순환이 생긴다 — 둘이 같은 로컬 경로 하나를 쓰기 때문이다.
   if (nightSchool.isPromoted(type)) return
-  localStudentReply(message, 60000).then((res) => {
+  let topic = null
+  Promise.resolve(topicPromise).catch(() => null).then((c) => {
+    topic = c && c.confidence >= LEDGER_MIN_CONFIDENCE ? c.topic_id : null
+    return localStudentReply(message, 60000)
+  }).then((res) => {
     if (res?.status !== 'ok' || !res.reply) {
       return nightSchool.noteShadowDormant(res?.reason || res?.status || 'no reply')
     }
@@ -878,7 +888,9 @@ function recordShadow(message, reply, type) {
     nightSchool.noteShadow({
       similarity: shadowSimilarity(res.reply, reply),
       lengthRatio: shadowLengthRatio(res.reply, reply),
-      type
+      type,
+      arm: 'single', // 지금은 채택 델타 하나뿐 — 화제별 어댑터와 비교할 기준선
+      topic
     })
   }).catch((error) => nightSchool.noteShadowDormant(error?.message || String(error)))
 }
@@ -1088,9 +1100,9 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
       timeout: chatTimeout,
       body
     })
-    ledgerTracker.noteReplyDone()
+    const topicPromise = ledgerTracker.noteReplyDone()
     recordCoursewareExchange(message, reply?.reply) // 교재 버퍼 — 비동기 큐, 비차단
-    recordShadow(message, reply?.reply, type)       // 그림자 — 기다리지 않는다(지연 0)
+    recordShadow(message, reply?.reply, type, topicPromise) // 그림자 — 분류 뒤, 기다리지 않는다(지연 0)
     return reply
   } catch (e) {
     return { error: e.message }
@@ -1194,9 +1206,9 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
         if (frame.type === 'delta') {
           sender.send('chat-stream-delta', { requestId, text: frame.text || '' })
         } else if (frame.type === 'final') {
-          ledgerTracker.noteReplyDone() // 계측 — 응답이 화면에 다 뜬 시점
+          const topicPromise = ledgerTracker.noteReplyDone() // 계측 — 응답이 화면에 다 뜬 시점
           recordCoursewareExchange(message, frame.reply) // 교재 버퍼 — 비동기 큐, 비차단
-          recordShadow(message, frame.reply, type)       // 그림자 — 기다리지 않는다(지연 0)
+          recordShadow(message, frame.reply, type, topicPromise) // 그림자 — 분류 뒤, 기다리지 않는다(지연 0)
           sender.send('chat-stream-done', {
             requestId,
             reply: frame.reply,
@@ -1261,6 +1273,7 @@ ipcMain.handle('director:decide', async (e, context) => {
 //      모델도 같은 것을 봐야 한다. 관전을 끄거나 창을 해제하면 즉시 멈춘다.
 const { listWindows: listCaptureWindows, createCaptureGate } = require('./services/screenCapture')
 const { attachSpectateContext, noteObservation } = require('./services/spectateContext')
+const { ensurePersonalFolder, personalStatus, resetPersona } = require('./services/personalFolder')
 
 const spectate = {
   gate: createCaptureGate({ desktopCapturer }),
@@ -1829,6 +1842,27 @@ ipcMain.handle('cosyvoice-set-prompt', async (_event, { wavBase64 }) => {
   }
 })
 
+// "내 파일"(개인 설정) 행 — 상태 / 폴더 열기 / 성격 기본으로 되돌리기(.bak 보존).
+ipcMain.handle('personal:status', () => personalStatus(backend.getSpawnConfig().personalDir))
+ipcMain.handle('personal:openFolder', async () => {
+  const dir = backend.getSpawnConfig().personalDir
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    if (APIA_E2E_NO_SHELL_OPEN) return { ok: true, path: dir, stubbed: true }
+    const errorMessage = await shell.openPath(dir)
+    return errorMessage ? { ok: false, error: errorMessage, path: dir } : { ok: true, path: dir }
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error), path: dir }
+  }
+})
+ipcMain.handle('personal:resetPersona', () => {
+  try {
+    return resetPersona(backend.getSpawnConfig().personalDir)
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) }
+  }
+})
+
 // Opens the user-data/backend-data directory in the OS file manager so the
 // user can edit backend.env directly. shell.openPath returns '' on success
 // and a non-empty error string on failure — propagate it so the renderer can
@@ -2088,6 +2122,17 @@ app.whenReady().then(async () => {
 
   registryService.ensureRegistry()
   settingsRepo.ensureRuntimeFiles()
+  // "내 파일"(개인 설정) — 백엔드 스폰 전에 만들고 옛 위치의 성격 파일을 옮긴다.
+  try {
+    // 야간 학습기(night_trainer)도 같은 성격으로 학습해야 하므로 process.env에 둔다 —
+    // 자식 spawn env가 process.env를 상속한다(APIA_TRAINING_TOKEN과 같은 경로).
+    process.env.PERSONAL_DIR = backend.getSpawnConfig().personalDir
+    ensurePersonalFolder({
+      personalDir: backend.getSpawnConfig().personalDir,
+      legacyPersonaPath: path.join(settingsRepo.getDataDir(), 'persona', 'persona.md'),
+      log: { info: logInfo, warn: logWarn }
+    })
+  } catch (error) { logWarn('[PERSONAL_FOLDER_WARN]', error?.message || error) }
 
   // 마이크 권한 — 로컬 앱(원격 콘텐츠 없음)이라 getUserMedia 요청을 허용한다.
   // 핸들러를 안 걸면 일부 환경에서 media 권한 체크가 거부돼 음성 입력이 죽는다.

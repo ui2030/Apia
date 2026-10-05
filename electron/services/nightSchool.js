@@ -27,6 +27,7 @@ const {
   recommendPromotion,
   demotionVerdict
 } = require('./promotion')
+const { TOPICS } = require('./topicLedger')
 
 const SCHEMA_VERSION = 1
 
@@ -152,9 +153,13 @@ function emptyStatus() {
     adopted: null,         // { version, dir, adoptedAt, gate }
     anchors: [],           // 최근 채택 델타 version들(최신이 앞)
     teacherSpentWeek: 0,
+    lastTopicCounts: null, // 마지막 학습의 화제별 카드 수 { <topic_id|unknown>: n }
     // 그림자 집계 — dayKey -> { attempts, simSum, lenSum, types: { <type>: {...} } }.
     // 원문은 없다. types는 A-4에서 붙었다 — 없는(=A-3 시절) 버킷은 유형 미상으로
     // 남고 총계에만 들어간다(마이그레이션 없음, 스키마 버전도 그대로).
+    // arms는 발주서 17: arms[<arm>][<topic>] = 같은 모양. arm = 어느 어댑터로 답했나
+    // (none|single|topic — 지금은 single뿐), topic = 원장 분류 결과(없으면 unknown).
+    // 화제별 어댑터와 비교할 단일 어댑터 기준선이 여기 쌓인다. 같은 규약이라 버전 그대로.
     shadow: {},
     shadowDormant: null,   // 마지막 휴면 사유(관측용)
     // ── A-4 승격 ──
@@ -300,6 +305,8 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
     s.lastStatus = result.status || 'failed'
     s.lastReason = String(result.reason || '').slice(0, 300)
     if (Number.isFinite(result.teacher_spent_week)) s.teacherSpentWeek = result.teacher_spent_week
+    // 학습까지 가지 못한 시도(연기·중단)엔 집계가 없다 — 지난 값을 지우지 않는다.
+    if (result.topic_counts && typeof result.topic_counts === 'object') s.lastTopicCounts = result.topic_counts
     saveStatus()
     return { ...s }
   }
@@ -314,21 +321,26 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
    * 그림자 1건. **점수만** 받는다 — 사용자 발화도 두 응답 원문도 인자에 없다.
    * type은 A-4의 유형 태그(분류는 호출자가 순수 함수로 끝내고 결과만 넘긴다).
    */
-  function noteShadow({ similarity: sim, lengthRatio: len, type } = {}) {
+  function noteShadow({ similarity: sim, lengthRatio: len, type, arm, topic } = {}) {
     if (!Number.isFinite(sim)) return
     const s = loadStatus()
     const day = dayKeyOf(now())
-    const bucket = s.shadow[day] || { attempts: 0, simSum: 0, lenSum: 0 }
-    bucket.attempts += 1
-    bucket.simSum += sim
-    bucket.lenSum += Number.isFinite(len) ? len : 0
+    const add = (b = { attempts: 0, simSum: 0, lenSum: 0 }) => {
+      b.attempts += 1
+      b.simSum += sim
+      b.lenSum += Number.isFinite(len) ? len : 0
+      return b
+    }
+    const bucket = add(s.shadow[day])
     if (TYPES.includes(type)) {
       const types = bucket.types || (bucket.types = {})
-      const t = types[type] || { attempts: 0, simSum: 0, lenSum: 0 }
-      t.attempts += 1
-      t.simSum += sim
-      t.lenSum += Number.isFinite(len) ? len : 0
-      types[type] = t
+      types[type] = add(types[type])
+    }
+    if (arm) {
+      const arms = bucket.arms || (bucket.arms = {})
+      const byTopic = arms[arm] || (arms[arm] = {})
+      const key = topic || 'unknown'
+      byTopic[key] = add(byTopic[key])
     }
     s.shadow[day] = bucket
     const keep = new Set(
@@ -530,6 +542,10 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
       anchorCount: s.anchors.length,
       anchors: s.anchors.slice(),
       teacherSpentWeek: s.teacherSpentWeek || 0,
+      // 화제별 카드 수 — 많은 순. 화제별 어댑터를 돌릴 만큼 쌓였는지 보는 창.
+      topicCounts: Object.entries(s.lastTopicCounts || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([id, count]) => ({ id, label: TOPICS.find((t) => t.id === id)?.label || '미분류', count })),
       shadow: shadowSummary(),
       // A-4 관제판 — 유형별 그림자·승격 상태·강등 이력·서빙 비율.
       byType: shadowByType(),

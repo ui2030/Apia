@@ -34,6 +34,9 @@ from ai_config import (
     OLLAMA_BASE_URL,
     OLLAMA_VLM_MODEL,
     SYSTEM_PROMPT,
+    LOCAL_PROMPT_TAIL as _LOCAL_PROMPT_TAIL,
+    CLASSIFY_SYSTEM,
+    classify_payload,
     MAX_NEW_TOKENS,
     TEMPERATURE,
     TOP_P,
@@ -46,9 +49,6 @@ from services import teacher_service
 # 로컬 Qwen이 한국어 답에 섞는 일본어 가나(히라가나·가타카나·음성확장·반각).
 # 한자는 막지 않는다 — 한국어 문맥에도 쓰이고 기존 품질 필터가 본다.
 _KANA_RE = re.compile("[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f]")
-
-# 로컬 전용 시스템 프롬프트 꼬리. 클라우드 provider 프롬프트는 건드리지 않는다.
-_LOCAL_PROMPT_TAIL = "\n이모지는 한 답에 최대 1개."
 
 
 # 바이트 단위 BPE는 가나를 바이트 조각 토큰(예: " \xe3\x82" + "\xab" = " カ")으로도
@@ -804,9 +804,12 @@ class ClaudeService:
         Codex MUST-FIX (3단계 round 1): context_blocks dict로 일반화 +
         고정 section order. 알려지지 않은 key가 들어와도 마지막에 알파벳순으로
         붙여 forward-compatible.
+        성격은 개인 설정(persona.md)이 있으면 그것, 없으면 기본 — ai_config 단일 출처.
         """
+        from ai_config import build_system_prompt, load_persona
+        base = build_system_prompt(load_persona())
         if not context_blocks:
-            return SYSTEM_PROMPT
+            return base
         # dict 삽입순서 무시. 알려진 순서 먼저, 알려지지 않은 key는 뒤로.
         known = [k for k in self._CONTEXT_SECTION_ORDER if context_blocks.get(k)]
         unknown = sorted(
@@ -821,8 +824,8 @@ class ClaudeService:
             hint = self._CONTEXT_SECTION_HINT.get(key, key)
             sections.append(f"## {hint}\n{body}")
         if not sections:
-            return SYSTEM_PROMPT
-        return f"{SYSTEM_PROMPT}\n\n---\n" + "\n\n".join(sections) + "\n"
+            return base
+        return f"{base}\n\n---\n" + "\n\n".join(sections) + "\n"
 
     @staticmethod
     def _coerce_context_blocks(
@@ -1200,15 +1203,8 @@ class ClaudeService:
     # 눈치 원장 계측기 — 사용자 발화 한 줄의 화제 분류. **로컬 provider 전용**이다:
     # 계측용 부수 호출이 클라우드 API 요금이나 외부로 나가는 대화 사본을 만들면 안 된다.
     # director와 같은 generic (system, user) 헬퍼를 재사용한다.
-    CLASSIFY_SYSTEM = (
-        "You label one chat message with the single best matching topic id from "
-        "a fixed list. Output ONLY a compact JSON object (no prose, no markdown): "
-        "{\"topic_id\": one id copied verbatim from the given list, "
-        "\"confidence\": number 0..1}. The message may be Korean or English. "
-        "Judge what the message is ABOUT, not its tone. If nothing in the list "
-        "fits, or the message is too short/ambiguous to tell, still pick the "
-        "closest id but set confidence below 0.5. Output ONLY the JSON."
-    )
+    # 프롬프트 단일 출처는 ai_config — 야간 학습기의 카드 화제 태깅이 같은 걸 쓴다.
+    CLASSIFY_SYSTEM = CLASSIFY_SYSTEM
 
     def _ensure_local_no_fallback(self) -> bool:
         """계측용(분류) 전용 local 준비 — **반드시 `_init_lock` 안에서** 호출한다.
@@ -1239,11 +1235,7 @@ class ClaudeService:
         ai_mode가 오면(관전 거부권 — Apia 자신의 코멘트) describe_screen처럼 그
         provider로 분류한다. 사용자 발화 계측은 ai_mode를 싣지 않는다.
         """
-        payload = (
-            "Topic ids: " + json.dumps(topics, ensure_ascii=False)
-            + "\nMessage: " + (text or "")[:600]
-            + "\nJSON:"
-        )
+        payload = classify_payload(text, topics)
         if ai_mode:
             active_mode = await self.ensure_mode(ai_mode, chat=False)
             if active_mode == "claude":
@@ -1420,6 +1412,15 @@ class ClaudeService:
             return None
 
         payload = "Context: " + json.dumps(context or {}, ensure_ascii=False) + "\nJSON:"
+        # 개인 성격은 `comment` 말투에만. 침묵 기본·프라이버시·JSON 규칙(시스템)이 우선.
+        from ai_config import load_persona
+        persona = load_persona()
+        if persona:
+            payload = (
+                "Character persona (use ONLY for the voice of `comment`; the rules "
+                "above on silence, privacy and JSON output still win):\n"
+                + persona + "\n\n" + payload
+            )
         if active_mode == "claude":
             return await self._describe_claude(model, image_b64, payload)
         if active_mode == "groq":

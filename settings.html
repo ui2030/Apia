@@ -587,7 +587,7 @@
     <div class="row" style="flex-direction:column; align-items:stretch; gap:6px;">
       <div>
         <div class="row-label">캐릭터 목소리 만들기</div>
-        <div class="row-sub">캐릭터 음성 파일(mp3/wav)을 올리면 그 목소리로 말해요. 여러 개를 골라도 되고, 고른 순서대로 이어서 하나로 씁니다(5초 이상, 2분이 넘으면 앞 2분만 써요). 인터넷 연결이 필요하고, 처음 한 번은 음성 모델 다운로드로 몇 분 걸려요.</div>
+        <div class="row-sub">캐릭터 음성 파일(mp3/wav)을 올리면 그 목소리로 말해요. 여러 개를 골라도 되고, 고른 순서대로 이어서 하나로 씁니다(5초 이상). 참조는 <b>한 호흡으로 이어지는 조용한 대사</b>가 가장 깨끗해요. 여러 조각을 이어 붙이면 조각 사이 톤 차이가 기계음처럼 들릴 수 있어요. 길수록 깨끗하지만 말이 느려져요(참조 10초당 약 2초 지연 — 10초면 빠르고, 30초면 가장 깨끗). 30초 넘는 부분은 쓰지 않아요. 인터넷 연결이 필요하고, 처음 한 번은 음성 모델 다운로드로 몇 분 걸려요.</div>
       </div>
       <div style="display:flex; gap:6px; align-items:center;">
         <input type="text" id="voice-clone-name" placeholder="음성 이름 (예: 내 캐릭터)" style="flex:1; min-width:0;">
@@ -615,6 +615,19 @@
     <div class="section-title">캐릭터 컨셉</div>
     <div class="helper-text" id="persona-active-label" style="margin-bottom:8px;">
       활성 캐릭터: 없음
+    </div>
+
+    <div class="row">
+      <div style="min-width:0;">
+        <div class="row-label">내 파일 (개인 설정)</div>
+        <div class="row-sub">persona.md를 넣으면 기본 성격 대신 그걸 써요. 업데이트해도 안 지워져요.</div>
+        <div class="row-sub" id="personal-dir" style="font-size:11px; word-break:break-all;">—</div>
+        <div class="row-sub" id="personal-state" style="font-size:11px;">—</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button type="button" class="btn btn-ghost" id="personal-reset">기본으로 되돌리기</button>
+        <button type="button" class="btn btn-ghost" id="personal-open">폴더 열기</button>
+      </div>
     </div>
 
     <div class="row">
@@ -843,6 +856,10 @@
     <div class="row">
       <div class="row-label">채택 델타</div>
       <span class="row-sub" id="training-delta" style="font-size:11px;">—</span>
+    </div>
+    <div class="row">
+      <div class="row-label">화제별 카드 수</div>
+      <span class="row-sub" id="training-topics" style="font-size:11px; white-space:normal; text-align:right;">—</span>
     </div>
     <div class="row">
       <div>
@@ -1127,6 +1144,7 @@ async function init() {
   refreshProviderStatus()
   bindBackendEnvControls()
   refreshBackendEnvPresence()
+  bindPersonalFolder()
   bindPersonaPanel()
   await refreshPersonaPanel()
   // Codex MUST-FIX (step 1 round 2): re-resolve the active character when
@@ -1510,6 +1528,13 @@ function renderNightSchool(state) {
     deltaEl.textContent = state.adoptedVersion
       ? `${state.adoptedVersion} / 앵커 ${state.anchorCount}개`
       : '아직 없음 (그림자 휴면)'
+  }
+  const topicsEl = document.getElementById('training-topics')
+  if (topicsEl) {
+    const rows = state.topicCounts || []
+    topicsEl.textContent = rows.length
+      ? rows.map((t) => `${t.label} ${t.count}`).join(' · ')
+      : '아직 없음 (다음 학습 때 분류)'
   }
   const nextEl = document.getElementById('training-next')
   if (nextEl) nextEl.textContent = state.next?.reason || '—'
@@ -2269,7 +2294,8 @@ async function loadVoices() {
 
 const VOICE_CLONE_TARGET_SR = 22050
 const VOICE_CLONE_MIN_SEC = 5
-const VOICE_CLONE_MAX_SEC = 120
+// 엔진(seed-vc)은 참조 앞 25초만 쓴다 — 그 이상은 보내 봐야 버려진다.
+const VOICE_CLONE_MAX_SEC = 30
 const VOICE_CLONE_STATUS_LABELS = {
   preparing: '준비 중…',
   validating: '음성 파일 확인 중…',
@@ -2289,7 +2315,7 @@ async function decodeCloneFile(file) {
   }
 }
 
-/** 사용 구간(초). 2분이 넘어도 막지 않고 앞 2분만 쓴다. */
+/** 사용 구간(초). 30초가 넘어도 막지 않고 앞 30초만 쓴다. */
 function cloneUsedSec(totalSec) {
   return Math.min(totalSec, VOICE_CLONE_MAX_SEC)
 }
@@ -2347,7 +2373,7 @@ function preprocessReferencePcm(pcm, { normalize = true, trim = true } = {}) {
 async function buffersToCloneWavBase64(buffers, minSec = VOICE_CLONE_MIN_SEC, prep = {}) {
   const totalSec = buffers.reduce((sum, b) => sum + b.duration, 0)
   if (totalSec < minSec) throw new Error(`음성이 너무 짧아요 (${totalSec.toFixed(1)}초). 합쳐서 ${minSec}초 이상 필요해요.`)
-  // 길이 상한은 거절 사유가 아니다 — 전부 받아 놓고 앞 2분만 렌더한다.
+  // 길이 상한은 거절 사유가 아니다 — 전부 받아 놓고 앞 30초만 렌더한다.
   // (사용자가 3분 파일을 가져와도 직접 잘라 오라고 되돌려 보내지 않는다.)
   const usedSec = cloneUsedSec(totalSec)
 
@@ -2359,7 +2385,7 @@ async function buffersToCloneWavBase64(buffers, minSec = VOICE_CLONE_MIN_SEC, pr
     const srcNode = off.createBufferSource()
     srcNode.buffer = buffer
     srcNode.connect(off.destination)
-    // 마지막으로 걸치는 파일은 남은 만큼만 — 2분 경계에서 잘린다.
+    // 마지막으로 걸치는 파일은 남은 만큼만 — 30초 경계에서 잘린다.
     srcNode.start(offsetSec, 0, Math.min(buffer.duration, usedSec - offsetSec))
     offsetSec += buffer.duration
   }
@@ -2406,7 +2432,7 @@ function renderVoiceCloneFiles() {
   const totalSec = voiceCloneItems.reduce((sum, it) => sum + it.sec, 0)
   const tooShort = totalSec < VOICE_CLONE_MIN_SEC
   const overLong = totalSec > VOICE_CLONE_MAX_SEC
-  // 짧은 건 진짜로 못 만들지만(막는다), 긴 건 우리가 앞 2분만 쓰면 되는
+  // 짧은 건 진짜로 못 만들지만(막는다), 긴 건 우리가 앞 30초만 쓰면 되는
   // 일이다 — 사용자에게 파일을 잘라 오라고 시키지 않는다.
   if (startBtn) startBtn.disabled = voiceCloneBusy || voiceCloneItems.length === 0 || tooShort
 
@@ -2433,13 +2459,12 @@ function renderVoiceCloneFiles() {
 
   const total = document.createElement('div')
   total.id = 'voice-clone-total'
-  // 초과는 경고(노랑)지 오류(빨강)가 아니다 — 그냥 앞 2분만 쓴다는 안내.
+  // 초과는 경고(노랑)지 오류(빨강)가 아니다 — 그냥 앞 30초만 쓴다는 안내.
   total.style.cssText = `margin-top:2px; color:${tooShort ? '#fca5a5' : overLong ? '#fcd34d' : '#6ee7b7'};`
-  const mins = (totalSec / 60).toFixed(1)
   total.textContent = `총 ${totalSec.toFixed(1)}초` + (
     tooShort ? ` — 너무 짧아요 (${VOICE_CLONE_MIN_SEC}초 이상 필요)` :
-    overLong ? ` — 총 ${mins}분 중 앞 2분만 사용해요` :
-    ' — 권장 범위(5초~2분)'
+    overLong ? ' — 앞 30초만 사용해요' :
+    ' — 사용 범위(5~30초)'
   )
   listEl.appendChild(total)
 }
@@ -2713,6 +2738,33 @@ async function save() {
 // dotenv-style UX: leaving a field blank means "don't touch what's there".
 const apiKeysState = {
   pendingClears: new Set()
+}
+
+async function refreshPersonalRow() {
+  const s = await window.api.personalStatus().catch(() => null)
+  if (!s) return
+  document.getElementById('personal-dir').textContent = s.dir
+  document.getElementById('personal-state').textContent = s.personal
+    ? '성격 파일 있음 — 개인 설정 사용 중'
+    : '성격 파일 없음 — 기본 설정 사용 중'
+  document.getElementById('personal-reset').disabled = !s.personal
+}
+
+function bindPersonalFolder() {
+  document.getElementById('personal-open')?.addEventListener('click', async () => {
+    const r = await window.api.openPersonalFolder().catch((e) => ({ ok: false, error: e }))
+    if (!r?.ok) showToast('폴더를 열지 못했습니다: ' + friendlyError(r?.error, '알 수 없는 오류'), 'error')
+    refreshPersonalRow()
+  })
+  document.getElementById('personal-reset')?.addEventListener('click', async () => {
+    const r = await window.api.resetPersonalPersona().catch((e) => ({ ok: false, error: e }))
+    if (!r?.ok) showToast('되돌리지 못했습니다: ' + friendlyError(r?.error, '알 수 없는 오류'), 'error')
+    else if (r.backup) showToast('기본 성격으로 돌아갔어요. 내 파일은 .bak으로 남겨 뒀어요.', 'info', 3000)
+    refreshPersonalRow()
+  })
+  // 탐색기에서 파일을 넣고 돌아오면 바로 반영되게.
+  window.addEventListener('focus', refreshPersonalRow)
+  refreshPersonalRow()
 }
 
 function bindBackendEnvControls() {

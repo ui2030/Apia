@@ -1,5 +1,5 @@
 import { access, mkdir, open, rm } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { delimiter, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
 const rootDir = process.cwd()
@@ -284,6 +284,8 @@ async function buildBackendExe(runPython) {
   }
 
   args.push('--collect-data', 'pyttsx3')
+  // 기본 설정(성격 등) — ai_config가 모듈 옆 defaults/에서 읽는다. 개인 설정은 userData/personal.
+  args.push('--add-data', `${resolve(backendDir, 'defaults')}${delimiter}defaults`)
   args.push(entryPath)
 
   await runPython(args)

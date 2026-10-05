@@ -173,6 +173,44 @@ def _engine_load() -> None:
 
     global _engine
     _engine = SeedVCWrapper()
+    _memoize_reference(_engine)
+
+
+def _memoize_reference(engine) -> None:
+    """참조(캐릭터 목소리) 쪽 특징 계산을 인스턴스 단위로 캐시한다.
+
+    convert_voice는 매 문장마다 참조에서 whisper 특징·campplus 스타일을 다시
+    뽑는데, 참조는 안 바뀌므로 같은 입력이면 결과도 같다. 엔진 코드는 건드리지
+    않고 이 인스턴스의 메서드만 감싼다. 키 = 입력 텐서 바이트 해시, 캐시는
+    엔진 인스턴스에 묶여 모델 재로드 시 함께 버려진다.
+    ponytail: rmvpe(F0)는 f0_condition=False 경로라 호출되지 않아 감싸지 않는다.
+    """
+    import hashlib
+    from collections import OrderedDict
+
+    cache = OrderedDict()
+
+    def memo(tag, fn, tensor):
+        key = (tag, hashlib.sha1(tensor.detach().cpu().numpy().tobytes()).hexdigest())
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        out = cache[key] = fn()
+        while len(cache) > 4:  # 참조 2개 × (whisper, style)
+            cache.popitem(last=False)
+        return out
+
+    whisper = engine._process_whisper_features
+    campplus = engine.campplus_model
+
+    def cached_whisper(audio_16k, is_source=True):
+        if is_source:  # 소스(매 문장 다름)는 캐시 금지
+            return whisper(audio_16k, is_source=True)
+        return memo("whisper", lambda: whisper(audio_16k, is_source=False), audio_16k)
+
+    engine._process_whisper_features = cached_whisper
+    # convert_voice에서 campplus는 참조 fbank에만 쓰인다.
+    engine.campplus_model = lambda feat: memo("style", lambda: campplus(feat), feat)
 
 
 def _engine_convert(audio: bytes, mime: str, reference_wav_path: str) -> bytes:

@@ -474,3 +474,34 @@ describe('학습 잡 — 게이트 폐기 경로', () => {
     expect(store.getState().lastStatus).toBe('passed')
   })
 })
+
+describe('그림자 arm·화제 차원 (발주서 17) — 화제별 어댑터 비교의 기준선', () => {
+  it('arm/topic이 오면 types와 같은 모양으로 arms[arm][topic]에 센다', () => {
+    const store = createNightSchoolStore({ dir })
+    store.noteShadow({ similarity: 0.8, lengthRatio: 1, type: 'general', arm: 'single', topic: 'game' })
+    store.noteShadow({ similarity: 0.4, lengthRatio: 0.5, type: 'general', arm: 'single', topic: 'game' })
+    store.noteShadow({ similarity: 0.6, lengthRatio: 1, type: 'greeting', arm: 'single', topic: null })
+    store.noteShadow({ similarity: 0.5, lengthRatio: 1, type: 'greeting' }) // 옛 호출 — arm 없음
+    const bucket = Object.values(JSON.parse(fs.readFileSync(store.paths.statusPath, 'utf-8')).shadow)[0]
+    expect(bucket.attempts).toBe(4)                        // 총계는 그대로
+    expect(bucket.arms.single.game).toEqual({ attempts: 2, simSum: 0.8 + 0.4, lenSum: 1.5 })
+    expect(bucket.arms.single.unknown.attempts).toBe(1)   // 분류 실패 = unknown
+    expect(Object.keys(bucket.arms)).toEqual(['single'])
+    expect(bucket.types.greeting.attempts).toBe(2)
+    expect(store.shadowByType().general.attempts).toBe(2)
+  })
+})
+
+describe('화제별 카드 수 (발주서 17) — 관제판 한 줄', () => {
+  it('학습 결과의 topic_counts를 남기고, 집계 없는 시도는 지난 값을 지우지 않는다', () => {
+    const store = createNightSchoolStore({ dir })
+    expect(store.getState().topicCounts).toEqual([])
+    store.noteRun({ status: 'discarded', reason: 'x', topic_counts: { unknown: 1, game: 3 } })
+    expect(store.getState().topicCounts).toEqual([
+      { id: 'game', label: '게임', count: 3 },
+      { id: 'unknown', label: '미분류', count: 1 }
+    ])
+    store.noteRun({ status: 'interrupted', reason: 'user returned' })
+    expect(store.getState().topicCounts).toHaveLength(2)
+  })
+})

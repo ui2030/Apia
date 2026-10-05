@@ -5,7 +5,7 @@
 //   단언 3: 복제 음성(custom:) 선택 시에만 미리듣기/삭제 행 표시
 //   단언 4: 다중 파일 — 여러 개 선택 시 목록·합산 길이·개별 제거가 돌고,
 //           합산이 5초 미만이면 만들기가 잠긴다
-//   단언 5: 2분 초과 — 잠그지 않고 전부 받아 "앞 2분만 사용" 안내로 넘어간다
+//   단언 5: 30초 초과 — 잠그지 않고 전부 받아 "앞 30초만 사용" 안내로 넘어간다
 //   단언 6: 참조 전처리(앞뒤 무음 트림 + 피크 정규화)가 실제로 동작한다
 //   단언 7: 먼저 말 걸기·마이크 둘 다 기본 꺼짐 + 제3자 동의 행 감춤(§C)
 //   단언 8: 설정 창 콘솔에 페이지 에러 0건 (인라인 스크립트 문법/배선 오류 검출)
@@ -128,7 +128,7 @@ try {
     afterTwo.rows === 2 && /7\.0초/.test(afterTwo.total || '') && afterTwo.startDisabled === false &&
     afterRemove.rows === 1 && /4\.0초/.test(afterRemove.total || '') && afterRemove.startDisabled === true
 
-  // ── 단언 5: 2분 초과는 거절이 아니라 앞 2분 사용 ─────────────────────
+  // ── 단언 5: 30초 초과는 거절이 아니라 앞 30초 사용 ─────────────────────
   // 3분(180초) 파일 하나. 예전엔 버튼이 잠겼다 — 지금은 열려 있어야 한다.
   const wavLong = writeSineWav(path.join(tmpDir, 'clip-long.wav'), 180, 22050, 200)
   await settingsWindow.evaluate(() => {
@@ -150,8 +150,8 @@ try {
   await settingsWindow.screenshot({ path: path.join(tmpDir, 'over-two-minutes-notice.png') })
   const overLongOk =
     afterLong.startDisabled === false &&
-    /3\.0분 중 앞 2분만 사용/.test(afterLong.total || '') &&
-    afterLong.usedSec === 120
+    /앞 30초만 사용/.test(afterLong.total || '') &&
+    afterLong.usedSec === 30
 
   // ── 단언 6: 참조 전처리 ───────────────────────────────────────────────
   // 앞뒤 무음 + 작게 녹음된 말소리 → 트림되고 피크가 올라와야 한다.

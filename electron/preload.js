@@ -59,6 +59,9 @@ contextBridge.exposeInMainWorld('api', {
   moveToDisplay: (displayId) => ipcRenderer.invoke('settings:moveToDisplay', { displayId }),
 
   openBackendDataDir: () => ipcRenderer.invoke('settings:openBackendDataDir'),
+  personalStatus: () => ipcRenderer.invoke('personal:status'),
+  openPersonalFolder: () => ipcRenderer.invoke('personal:openFolder'),
+  resetPersonalPersona: () => ipcRenderer.invoke('personal:resetPersona'),
   openBackendEnvFile: () => ipcRenderer.invoke('settings:openBackendEnvFile'),
   getBackendEnvKeys: () => ipcRenderer.invoke('settings:getBackendEnvKeys'),
   saveBackendEnvKeys: (updates) => ipcRenderer.invoke('settings:saveBackendEnvKeys', updates),

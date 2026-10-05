@@ -45,6 +45,7 @@ async function main() {
   await assertFileIncludes('electron-builder.yml', 'extraResources:', 'VERIFY_RELEASE_EXTRA_RESOURCES_MISSING')
   await assertFileIncludes('electron-builder.yml', 'from: backend-dist/ApiaBackend.exe', 'VERIFY_RELEASE_BACKEND_EXE_SOURCE_MISSING')
   await assertFileIncludes('electron-builder.yml', 'to: backend/ApiaBackend.exe', 'VERIFY_RELEASE_BACKEND_COPY_MISSING')
+  await assertFileIncludes('scripts/build-backend.mjs', "resolve(backendDir, 'defaults')", 'VERIFY_RELEASE_BACKEND_DEFAULTS_MISSING')
 
   // Icon wiring — without these the installer/exe ships the default Electron
   // atom icon (the L-stage regression this guards against). build/icon.ico

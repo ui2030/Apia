@@ -38,7 +38,9 @@ import importlib.util
 import json
 import os
 import random
+import re
 import sys
+from collections import Counter
 import time
 import urllib.error
 import urllib.request
@@ -59,6 +61,12 @@ VRAM_MIN_GB = 8.0
 CORRECT_BATCH = 10  # 교사에게 한 번에 주는 카드 수. 20개면 교사가 개수를 흘린다
 RECALL_SAMPLE = 20
 GEN_MAX_NEW = 96
+# 체크포인트 단위. 지금은 단일 어댑터 하나뿐이지만 경로를 work/<arm>/hf로 미리
+# 나눠 둔다 — 어댑터가 여럿이 되면 하나가 끊겨도 다른 것의 진행을 잃지 않는다.
+ARM = "single"
+# 화제 태깅 confidence 하한 — topicLedger.js MIN_CONFIDENCE와 같은 값. 미만은 "unknown".
+TOPIC_MIN_CONF = 0.6
+TOPIC_MAX_NEW = 32
 
 # 고정 스모크 평가 — 일반 능력 10문항. 학습이 기반 능력을 부수지 않았는지만 본다.
 # night-loop-lab data_v2의 general 셋 그대로(정답 문자열 포함 여부로 채점).
@@ -110,7 +118,10 @@ def load_cards(cards_dir, max_cards):
                 continue  # 깨진 줄 하나로 그날 카드를 통째로 버리진 않는다
             u, a = str(card.get("u") or ""), str(card.get("a") or "")
             if u and a:
-                out.append({"day": day, "u": u, "a": a})
+                c = {"day": day, "u": u, "a": a}
+                if card.get("topic_id"):  # 선택 필드 — 옛 카드엔 없다(학습 때 분류)
+                    c["topic_id"] = str(card["topic_id"])
+                out.append(c)
     if max_cards and len(out) > max_cards:
         out = out[-max_cards:]
     return out
@@ -211,6 +222,99 @@ def to_text(tok, card, system):
         [{"role": "system", "content": system}, {"role": "user", "content": card["u"]}],
         tokenize=False, add_generation_prompt=True)
     return prompt + card["a"] + tok.eos_token
+
+
+# Qwen 템플릿의 턴 경계. to_text의 생성 프롬프트가 RESPONSE_PART로 끝난다.
+INSTRUCTION_PART = "<|im_start|>user\n"
+RESPONSE_PART = "<|im_start|>assistant\n"
+
+
+def mask_prompt(trainer):
+    """라벨 마스킹 — 시스템+사용자 토큰을 -100으로 가려 **답변 토큰만** 손실에 넣는다.
+
+    text 데이터셋이라 trl의 completion_only_loss가 걸리지 않는다. 안 가리면 매
+    카드마다 같은 시스템 프롬프트를 외우느라 학습 신호가 답에서 새고, 화제별처럼
+    카드가 적으면 리콜이 바로 무너진다(발주서 17a 미니 실측 0/4 → 2.5/4).
+    """
+    from unsloth.chat_templates import train_on_responses_only
+    return train_on_responses_only(trainer, instruction_part=INSTRUCTION_PART,
+                                   response_part=RESPONSE_PART)
+
+
+def trained_ids(row):
+    """라벨이 살아 있는(-100이 아닌) 토큰 id. 마스킹 경계 검사용."""
+    return [t for t, label in zip(row["input_ids"], row["labels"]) if label != -100]
+
+
+def check_mask(trainer, tok, cards):
+    """학습 대상이 정확히 "답 + eos"인지 — 첫 샘플과 **가장 긴 샘플** 둘을 본다(긴 카드는
+    MAXLEN 잘림·경계 문자열 포함 같은 사고가 몰리는 곳). 경계가 템플릿과 어긋나면 전부
+    가려져 아무것도 안 배우거나 프롬프트까지 배운다 — 둘 다 조용한 실패라 여기서 끊는다.
+    반환은 첫 샘플의 (학습 토큰 수, 전체 토큰 수)."""
+    ds = trainer.train_dataset
+    longest = max(range(len(ds)), key=lambda i: len(ds[i]["input_ids"]))
+    first = None
+    for i in sorted({0, longest}):
+        row = ds[i]
+        ids = trained_ids(row)
+        got = tok.decode(ids)
+        # 접두 비교 — MAXLEN에 잘린 긴 카드도 "답의 앞부분만 학습"이면 정상이다.
+        if not got or not norm(cards[i]["a"] + tok.eos_token).startswith(norm(got)):
+            raise RuntimeError(f"label mask mismatch (sample {i}): {got[:80]!r}")
+        if i == 0:
+            first = (len(ids), len(row["input_ids"]))
+    return first
+
+
+# ── 화제 태깅 ────────────────────────────────────────────────────────────────
+def parse_topic(raw, topics):
+    """분류기 raw → topic_id 또는 None. topicLedger.parseClassification과 같은 규칙
+    (첫 JSON 오브젝트, 목록 밖 id·숫자 아닌 confidence는 버림) + confidence 하한."""
+    m = re.search(r"\{[\s\S]*?\}", raw or "")
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+        tid, conf = str(obj.get("topic_id") or "").strip(), float(obj.get("confidence"))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return tid if tid in topics and conf >= TOPIC_MIN_CONF else None
+
+
+TOPIC_TAG_BUDGET_SEC = 600     # 태깅에 쓸 최대 시간 — 학습 창을 잠식하지 않게
+TOPIC_TAG_RESERVE_SEC = 1800   # 마감까지 이만큼은 학습 몫으로 남긴다
+TOPIC_TAG_BATCH = 16
+
+
+def tag_topics(model, tok, cards, topics, cfg, guard=None):
+    """topic_id 없는 카드만 이미 올라 있는 모델로 분류한다(추가 로드·교사 비용 0).
+    서빙의 원장 분류기와 같은 프롬프트(ai_config 단일 출처). 못 정하면 None → "unknown".
+
+    배치 사이마다 중단 사유(guard)와 시간 예산을 본다 — 밀린 카드가 많아도 태깅이
+    학습 시간을 다 먹지 않는다(astra MUST-FIX). 남은 카드는 "unknown"으로 두고
+    다음 밤에 다시 시도된다(태깅은 선택 필드)."""
+    todo = [c for c in cards if not c.get("topic_id")]
+    if topics and todo:
+        t0 = time.time()
+        done = 0
+        for i in range(0, len(todo), TOPIC_TAG_BATCH):
+            if guard is not None:
+                guard.check()  # 사용자 복귀·부모 사망·마감은 그대로 전파
+            remaining = (guard.deadline - time.time()) if (guard is not None and guard.deadline) else None
+            over_budget = time.time() - t0 > TOPIC_TAG_BUDGET_SEC
+            near_deadline = remaining is not None and remaining < TOPIC_TAG_RESERVE_SEC
+            if over_budget or near_deadline:
+                why = "tag budget" if over_budget else "deadline reserve"
+                log(f"  topics tagging stopped early ({done}/{len(todo)}, {why}) — 학습 시간 보존")
+                break
+            chunk = todo[i:i + TOPIC_TAG_BATCH]
+            raws = generate(model, tok, [cfg.classify_payload(c["u"], topics) for c in chunk],
+                            cfg.CLASSIFY_SYSTEM, max_new=TOPIC_MAX_NEW)
+            for c, raw in zip(chunk, raws):
+                c["topic_id"] = parse_topic(raw, topics)
+            done += len(chunk)
+        log(f"  topics tagged {done}/{len(todo)} cards in {time.time()-t0:.0f}s")
+    return dict(Counter(c.get("topic_id") or "unknown" for c in cards).most_common())
 
 
 # ── 평가 ────────────────────────────────────────────────────────────────────
@@ -315,14 +419,19 @@ def trainer_callback(guard):
 
 
 # ── 체크포인트 ──────────────────────────────────────────────────────────────
-def clear_train_checkpoint(work):
+def ckpt_dir(work, arm=ARM):
+    return Path(work) / arm / "hf"
+
+
+def clear_train_checkpoint(work, arm=ARM):
     """HF 체크포인트 폐기. 교재가 바뀌었거나 학습이 끝난 뒤에 부른다.
 
     남겨 두면 다음 실행이 **다른 교재로 만든 체크포인트에서 재개한다** — 스텝
     수가 이미 차 있으면 한 스텝도 돌지 않고 옛 델타를 그대로 내놓는다.
     """
     import shutil
-    shutil.rmtree(Path(work) / "hf", ignore_errors=True)
+    shutil.rmtree(ckpt_dir(work, arm), ignore_errors=True)
+    shutil.rmtree(Path(work) / "hf", ignore_errors=True)  # 발주서 17 이전 경로 잔재
 
 
 def load_state(work, expect_hash):
@@ -409,7 +518,7 @@ def stage_correct(args, cards, system, guard, state):
             continue
         fixed += [str(x) for x in answers]
 
-    corrected = [{"u": c["u"], "a": f, "day": c["day"]} for c, f in zip(cards, fixed)]
+    corrected = [dict(c, a=f) for c, f in zip(cards, fixed)]  # topic_id 등 선택 필드 유지
     mode = "fallback:teacher" if (budget_done or failures) else "on-policy"
     state.update({"corrected": corrected, "teacher_spent": spent, "corrected_by": mode})
     save_state(args.work, state)
@@ -417,18 +526,22 @@ def stage_correct(args, cards, system, guard, state):
     return corrected, spent, mode
 
 
-def stage_train(args, corpus, system, recall_cards, guard):
-    """베이스에서 새로 QLoRA. 학습 전후를 같은 문항으로 재서 게이트에 넘긴다."""
+def stage_train(args, corpus, system, recall_cards, guard, cfg=None):
+    """베이스에서 새로 QLoRA. 학습 전후를 같은 문항으로 재서 게이트에 넘긴다.
+
+    화제 태깅도 여기서 한다 — 막 붙인 LoRA는 B=0이라 출력이 베이스와 같고,
+    교정 단계와 달리 백엔드 없는 폴백 경로에서도 반드시 모델이 올라와 있다."""
     import torch
     from datasets import Dataset
     from trl import SFTTrainer, SFTConfig
 
     guard.check()
     model, tok = fresh_model(args.model)
+    topic_counts = tag_topics(model, tok, corpus, args.topics, cfg, guard) if cfg else {}
     before = evaluate(model, tok, system, recall_cards, "before")
 
     ds = Dataset.from_list([{"text": to_text(tok, c, system)} for c in corpus])
-    ckpt_dir = Path(args.work) / "hf"
+    ckpt = ckpt_dir(args.work)
     cb = trainer_callback(guard)
     torch.cuda.reset_peak_memory_stats()
     trainer = SFTTrainer(
@@ -439,13 +552,16 @@ def stage_train(args, corpus, system, recall_cards, guard):
                        num_train_epochs=EPOCHS, warmup_ratio=0.05, learning_rate=LR,
                        logging_steps=1000, optim="adamw_8bit", weight_decay=0.01,
                        lr_scheduler_type="linear", seed=SEED, data_seed=SEED,
-                       output_dir=str(ckpt_dir), report_to="none",
+                       output_dir=str(ckpt), report_to="none",
                        save_strategy="steps", save_steps=50, save_total_limit=1,
                        disable_tqdm=True,
                        bf16=torch.cuda.is_bf16_supported(),
                        fp16=not torch.cuda.is_bf16_supported()))
+    trainer = mask_prompt(trainer)
+    kept, total = check_mask(trainer, tok, corpus)
+    log(f"  label mask: 학습 토큰 {kept}/{total} (첫 샘플, 답+eos만)")
 
-    resume = any(ckpt_dir.glob("checkpoint-*")) if ckpt_dir.exists() else False
+    resume = any(ckpt.glob("checkpoint-*")) if ckpt.exists() else False
     t0 = time.time()
     try:
         stats = trainer.train(resume_from_checkpoint=resume or None)
@@ -488,7 +604,7 @@ def stage_train(args, corpus, system, recall_cards, guard):
         "before": before, "after": after, "candidate": str(candidate),
         "steps": int(stats.global_step), "loss": round(float(stats.training_loss), 4),
         "sec": round(time.time() - t0, 1), "vram_peak_gb": round(peak, 2),
-        "n_cards": len(corpus),
+        "n_cards": len(corpus), "topic_counts": topic_counts,
     }
 
 
@@ -523,22 +639,29 @@ def write_result(path, payload):
     log(f"result -> {payload.get('status')}: {payload.get('reason', '')}")
 
 
-def load_system_prompt():
-    """ai_config(stdlib 전용)에서 서빙과 같은 시스템 프롬프트·모델을 읽는다."""
+def load_ai_config():
+    """ai_config(stdlib 전용) — 서빙과 같은 시스템 프롬프트·모델·분류 프롬프트."""
     spec = importlib.util.spec_from_file_location(
         "apia_ai_config", BACKEND_DIR / "ai_config.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.SYSTEM_PROMPT, module.MODEL_ID
+    return module
+
+
+def serving_system(cfg):
+    """로컬 서빙·그림자가 실제로 쓰는 시스템 프롬프트(claude_service와 같은 조립·같은 꼬리).
+    개인 성격(PERSONAL_DIR/persona.md)이 있으면 그것으로 — 서빙과 한 글자라도 다르면
+    델타가 다른 프롬프트에 맞춰진다. PERSONAL_DIR은 Electron이 process.env로 넘긴다."""
+    return cfg.build_system_prompt(cfg.load_persona()) + cfg.LOCAL_PROMPT_TAIL
 
 
 def main():
-    default_system, default_model = load_system_prompt()
+    cfg = load_ai_config()
     ap = argparse.ArgumentParser()
     ap.add_argument("--cards", required=True, help="courseware cards 디렉터리")
     ap.add_argument("--work", required=True, help="체크포인트·후보 델타 작업 디렉터리")
     ap.add_argument("--result", required=True, help="결과 JSON 경로")
-    ap.add_argument("--model", default=default_model)
+    ap.add_argument("--model", default=cfg.MODEL_ID)
     ap.add_argument("--backend-url", default="")
     ap.add_argument("--adopted-delta", default="", help="현재 채택 델타(학생 초기값)")
     ap.add_argument("--stop-file", default="")
@@ -548,9 +671,12 @@ def main():
     ap.add_argument("--max-cards", type=int, default=2000)
     ap.add_argument("--general-drop-max", type=float, default=20.0)
     ap.add_argument("--recall-gain-min", type=float, default=10.0)
+    ap.add_argument("--topics", default="",
+                    help="화제 id 쉼표 목록(topicLedger.js 단일 출처). 비면 태깅 생략")
     args = ap.parse_args()
+    args.topics = [t for t in args.topics.split(",") if t]
 
-    system = default_system
+    system = serving_system(cfg)
     guard = Guard(args.stop_file, args.deadline_sec, args.parent_pid)
     started = time.time()
     base = {"started_at": time.time(), "model": args.model}
@@ -578,13 +704,14 @@ def main():
         recall_cards = week[:RECALL_SAMPLE]
 
         corpus, spent, mode = stage_correct(args, cards, system, guard, state)
-        result = stage_train(args, corpus, system, recall_cards, guard)
+        result = stage_train(args, corpus, system, recall_cards, guard, cfg)
         verdict = gate(result, args.general_drop_max, args.recall_gain_min)
 
         write_result(args.result, dict(
             base, status="passed" if verdict["passed"] else "discarded",
             reason=verdict["reason"], gate=verdict, train=result,
             corrected_by=mode, teacher_spent_week=spent,
+            topic_counts=result["topic_counts"],
             candidate=result["candidate"] if verdict["passed"] else None,
             elapsed_sec=round(time.time() - started, 1)))
         return 0
@@ -624,19 +751,39 @@ def selfcheck():
             '{"day":"2026-01-01","u":"q1","a":"a1"}\nbroken\n{"u":"q2","a":"a2"}\n',
             encoding="utf-8")
         Path(d, "2026-01-02.jsonl").write_text(
-            '{"day":"2026-01-02","u":"q3","a":"a3"}\n', encoding="utf-8")
+            '{"day":"2026-01-02","u":"q3","a":"a3","topic_id":"game"}\n', encoding="utf-8")
         cards = load_cards(d, 0)
         assert [c["u"] for c in cards] == ["q1", "q2", "q3"], cards
         assert [c["u"] for c in load_cards(d, 2)] == ["q2", "q3"]
         assert corpus_hash(cards) == corpus_hash(load_cards(d, 0))
+        # topic_id는 선택 필드 — 있으면 보존, 옛 카드는 키 자체가 없다
+        assert cards[2]["topic_id"] == "game" and "topic_id" not in cards[0], cards
 
         state = {"corpus_hash": "abc", "corrected": [1]}
         save_state(d, state)
-        Path(d, "hf", "checkpoint-72").mkdir(parents=True)
+        Path(d, ARM, "hf", "checkpoint-72").mkdir(parents=True)
+        assert ckpt_dir(d) == Path(d, "single", "hf")
         assert load_state(d, "abc")["corrected"] == [1]
-        assert Path(d, "hf", "checkpoint-72").exists()   # 같은 교재면 이어 붙는다
-        assert load_state(d, "zzz") == {}                # 교재가 바뀌면 교정도
-        assert not Path(d, "hf").exists()                # 학습 체크포인트도 무효
+        assert Path(d, ARM, "hf", "checkpoint-72").exists()   # 같은 교재면 이어 붙는다
+        Path(d, "hf").mkdir()                                  # 옛 경로 잔재
+        assert load_state(d, "zzz") == {}                      # 교재가 바뀌면 교정도
+        assert not Path(d, ARM, "hf").exists()                 # 학습 체크포인트도 무효
+        assert not Path(d, "hf").exists()
+
+    # 라벨 마스킹 경계 — -100인 프롬프트 구간은 빠지고 답 토큰만 남는다
+    assert trained_ids({"input_ids": [1, 2, 3, 4, 5], "labels": [-100, -100, -100, 4, 5]}) == [4, 5]
+    assert trained_ids({"input_ids": [1, 2], "labels": [-100, -100]}) == []
+
+    # 화제 파싱 — 원장 parseClassification과 같은 규칙 + 하한
+    topics = ["game", "food"]
+    assert parse_topic('앞말 {"topic_id": "game", "confidence": 0.9} 뒷말', topics) == "game"
+    assert parse_topic('{"topic_id": "game", "confidence": 0.3}', topics) is None
+    assert parse_topic('{"topic_id": "music", "confidence": 0.9}', topics) is None
+    assert parse_topic('{"topic_id": "game", "confidence": "x"}', topics) is None
+    assert parse_topic("no json", topics) is None
+
+    cfg = load_ai_config()
+    assert serving_system(cfg).endswith(cfg.LOCAL_PROMPT_TAIL) and cfg.LOCAL_PROMPT_TAIL
 
     g = Guard(None, 0)
     g.check()  # 상한 0 = 무제한, 부모 감시 없음

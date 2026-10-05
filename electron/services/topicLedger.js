@@ -544,7 +544,12 @@ function createExchangeTracker({
         .catch(() => null)
       // 직전 교환은 이제야 확정된다 — 화제 전환 신호가 이 교환의 화제를 쓴다.
       if (awaiting) { finalize(awaiting, cur); awaiting = null }
+      // 그림자가 이 분류 **뒤에** 돌도록 promise를 내준다. 둘은 같은 로컬 잠금을
+      // 쓰므로 동시에 들어가면 그림자가 "local path busy"로 버려진다. 화제도
+      // 여기서 재사용한다(분류 추가 비용 0).
+      return cur.topic
     }
+    return null
   }
 
   /** 응답 직후 사용자가 처음 키를 누른 순간. 지연의 끝점은 전송이 아니라 입력 시작. */

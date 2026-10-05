@@ -39,6 +39,8 @@ if str(BACKEND_ROOT) not in sys.path:
 # doesn't accidentally point pytest at production data. Codex MUST-FIX.
 _TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="apia-pytest-data-"))
 os.environ["DATA_DIR"] = str(_TEST_DATA_DIR)
+# 개발자 셸의 개인 성격 파일이 프롬프트 바이트 동일성 테스트에 새지 않게.
+os.environ.pop("PERSONAL_DIR", None)
 
 
 def _install_fake_claude_module() -> MagicMock:

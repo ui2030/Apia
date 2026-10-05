@@ -648,3 +648,32 @@ describe('ledgerVeto', () => {
     expect(ledgerVeto(null)).toEqual({ veto: false, reason: 'unclassified' })
   })
 })
+
+describe('그림자 직렬화 (발주서 17) — 분류가 끝난 뒤에 그림자가 돈다', () => {
+  it('noteReplyDone은 이 교환의 분류 promise를 내주고, 그 뒤엔 로컬 잠금이 비어 있다', async () => {
+    // 가짜 로컬 모델: 분류가 잠금을 쥔 동안 그림자가 들어오면 백엔드처럼 busy로 거절한다.
+    let busy = false
+    const classify = async () => {
+      busy = true
+      await new Promise((r) => setTimeout(r, 20))
+      busy = false
+      return { topic_id: 'game', confidence: 0.9 }
+    }
+    const shadow = () => (busy ? 'local path busy' : 'ok')
+    const { tracker } = makeTracker({ classify })
+    const results = []
+    for (let i = 0; i < 3; i += 1) {
+      tracker.noteUserMessage(`발화 ${i}`)
+      const topicPromise = tracker.noteReplyDone()
+      // main.js recordShadow와 같은 순서: 분류를 기다린 뒤 그림자
+      const c = await topicPromise
+      results.push([c.topic_id, shadow()])
+    }
+    expect(results).toEqual([['game', 'ok'], ['game', 'ok'], ['game', 'ok']])
+  })
+
+  it('확정할 교환이 없으면 null — 그림자는 바로 돈다', () => {
+    const { tracker } = makeTracker()
+    expect(tracker.noteReplyDone()).toBeNull()
+  })
+})

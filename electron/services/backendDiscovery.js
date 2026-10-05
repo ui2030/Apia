@@ -71,8 +71,10 @@ function getBackendSpawnConfig(rawUrl, userDataPath) {
   const host = normalizeBackendHostname(url.hostname) || DEFAULT_BACKEND_HOST
   const port = url.port || DEFAULT_BACKEND_PORT
   const dataDir = path.join(userDataPath, 'backend-data')
+  // 개인 설정(성격·목소리 참조) — 앱 업데이트가 건드리지 않는 사용자 소유 폴더.
+  const personalDir = path.join(userDataPath, 'personal')
 
-  return { host, port, dataDir }
+  return { host, port, dataDir, personalDir }
 }
 
 function isPortAvailable(host, port) {

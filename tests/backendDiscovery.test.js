@@ -118,6 +118,7 @@ describe('getBackendSpawnConfig', () => {
     expect(config.host).toBe('127.0.0.1')
     expect(config.port).toBe('9001')
     expect(config.dataDir).toContain('backend-data')
+    expect(config.personalDir).toContain('personal')
   })
 
   it('strips IPv6 brackets from the host so the value is safe for uvicorn bind', () => {

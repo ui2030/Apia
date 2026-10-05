@@ -450,6 +450,7 @@ class BackendLifecycle {
           APIA_BACKEND_HOST: spawnConfig.host,
           APIA_BACKEND_PORT: spawnConfig.port,
           DATA_DIR: spawnConfig.dataDir,
+          PERSONAL_DIR: spawnConfig.personalDir,
           // PYTHONUTF8 forces utf-8 for filesystem operations; PYTHONIOENCODING
           // makes stdout/stderr utf-8 too. Without both, Windows consoles
           // default to cp949/cp1252 and Korean log lines arrive at our
