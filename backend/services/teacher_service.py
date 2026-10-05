@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """교사(DeepSeek) 클라이언트 — 일일 비용 상한과 사용량 집계를 가진 stdlib HTTP 호출.
 
-교재 파이프라인 전용이다. 대화 경로(routers/chat.py)는 이 모듈을 쓰지 않는다 —
-교사가 죽어 있든 예산이 말랐든 사용자가 눈치챌 수 있는 표면이 없어야 한다.
+교재 파이프라인 + 채팅(deepseek provider, 발주서 16)이 같은 장부·같은 상한을 쓴다.
+채팅은 `chat_guard`/`chat_record`로만 들어온다 — 상한·키 없음·장부 고장이면
+호출자(claude_service)가 로컬로 폴백한다.
 
 키 취급: `DEEPSEEK_API_KEY`는 backend.env에서만 읽고 로그·예외 메시지에 절대
 싣지 않는다. urllib의 HTTPError 문자열이 요청 헤더를 물고 나오는 일은 없지만,
@@ -184,33 +185,100 @@ def ask_json(
     예산 확인부터 장부 기록까지가 한 임계구역이다 — 확인과 기록 사이에 다른
     호출이 끼면 둘이 같은 잔액을 보고 함께 통과한다.
     """
-    global _ledger_broken
-
     with _LOCK:
-        if _ledger_broken:
-            raise TeacherUnavailable(f"usage ledger unavailable: {_ledger_broken}")
-
-        key, base, model = _credentials()
-
-        # 호출 전 가드. 상한에 닿았으면 그날은 더 쓰지 않는다(다음날 자동 리셋).
-        # 장부를 못 읽으면 지출을 셀 수 없으니 쓰지 않는다(fail-closed).
-        try:
-            ledger = _load_usage()
-        except Exception as error:  # noqa: BLE001
-            _ledger_broken = f"read failed ({type(error).__name__})"
-            raise TeacherUnavailable(f"usage ledger unavailable: {_ledger_broken}") from None
-        already = float(ledger.get(_today(), {}).get("usd", 0.0))
-        if already >= DAILY_BUDGET_USD:
-            raise TeacherUnavailable(f"daily budget reached (${already:.4f} >= ${DAILY_BUDGET_USD})")
-        if bucket and bucket_weekly_cap is not None:
-            week = _bucket_window(ledger, bucket)
-            if week >= bucket_weekly_cap:
-                raise TeacherUnavailable(
-                    f"{bucket} weekly budget reached (${week:.4f} >= ${bucket_weekly_cap})"
-                )
-
+        key, base, model, ledger = _guard_locked(bucket, bucket_weekly_cap)
         return _call_locked(key, base, model, ledger, system, user, max_tokens,
                             temperature, timeout, bucket)
+
+
+def _guard_locked(bucket: Optional[str] = None, bucket_weekly_cap: Optional[float] = None):
+    """_LOCK을 쥔 채로만 부른다. 통과하면 `(key, base, model, ledger)`, 아니면
+    TeacherUnavailable. 교재·채팅이 같은 이 한 함수로 상한을 판정한다."""
+    global _ledger_broken
+
+    if _ledger_broken:
+        raise TeacherUnavailable(f"usage ledger unavailable: {_ledger_broken}")
+
+    key, base, model = _credentials()
+
+    # 호출 전 가드. 상한에 닿았으면 그날은 더 쓰지 않는다(다음날 자동 리셋).
+    # 장부를 못 읽으면 지출을 셀 수 없으니 쓰지 않는다(fail-closed).
+    try:
+        ledger = _load_usage()
+    except Exception as error:  # noqa: BLE001
+        _ledger_broken = f"read failed ({type(error).__name__})"
+        raise TeacherUnavailable(f"usage ledger unavailable: {_ledger_broken}") from None
+    # 진행 중인 채팅의 선점액을 더해 본다 — 아직 장부에 안 적힌 지출.
+    already = float(ledger.get(_today(), {}).get("usd", 0.0)) + _inflight_usd
+    if already >= DAILY_BUDGET_USD:
+        raise TeacherUnavailable(f"daily budget reached (${already:.4f} >= ${DAILY_BUDGET_USD})")
+    if bucket and bucket_weekly_cap is not None:
+        week = _bucket_window(ledger, bucket)
+        if week >= bucket_weekly_cap:
+            raise TeacherUnavailable(
+                f"{bucket} weekly budget reached (${week:.4f} >= ${bucket_weekly_cap})"
+            )
+    return key, base, model, ledger
+
+
+CHAT_BUCKET = "chat"
+# 채팅 몫 일일 상한. 채팅이 일일 예산(DAILY_BUDGET_USD)을 낮에 다 쓰면 밤 교재
+# 변환이 "예산 초과"로 연기되고 그게 매일 반복돼 학습이 영영 안 돈다. 그래서
+# 채팅은 이만큼만 쓰고 나머지(≈$0.02)는 교재·on-policy 몫으로 항상 남긴다.
+CHAT_DAILY_CAP_USD = 0.05
+# 채팅 1턴 선점액. chat_guard는 스트리밍 동안 락을 안 쥐므로, 판정과 기록 사이의
+# 동시 호출(채팅 둘·채팅+교재)이 같은 잔액을 보고 함께 통과하는 걸 이 선점이 막는다.
+# 실측 1턴 ≈ $0.001 — 넉넉히 2배. chat_release()가 되돌린다.
+CHAT_RESERVE_USD = 0.002
+_inflight_usd = 0.0
+
+
+def chat_guard() -> Tuple[str, str, str]:
+    """채팅 1턴 전 상한 판정. 통과하면 `(key, base, model)`.
+
+    ponytail: 스트리밍 동안 _LOCK을 쥐지 않는다 — 쥐면 밤새 도는 교재 변환이
+    대화를 수십 초 막는다. 대가로 판정과 기록 사이에 다른 호출이 끼면 상한을
+    한 턴(≈$0.001)만큼 넘을 수 있다. 정확히 막아야 하면 예약 금액을 먼저 적는다.
+    """
+    global _inflight_usd
+    with _LOCK:
+        key, base, model, ledger = _guard_locked()
+        chat_today = float(ledger.get(_today(), {}).get(_bucket_key(CHAT_BUCKET), 0.0)) + _inflight_usd
+        if chat_today >= CHAT_DAILY_CAP_USD:
+            raise TeacherUnavailable(
+                f"chat daily budget reached (${chat_today:.4f} >= ${CHAT_DAILY_CAP_USD})"
+            )
+        _inflight_usd += CHAT_RESERVE_USD
+        return key, base, model
+
+
+def chat_release() -> None:
+    """chat_guard 통과 뒤 턴이 끝나면(성공·실패·끊김 모두) 선점액을 되돌린다."""
+    global _inflight_usd
+    with _LOCK:
+        _inflight_usd = max(0.0, _inflight_usd - CHAT_RESERVE_USD)
+
+
+def _split_usage(usage: Dict[str, Any]) -> Tuple[int, int, int]:
+    """OpenAI 호환 usage → (캐시 hit 입력, miss 입력, 출력) 토큰."""
+    hit = int(usage.get("prompt_cache_hit_tokens", 0) or 0)
+    miss = int(usage.get("prompt_cache_miss_tokens", int(usage.get("prompt_tokens", 0) or 0) - hit) or 0)
+    return hit, max(miss, 0), int(usage.get("completion_tokens", 0) or 0)
+
+
+def chat_record(usage: Dict[str, Any], est_in_chars: int, est_out_chars: int) -> None:
+    """채팅 1턴 사용량을 같은 일일 장부(bucket=chat)에 더한다.
+
+    스트림 마지막 청크의 usage가 없으면(끊김 등) 글자당 1토큰으로 보수 추정한다 —
+    한국어 실측은 그보다 적어서 덜 적을 일은 없다. 저장 실패는 장부를 고장으로
+    표시해 다음 판정부터 막는다(교재 경로와 같은 fail-closed)."""
+    global _ledger_broken
+    hit, miss, out = _split_usage(usage) if usage else (0, est_in_chars, est_out_chars)
+    with _LOCK:
+        try:
+            _record(_load_usage(), hit, miss, out, CHAT_BUCKET)
+        except Exception as error:  # noqa: BLE001
+            _ledger_broken = f"write failed ({type(error).__name__})"
 
 
 def _call_locked(key, base, model, ledger, system, user, max_tokens, temperature, timeout,
@@ -243,12 +311,9 @@ def _call_locked(key, base, model, ledger, system, user, max_tokens, temperature
     except Exception as error:  # noqa: BLE001
         raise TeacherFailed(type(error).__name__) from None
 
-    usage = payload.get("usage") or {}
-    hit = int(usage.get("prompt_cache_hit_tokens", 0) or 0)
-    miss = int(usage.get("prompt_cache_miss_tokens", int(usage.get("prompt_tokens", 0) or 0) - hit) or 0)
-    out = int(usage.get("completion_tokens", 0) or 0)
+    hit, miss, out = _split_usage(payload.get("usage") or {})
     try:
-        total = _record(ledger, hit, max(miss, 0), out, bucket)
+        total = _record(ledger, hit, miss, out, bucket)
     except Exception as error:  # noqa: BLE001
         # 이미 쓴 돈이라 결과는 돌려준다(버리면 원본만 더 오래 남는다). 대신
         # 다음 호출부터 막는다 — 적지 못한 지출이 쌓이는 쪽이 훨씬 나쁘다.

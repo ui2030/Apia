@@ -120,7 +120,7 @@ def test_classify_with_ai_mode_uses_that_provider_not_local():
         raw = asyncio.run(real_class.classify_topic(service, "보스전이다!", ["game"], mode))
 
         assert raw == '{"topic_id":"game","confidence":0.9}'
-        service.ensure_mode.assert_awaited_once_with(mode)
+        service.ensure_mode.assert_awaited_once_with(mode, chat=False)
         getattr(service, method).assert_awaited_once()
         service._summarize_local.assert_not_awaited()
 

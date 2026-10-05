@@ -63,6 +63,7 @@ const {
   getPackagedBackendExecutableCandidates: getPackagedBackendExecutableCandidatesRaw
 } = require('./services/backendDiscovery')
 const { BackendLifecycle } = require('./services/backendLifecycle')
+const { chatTimeoutFor, createFallbackNotice } = require('./services/chatPolicy')
 const { SettingsRepository } = require('./services/settingsAggregate')
 const { saveWorldDocument } = require('./services/worldStore')
 const { BackendEnvRepository } = require('./services/backendEnvRepository')
@@ -1040,14 +1041,9 @@ ipcMain.handle('check-backend', async () => {
   return { ok: Boolean(started && (await backend.isHealthy(1200))) }
 })
 
-// Local LLM (Qwen on the user's PC) can spend ~47s just loading the model on
-// the first call, before any generation — a flat 30s timed out the very first
-// chat ("Request timed out after 30000ms"). Give local a generous budget;
-// cloud/auto stays tight since a hung request there should fail fast.
-// claude_code는 CLI 프로세스를 새로 띄우고(부팅만 수 초) 도구 없는 단발이라도
-// 왕복이 길어서 같은 관대한 버킷에 넣는다.
-const SLOW_CHAT_MODES = new Set(['local', 'claude_code'])
-const chatTimeoutFor = (mode) => (SLOW_CHAT_MODES.has(mode) ? 180000 : 30000)
+// 대기 상한(chatTimeoutFor)은 services/chatPolicy.js — auto도 로컬 폴백이 있어 느린 쪽.
+// 교사→로컬 폴백 안내는 하루 1회(창이 둘이어도 main 하나가 센다).
+const fallbackNotice = createFallbackNotice()
 
 // 역할별(디렉터/관전) 모델. ''이면 대화와 같은 모델을 쓴다.
 const roleAiMode = (settings, key) => settings[key] || settings.aiMode
@@ -1205,7 +1201,8 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
             requestId,
             reply: frame.reply,
             emotion: frame.emotion,
-            citations: Array.isArray(frame.citations) ? frame.citations : []
+            citations: Array.isArray(frame.citations) ? frame.citations : [],
+            notice: fallbackNotice(frame)
           })
         } else if (frame.type === 'error') {
           sender.send('chat-stream-error', { requestId, error: frame.message || 'stream error' })

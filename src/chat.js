@@ -368,6 +368,8 @@ function onStreamDone(payload) {
   const emotion = payload.emotion || 'neutral'
   const citations = Array.isArray(payload.citations) ? payload.citations : []
   finalizeStream(reply, emotion, citations, true)
+  // 교사 대신 로컬이 답한 날의 첫 답에만 붙는 안내(main이 하루 1회로 거른다).
+  if (payload.notice) appendMessage('ai', payload.notice)
 }
 
 function onStreamError(payload) {

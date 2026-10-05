@@ -12,7 +12,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, List, Optional, Tuple
 
@@ -38,6 +41,78 @@ from ai_config import (
     LOCAL_IDLE_UNLOAD_MIN,
     LOADED_ENV_FILE,
 )
+from services import teacher_service
+
+# 로컬 Qwen이 한국어 답에 섞는 일본어 가나(히라가나·가타카나·음성확장·반각).
+# 한자는 막지 않는다 — 한국어 문맥에도 쓰이고 기존 품질 필터가 본다.
+_KANA_RE = re.compile("[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f]")
+
+# 로컬 전용 시스템 프롬프트 꼬리. 클라우드 provider 프롬프트는 건드리지 않는다.
+_LOCAL_PROMPT_TAIL = "\n이모지는 한 답에 최대 1개."
+
+
+# 바이트 단위 BPE는 가나를 바이트 조각 토큰(예: " \xe3\x82" + "\xab" = " カ")으로도
+# 낸다. UTF-8에서 E3 81~83 두 바이트는 U+3040–30FF(가나)의 시작으로만 쓰이므로
+# 이 조각을 문 토큰도 막는다. 첫 바이트(E3) 하나만 든 조각은 。·ㅋ 등과 겹쳐 둔다.
+_KANA_PREFIX_RE = re.compile(rb"\xe3[\x81-\x83]")
+
+
+def kana_token_ids(tok) -> List[int]:
+    """vocab 전체를 1회 훑어 가나가 든 토큰 id를 모은다. 토크나이저 객체에
+    캐시한다 — 모델이 내려갔다 다시 올라오면 새 객체라 한 번 더 스캔한다."""
+    cached = getattr(tok, "_apia_kana_ids", None)
+    if cached is None:
+        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode
+
+        byte_of = {char: byte for byte, char in bytes_to_unicode().items()}
+        every = list(range(len(tok)))
+        texts = tok.batch_decode([[i] for i in every])
+        pieces = tok.convert_ids_to_tokens(every)
+        cached = []
+        for i, text, piece in zip(every, texts, pieces):
+            # 바이트 BPE가 아닌 토크나이저(▁ 등 매핑 밖 글자)는 디코드 글자만 본다.
+            raw = bytes(byte_of[c] for c in piece) if piece and all(c in byte_of for c in piece) else b""
+            if _KANA_RE.search(text) or _KANA_PREFIX_RE.search(raw):
+                cached.append(i)
+        tok._apia_kana_ids = cached
+    return cached
+
+
+class BanTokenIds:
+    """generate()용 logits processor — 주어진 토큰 id의 logit을 -inf로."""
+
+    def __init__(self, ids: List[int]):
+        self.ids = ids
+        self._index = None
+
+    def __call__(self, input_ids, scores):
+        if not self.ids:
+            return scores
+        if self._index is None or self._index.device != scores.device:
+            self._index = scores.new_tensor(self.ids).long()
+        return scores.index_fill(1, self._index, float("-inf"))
+
+
+def parse_openai_sse(lines, usage_out: dict):
+    """OpenAI 호환 SSE 줄들 → 텍스트 조각. 마지막 청크의 usage는 usage_out에 담는다."""
+    for raw in lines:
+        line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data)
+        except ValueError:
+            continue
+        if chunk.get("usage"):
+            usage_out.update(chunk["usage"])
+        for choice in chunk.get("choices") or []:
+            piece = (choice.get("delta") or {}).get("content")
+            if piece:
+                yield piece
 
 # claude_code 모드는 CLI 프로세스를 하나씩만 띄운다. 채팅·디렉터·관전이 각자
 # 타이머로 돌기 때문에 직렬화가 없으면 느린 호출 하나가 도는 사이 세 개가 겹쳐
@@ -81,11 +156,17 @@ class ClaudeService:
         self.default_mode = AI_MODE
         self.mode = AI_MODE
         self.valid_modes = {
-            "auto", "local", "hf_api", "claude", "groq", "claude_code", "ollama_vlm"
+            "auto", "local", "hf_api", "claude", "groq", "claude_code", "ollama_vlm",
+            "deepseek",
         }
         self.auto_mode_priority = [
             mode for mode in AUTO_MODE_PRIORITY if mode in self.valid_modes and mode != "auto"
         ] or ["groq", "claude", "hf_api", "local"]
+        # 교사(DeepSeek) 키가 있으면 채팅 auto의 1순위(발주서 16). 키가 없으면
+        # prereqs에서 걸러져 기존 순서 그대로다.
+        self.auto_mode_priority = ["deepseek"] + [
+            mode for mode in self.auto_mode_priority if mode != "deepseek"
+        ]
         self._initialized_modes = set()
 
         # WarmupError equivalent — provider init failure surfaced to the
@@ -135,6 +216,8 @@ class ClaudeService:
     def _mode_has_prereqs(self, mode: str) -> bool:
         if mode == "local":
             return self._module_available("torch") and self._module_available("transformers")
+        if mode == "deepseek":
+            return teacher_service.has_key()
         if mode == "hf_api":
             return self._module_available("huggingface_hub") and bool(HF_TOKEN)
         if mode == "claude":
@@ -155,11 +238,15 @@ class ClaudeService:
     def _resolve_claude_code_bin() -> Optional[str]:
         return CLAUDE_CODE_BIN or shutil.which("claude")
 
-    def _get_auto_candidates(self) -> List[str]:
-        return [mode for mode in self.auto_mode_priority if self._mode_has_prereqs(mode)]
+    def _get_auto_candidates(self, chat: bool = True) -> List[str]:
+        # deepseek은 **채팅 전용**이다 — 요약·디렉터·분류·비전의 auto 후보에서 뺀다.
+        return [
+            mode for mode in self.auto_mode_priority
+            if (chat or mode != "deepseek") and self._mode_has_prereqs(mode)
+        ]
 
-    def _select_auto_mode(self) -> str:
-        candidates = self._get_auto_candidates()
+    def _select_auto_mode(self, chat: bool = True) -> str:
+        candidates = self._get_auto_candidates(chat)
         if candidates:
             return candidates[0]
         return "fallback"
@@ -209,6 +296,9 @@ class ClaudeService:
             self._init_groq()
         elif mode == "claude_code":
             self._init_claude_code()
+        elif mode == "deepseek":
+            # 붙잡을 클라이언트가 없다 — 호출마다 urllib로 친다(teacher_service와 같은 방식).
+            print("[AI] deepseek ready (chat only)")
         elif mode == "ollama_vlm":
             # 붙잡을 클라이언트도 로드할 모델도 없다 — 호출마다 httpx로 로컬
             # 서버를 친다. 여기서 프로브로 실패시키면 안 된다: 명시 선택 모드의
@@ -224,7 +314,7 @@ class ClaudeService:
 
         return False
 
-    async def ensure_mode(self, requested_mode: Optional[str]) -> str:
+    async def ensure_mode(self, requested_mode: Optional[str], chat: bool = True) -> str:
         """Public 진입점. `chat()`과 `routers.warmup` 모두 이걸 통해 들어온다.
 
         `_ensure_mode`는 동기이고 안에서 `_initialize_mode` → `_init_local`이
@@ -235,7 +325,7 @@ class ClaudeService:
         fast-path를 만들어 to_thread 비용도 거의 없다.
         """
         async with self._init_lock:
-            return await asyncio.to_thread(self._ensure_mode, requested_mode)
+            return await asyncio.to_thread(self._ensure_mode, requested_mode, chat)
 
     async def maybe_unload_idle_local(self) -> bool:
         """`GET /warmup`가 부르는 유휴 해제 훅. local만 계속 쓰는 사용자는
@@ -336,15 +426,15 @@ class ClaudeService:
         if self._last_init_error and self._last_init_error.get("mode") == mode:
             self._last_init_error = None
 
-    def _ensure_mode(self, requested_mode: Optional[str]) -> str:
+    def _ensure_mode(self, requested_mode: Optional[str], chat: bool = True) -> str:
         normalized_mode = self._normalize_mode(requested_mode)
         requested_explicit_mode = normalized_mode if normalized_mode != "auto" else None
 
-        target_mode = (
-            self._select_auto_mode()
-            if normalized_mode == "auto"
-            else normalized_mode
-        )
+        # 채팅 전용 deepseek이 요약·디렉터 등으로 명시돼 와도 auto(비채팅)로 돌린다.
+        if normalized_mode == "auto" or (normalized_mode == "deepseek" and not chat):
+            target_mode = self._select_auto_mode(chat)
+        else:
+            target_mode = normalized_mode
 
         # 지금 local로 갈 게 아니면 유휴 local 모델을 놓아줄 기회로 쓴다
         # (ensure_mode가 이미 _init_lock을 잡고 들어왔다).
@@ -362,7 +452,7 @@ class ClaudeService:
         if self._initialize_mode(target_mode):
             return self.mode
 
-        fallback_mode = self._select_auto_mode()
+        fallback_mode = self._select_auto_mode(chat)
         if (
             requested_explicit_mode is not None
             and fallback_mode not in ("fallback", target_mode)
@@ -770,6 +860,14 @@ class ClaudeService:
             reply = await self._chat_groq(message, history, memory_turns, blocks)
         elif active_mode == "claude_code":
             reply = await self._chat_claude_code(message, history, memory_turns, blocks)
+        elif active_mode == "deepseek":
+            # ponytail: 비스트리밍 호출자(선톡 등)는 스트림을 모아서 받는다 — 폴백
+            # 규칙이 chat_stream 한 곳에만 있게. 폴백 메타는 스트림 경로만 싣는다.
+            reply = "".join([
+                piece async for piece in self.chat_stream(
+                    message, history, ai_mode, memory_turns, context_blocks=blocks
+                )
+            ])
         else:
             reply = self._build_unavailable_reply(requested_mode)
 
@@ -789,15 +887,16 @@ class ClaudeService:
         memory_turns: Optional[int] = None,
         memory_context: Optional[str] = None,
         context_blocks: Optional[dict] = None,
+        meta: Optional[dict] = None,
     ) -> AsyncIterator[str]:
         """Yield reply text deltas (raw — the `[EMOTION:...]` marker is left in
         the stream; the caller strips it via `parse_emotion` on the full text).
 
-        provider-native token streaming for `claude`/`groq`. `hf_api` and
-        `local` have no incremental token stream wired here, so they fall back
-        to yielding the whole reply as a single final chunk (ponytail: the
-        StreamingResponse contract still holds — one delta then the final
-        frame — the user just doesn't see mid-generation typing for those two).
+        provider-native token streaming for `claude`/`groq`/`deepseek`/`local`.
+        `hf_api`·`claude_code` yield the whole reply as a single final chunk.
+
+        `meta`(호출자가 넘긴 dict)에는 deepseek이 로컬로 폴백했을 때
+        `fallback='local'`과 `fallback_reason`('budget'|'error')을 채운다.
         """
         requested_mode = self._normalize_mode(ai_mode)
         active_mode = await self.ensure_mode(ai_mode)
@@ -813,8 +912,33 @@ class ClaudeService:
             # ponytail: no token stream — one-shot the full reply as a single chunk.
             yield await self._chat_hf_api(message, history, memory_turns, blocks)
         elif active_mode == "local":
-            # ponytail: local generate() is blocking, no token stream — one-shot.
-            yield await self._chat_local(message, history, memory_turns, blocks)
+            async for piece in self._chat_local_stream(message, history, memory_turns, blocks):
+                yield piece
+        elif active_mode == "deepseek":
+            yielded = False
+            try:
+                async for piece in self._chat_deepseek_stream(message, history, memory_turns, blocks):
+                    yielded = True
+                    yield piece
+            except (teacher_service.TeacherUnavailable, teacher_service.TeacherFailed) as error:
+                # 메시지는 이 모듈·teacher_service가 조립한 것뿐이라 키가 섞이지 않는다.
+                print(f"[AI] deepseek chat unavailable: {error}")
+                if yielded:
+                    # 중간에 끊긴 답은 받은 데까지만 — 로컬 답을 이어 붙이지 않는다.
+                    # 대신 잘렸다는 표시는 남긴다(정상 답인 척 안 한다).
+                    if meta is not None:
+                        meta["fallback"] = "partial"
+                        meta["fallback_reason"] = "error"
+                    return
+                # 상한·키 없음·네트워크 → 로컬로만 폴백한다(다른 클라우드로 새지 않는다).
+                if meta is not None:
+                    meta["fallback"] = "local"
+                    meta["fallback_reason"] = "budget" if "budget" in str(error) else "error"
+                if await self.ensure_mode("local") != "local":
+                    yield self._build_unavailable_reply(requested_mode)
+                    return
+                async for piece in self._chat_local_stream(message, history, memory_turns, blocks):
+                    yield piece
         elif active_mode == "claude_code":
             # ponytail: CLI는 프로세스가 끝나야 JSON이 나온다 — one-shot.
             yield await self._chat_claude_code(message, history, memory_turns, blocks)
@@ -822,35 +946,116 @@ class ClaudeService:
             yield self._build_unavailable_reply(requested_mode)
 
     async def _stream_sync_iter(
-        self, make_iter: Callable[[], Any], extract: Callable[[Any], str]
+        self, make_iter: Callable[[], Any], extract: Callable[[Any], str],
+        cancel: Optional[threading.Event] = None,
     ) -> AsyncIterator[str]:
         """Bridge a *blocking* provider SDK stream (sync iterator) to an async
         generator without stalling the event loop. Iteration runs on a worker
-        thread; extracted text pieces flow back through an asyncio.Queue."""
+        thread; extracted text pieces flow back through an asyncio.Queue.
+
+        `cancel`을 주면 이 제너레이터가 닫힐 때(클라이언트 끊김) 켜진다 — 워커는
+        다음 이벤트에서 멈추고 소스 제너레이터를 close()해 그쪽 finally(응답 닫기·
+        장부 기록)가 돌게 한다. 블로킹 read 중이면 그 read의 타임아웃까지는 기다린다."""
         loop = asyncio.get_event_loop()
         queue: "asyncio.Queue" = asyncio.Queue()
         sentinel = object()
 
         def _worker() -> None:
+            source = None
             try:
-                for event in make_iter():
+                source = make_iter()
+                for event in source:
+                    if cancel is not None and cancel.is_set():
+                        break
                     piece = extract(event)
                     if piece:
                         loop.call_soon_threadsafe(queue.put_nowait, piece)
             except Exception as error:  # noqa: BLE001
                 loop.call_soon_threadsafe(queue.put_nowait, error)
             finally:
+                if cancel is not None and cancel.is_set() and hasattr(source, "close"):
+                    try:
+                        source.close()
+                    except Exception:  # noqa: BLE001
+                        pass
                 loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
         worker = loop.run_in_executor(None, _worker)
-        while True:
-            item = await queue.get()
-            if item is sentinel:
-                break
-            if isinstance(item, Exception):
-                raise item
-            yield item
-        await worker
+        try:
+            while True:
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+            await worker
+        finally:
+            if cancel is not None:
+                cancel.set()
+
+    async def _chat_deepseek_stream(
+        self, message, history, memory_turns, context_blocks
+    ) -> AsyncIterator[str]:
+        """DeepSeek(OpenAI 호환) 토큰 스트림. 교사와 같은 장부·상한을 쓴다.
+
+        판정에서 막히면 TeacherUnavailable, 호출이 실패하면 TeacherFailed — 둘 다
+        chat_stream이 받아 로컬로 폴백한다. 예외 메시지에는 상태코드/타입명만
+        싣는다(teacher_service와 같은 이유: 키가 새는 경로를 원천 차단).
+        """
+        # 교재 변환이 장부 락을 쥐고 있을 수 있다 — 이벤트 루프를 막지 않게 스레드로.
+        key, base, model = await asyncio.to_thread(teacher_service.chat_guard)
+        try:
+            async for piece in self._deepseek_events(key, base, model, message, history, memory_turns, context_blocks):
+                yield piece
+        finally:
+            # 성공·실패·클라이언트 끊김 모두 — 선점액은 반드시 되돌린다.
+            teacher_service.chat_release()
+
+    async def _deepseek_events(
+        self, key, base, model, message, history, memory_turns, context_blocks
+    ) -> AsyncIterator[str]:
+        messages = [{"role": "system", "content": self._build_system_prompt(context_blocks)}]
+        messages.extend(self._build_messages(history, memory_turns))
+        messages.append({"role": "user", "content": message})
+        body = json.dumps({
+            "model": model,
+            "messages": messages,
+            "max_tokens": MAX_NEW_TOKENS,
+            "temperature": TEMPERATURE,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }, ensure_ascii=False).encode("utf-8")
+        in_chars = sum(len(str(m["content"])) for m in messages)
+
+        def _events():
+            request = urllib.request.Request(
+                f"{base}/chat/completions",
+                data=body,
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
+            )
+            try:
+                response = urllib.request.urlopen(request, timeout=60)
+            except urllib.error.HTTPError as error:
+                raise teacher_service.TeacherFailed(f"HTTP {error.code}") from None
+            except Exception as error:  # noqa: BLE001
+                raise teacher_service.TeacherFailed(type(error).__name__) from None
+            usage: dict = {}
+            out_chars = 0
+            try:
+                with response:
+                    for piece in parse_openai_sse(response, usage):
+                        out_chars += len(piece)
+                        yield piece
+            except Exception as error:  # noqa: BLE001
+                raise teacher_service.TeacherFailed(type(error).__name__) from None
+            finally:
+                # 응답이 시작됐으면 과금이다 — 끊겨도 받은 만큼(또는 추정치) 적는다.
+                teacher_service.chat_record(usage, in_chars, out_chars)
+
+        # 클라이언트가 끊기면 cancel이 켜지고, 워커는 다음 조각에서 멈춰 응답을 닫는다.
+        async for piece in self._stream_sync_iter(_events, lambda piece: piece, cancel=threading.Event()):
+            yield piece
 
     async def _chat_claude_stream(
         self, message, history, memory_turns, context_blocks
@@ -917,7 +1122,7 @@ class ClaudeService:
         provider가 없으면 `RuntimeError`를 raise한다 — 호출자(MemoryService)가
         이걸 잡아서 last_error에 기록하고 요약 자체를 비활성화 처리.
         """
-        active_mode = await self.ensure_mode(ai_mode)
+        active_mode = await self.ensure_mode(ai_mode, chat=False)
         if active_mode == "fallback":
             raise RuntimeError(
                 "no provider available for summarization (check APIA_AI_MODE / API keys)"
@@ -974,7 +1179,7 @@ class ClaudeService:
     async def decide_directive(
         self, context: Optional[dict] = None, ai_mode: Optional[str] = None
     ) -> str:
-        active_mode = await self.ensure_mode(ai_mode)
+        active_mode = await self.ensure_mode(ai_mode, chat=False)
         if active_mode == "fallback":
             raise RuntimeError(
                 "no provider available for director (check APIA_AI_MODE / API keys)"
@@ -1040,7 +1245,7 @@ class ClaudeService:
             + "\nJSON:"
         )
         if ai_mode:
-            active_mode = await self.ensure_mode(ai_mode)
+            active_mode = await self.ensure_mode(ai_mode, chat=False)
             if active_mode == "claude":
                 return await self._summarize_claude(self.CLASSIFY_SYSTEM, payload)
             if active_mode == "groq":
@@ -1091,7 +1296,7 @@ class ClaudeService:
         if self._local_active > 0 or self._local_gen_lock.locked():
             raise RuntimeError("local path busy")
 
-        system_prompt = self._build_system_prompt(None)
+        system_prompt = self._build_system_prompt(None) + _LOCAL_PROMPT_TAIL
 
         def _infer():
             if self._shadow_delta != delta_path:
@@ -1107,15 +1312,10 @@ class ClaudeService:
                 self._model.load_adapter(delta_path, adapter_name=self.SHADOW_ADAPTER)
                 self._model.disable_adapters()
                 self._shadow_delta = delta_path
-            messages = [
+            input_ids = self._local_input_ids([
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message},
-            ]
-            text = self._tok.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            inputs = self._tok(text, return_tensors="pt").to("cuda")
-            input_ids = inputs["input_ids"]
+            ])
             self._model.set_adapter(self.SHADOW_ADAPTER)
             self._model.enable_adapters()
             try:
@@ -1128,6 +1328,7 @@ class ClaudeService:
                         do_sample=True,
                         pad_token_id=self._tok.eos_token_id,
                         eos_token_id=self._tok.eos_token_id,
+                        logits_processor=self._local_logits_processor(),
                     )
             finally:
                 # 여기서 실패하면 다음 사용자 답이 델타를 먹는다 — 그럴 바엔
@@ -1213,7 +1414,7 @@ class ClaudeService:
         검증·clamp·침묵 게이트는 전부 클라이언트(src/spectateDriver.js)가 한다 —
         director와 같은 분담이라 백엔드는 raw만 돌려준다.
         """
-        active_mode = await self.ensure_mode(ai_mode)
+        active_mode = await self.ensure_mode(ai_mode, chat=False)
         model = self.vision_model_for(active_mode)
         if not model:
             return None
@@ -1468,6 +1669,87 @@ class ClaudeService:
             self._local_active -= 1
             self._local_last_used = time.monotonic()
 
+    def _local_chat_messages(self, message, history, memory_turns, context_blocks) -> List[dict]:
+        system_prompt = self._build_system_prompt(context_blocks) + _LOCAL_PROMPT_TAIL
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(self._build_messages(history, memory_turns))
+        messages.append({"role": "user", "content": message})
+        return messages
+
+    def _local_input_ids(self, messages: List[dict]):
+        text = self._tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        return self._tok(text, return_tensors="pt").to("cuda")["input_ids"]
+
+    def _local_logits_processor(self):
+        from transformers import LogitsProcessorList
+
+        return LogitsProcessorList([BanTokenIds(kana_token_ids(self._tok))])
+
+    async def _chat_local_stream(
+        self, message, history, memory_turns, context_blocks
+    ) -> AsyncIterator[str]:
+        """로컬 토큰 스트리밍. generate는 스레드에서, 조각은 TextIteratorStreamer로.
+
+        클라이언트가 끊기면(이 제너레이터가 닫히면) stop 이벤트로 generate를 멈추고
+        스레드가 끝날 때까지 기다린다 — 그래야 _local_gen_lock이 GPU가 실제로
+        비었을 때 풀린다."""
+        from transformers import StoppingCriteriaList, TextIteratorStreamer
+
+        messages = self._local_chat_messages(message, history, memory_turns, context_blocks)
+        stop = threading.Event()
+        errors: List[BaseException] = []
+
+        self._local_active += 1
+        try:
+            async with self._local_gen_lock:
+                input_ids = self._local_input_ids(messages)
+                streamer = TextIteratorStreamer(self._tok, skip_prompt=True, skip_special_tokens=True)
+                torch = self._torch
+
+                def _stopped(ids, _scores, **_kwargs):
+                    return torch.full((ids.shape[0],), stop.is_set(), dtype=torch.bool, device=ids.device)
+
+                def _generate():
+                    try:
+                        with torch.no_grad():
+                            self._model.generate(
+                                input_ids,
+                                max_new_tokens=MAX_NEW_TOKENS,
+                                temperature=TEMPERATURE,
+                                top_p=TOP_P,
+                                do_sample=True,
+                                pad_token_id=self._tok.eos_token_id,
+                                eos_token_id=self._tok.eos_token_id,
+                                logits_processor=self._local_logits_processor(),
+                                stopping_criteria=StoppingCriteriaList([_stopped]),
+                                streamer=streamer,
+                            )
+                    except Exception as error:  # noqa: BLE001
+                        errors.append(error)
+                        streamer.end()  # 소비 쪽이 영원히 기다리지 않게
+
+                worker = threading.Thread(target=_generate, daemon=True)
+                worker.start()
+                yielded = False
+                try:
+                    async for piece in self._stream_sync_iter(lambda: streamer, lambda piece: piece):
+                        yielded = True
+                        yield piece
+                finally:
+                    stop.set()
+                    # stopping_criteria가 다음 토큰에서 generate를 멈추므로 보통 즉시 끝난다.
+                    # 상한은 안전망 — 넘기면 GPU가 아직 바쁠 수 있음을 로그로 남긴다.
+                    await asyncio.to_thread(worker.join, 120)
+                    if worker.is_alive():
+                        print("[AI] local generate did not stop within 120s after client disconnect")
+                if errors:
+                    print(f"[AI] local inference error: {errors[0]}")
+                    if not yielded:
+                        yield "I hit a local inference error. [EMOTION:sad]"
+        finally:
+            self._local_active -= 1
+            self._local_last_used = time.monotonic()
+
     async def _chat_local(
         self,
         message: str,
@@ -1477,20 +1759,10 @@ class ClaudeService:
     ) -> str:
         import asyncio
 
-        system_prompt = self._build_system_prompt(context_blocks)
+        messages = self._local_chat_messages(message, history, memory_turns, context_blocks)
 
         def _infer():
-            messages = [{"role": "system", "content": system_prompt}]
-            messages.extend(self._build_messages(history, memory_turns))
-            messages.append({"role": "user", "content": message})
-
-            text = self._tok.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-            inputs = self._tok(text, return_tensors="pt").to("cuda")
-            input_ids = inputs["input_ids"]
+            input_ids = self._local_input_ids(messages)
 
             with self._torch.no_grad():
                 output = self._model.generate(
@@ -1501,6 +1773,7 @@ class ClaudeService:
                     do_sample=True,
                     pad_token_id=self._tok.eos_token_id,
                     eos_token_id=self._tok.eos_token_id,
+                    logits_processor=self._local_logits_processor(),
                 )
 
             generated = output[0][input_ids.shape[-1]:]

@@ -307,7 +307,8 @@ def _sse(obj: dict) -> str:
 # Streaming variant. SSE frames (one JSON object per `data:` line):
 #   {"type":"delta","text":"..."}                     — 0..N token deltas
 #   {"type":"final","reply":str,"emotion":str,        — exactly 1, terminal
-#                   "citations":[ChatCitation,...]}
+#                   "citations":[ChatCitation,...],
+#                   "fallback"?:"local", "fallback_reason"?:"budget"|"error"}
 #   {"type":"error","message":str}                    — on unexpected failure
 # The final frame carries the authoritative reply (emotion marker stripped) +
 # all ChatResponse metadata; the client replaces the live bubble with it.
@@ -322,6 +323,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     async def event_gen():
         buf = ""
         emitted = 0
+        meta: dict = {}  # deepseek→로컬 폴백이면 fallback/fallback_reason이 채워진다
         try:
             async for delta in claude.chat_stream(
                 req.message,
@@ -329,6 +331,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 ai_mode=req.ai_mode,
                 memory_turns=req.memory_turns,
                 context_blocks=context_blocks,
+                meta=meta,
             ):
                 if not delta:
                     continue
@@ -350,6 +353,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 "reply": reply,
                 "emotion": emotion,
                 "citations": [c.model_dump() for c in citations],
+                **meta,
             })
         except Exception as error:  # noqa: BLE001
             logger.exception("[chat/stream] failed")
