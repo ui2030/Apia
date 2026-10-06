@@ -11,3 +11,6 @@ huggingface_hub>=0.21.0
 anthropic>=0.18.0
 groq>=0.4.0
 pyinstaller>=6.12,<7
+
+# openai-whisper는 의도적으로 제외(numba 등 패키징 난이도·용량). 패키지 빌드에선
+# /stt/status가 available=false를 돌려주고 설정 창이 마이크 토글을 비활성화한다.

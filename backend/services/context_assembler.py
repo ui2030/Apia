@@ -34,6 +34,9 @@ SECTION_COURSEWARE = "교재"
 # 휘발성 높은 섹션이 맨 뒤에 있어야 앞쪽 프리픽스가 가장 오래 살아남는다.
 # 교재와 같이 점수 cap 바깥(이미 1~3건으로 잘려서 온다).
 SECTION_SPECTATE = "관전"
+# 채팅 배려(발주서 19) — 사용자가 꺼리는 화제 라벨. 관전보다도 뒤(캐시 프리픽스 규약:
+# 새 섹션은 맨 뒤에 붙여 기존 섹션 조합의 프롬프트를 바꾸지 않는다).
+SECTION_CARE = "배려"
 
 # Conservative overhead estimate for section labels + separator the prompt
 # builder adds *around* each section: "## <hint>\n…\n\n" — the hint is the

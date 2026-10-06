@@ -63,7 +63,7 @@ const {
   getPackagedBackendExecutableCandidates: getPackagedBackendExecutableCandidatesRaw
 } = require('./services/backendDiscovery')
 const { BackendLifecycle } = require('./services/backendLifecycle')
-const { chatTimeoutFor, createFallbackNotice } = require('./services/chatPolicy')
+const { chatTimeoutFor, createFallbackNotice, attachCareTopics, careTopicLabels } = require('./services/chatPolicy')
 const { SettingsRepository } = require('./services/settingsAggregate')
 const { saveWorldDocument } = require('./services/worldStore')
 const { BackendEnvRepository } = require('./services/backendEnvRepository')
@@ -360,20 +360,25 @@ ipcMain.on('ledger:input-start', () => {
 })
 
 // 열람 UI(설정 창) 표면. 읽기·수동 라벨·삭제·초기화뿐 — 캐릭터 행동과 연결 없음.
+// 관제판용 — 원장 스냅샷 + 지금 채팅이 배려 중인 화제 라벨(요청에 실리는 그대로).
+function ledgerView() {
+  const s = ledger.getState()
+  return { ...s, careTopics: careTopicLabels(s) }
+}
 ipcMain.handle('ledger:getState', () => {
-  try { return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+  try { return ledgerView() } catch (error) { return { error: error?.message || String(error) } }
 })
 ipcMain.handle('ledger:aggregate', () => {
-  try { ledger.aggregate(); return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+  try { ledger.aggregate(); return ledgerView() } catch (error) { return { error: error?.message || String(error) } }
 })
 ipcMain.handle('ledger:setGold', (e, { topicId, label } = {}) => {
-  try { ledger.setGoldLabel(topicId, label); return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+  try { ledger.setGoldLabel(topicId, label); return ledgerView() } catch (error) { return { error: error?.message || String(error) } }
 })
 ipcMain.handle('ledger:removeTopic', (e, { topicId } = {}) => {
-  try { ledger.removeTopic(topicId); return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+  try { ledger.removeTopic(topicId); return ledgerView() } catch (error) { return { error: error?.message || String(error) } }
 })
 ipcMain.handle('ledger:reset', () => {
-  try { ledger.reset(); return ledger.getState() } catch (error) { return { error: error?.message || String(error) } }
+  try { ledger.reset(); return ledgerView() } catch (error) { return { error: error?.message || String(error) } }
 })
 
 // 일일 집계 잡 — 자정(날짜가 바뀌는 첫 정시 점검) 또는 앱 종료 시 1회.
@@ -605,7 +610,16 @@ const MIC_AMBIENT_ENABLED = process.env.APIA_MIC_AMBIENT === '1'
 let micConsentDate = null
 let micTranscriptCount = 0 // status용(세션 카운트). 원문·원음은 세지도 남기지도 않는다.
 
-ipcMain.handle('mic:getState', () => ({
+// 음성 인식 모듈 설치 여부 — 백엔드를 깨우지 않고 떠 있을 때만 묻는다(null = 모름).
+async function sttAvailability() {
+  try {
+    const r = await requestBackendJson('/stt/status', { method: 'GET', timeout: 2000 })
+    return r && typeof r.available === 'boolean' ? r.available : null
+  } catch { return null }
+}
+
+ipcMain.handle('mic:getState', async () => ({
+  sttAvailable: await sttAvailability(),
   consent: micThirdPartyConsent,
   consentDate: micConsentDate,
   transcripts: micTranscriptCount,
@@ -913,10 +927,11 @@ const servingGate = createServingGate({
 async function prepareExchange(message, baseBody, settings) {
   // 관전 중이면 보고 있는 창 + 최근 관찰을 함께 싣는다. 관전이 꺼져 있으면
   // 키 자체가 안 붙는다(= 예전과 같은 요청).
-  const body = attachSpectateContext(
+  // 배려 화제(발주서 19)는 맨 마지막 — 원장이 '조심'으로 본 화제 라벨만.
+  const body = attachCareTopics(attachSpectateContext(
     attachReferenceCards(baseBody, courseware, settings.coursewareReferenceEnabled !== false),
     { active: spectateIsActive(), window: spectate.sourceName, notes: spectate.notes }
-  )
+  ), safeLedgerState())
   const hasReferenceCards = Array.isArray(body.reference_cards) && body.reference_cards.length > 0
   const type = classifyUtterance(message, { hasReferenceCards })
   let served = null

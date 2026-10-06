@@ -55,6 +55,10 @@ class ChatRequest(BaseModel):
     # 422로 대화 전체를 떨구면 안 된다(참조 카드와 같은 원칙). 검증은 라우터의
     # _spectate_block이 하고, 알아볼 수 없는 값은 조용히 버린다.
     spectate: Any = None
+    # 발주서 19 — 사용자가 깊이 얘기하길 꺼리는 화제 라벨(눈치 원장 TOPICS 라벨).
+    # 없으면 프롬프트는 기존과 바이트 동일. spectate와 같은 이유로 느슨한 타입이고,
+    # 화이트리스트·상한 검증은 라우터의 _care_block이 한다.
+    care_topics: Any = None
 
 
 class DirectorRequest(BaseModel):

@@ -39,6 +39,14 @@ async def prime() -> None:
     await get_whisper()
 
 
+@router.get("/status")
+async def status():
+    """음성 인식 모듈 설치 여부 — 모델을 올리지 않고 import 가능성만 본다.
+    설정 창이 이 값으로 마이크 토글을 정직하게 비활성화한다(패키지 빌드는 whisper 미포함)."""
+    import importlib.util
+    return {"available": importlib.util.find_spec("whisper") is not None}
+
+
 @router.post("/transcribe", response_model=STTResponse)
 async def transcribe(file: UploadFile = File(...)):
     audio_bytes = await file.read()

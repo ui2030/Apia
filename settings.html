@@ -955,10 +955,10 @@
     <div class="section-title">성장 · 눈치 원장 (계측 전용)</div>
     <div class="helper-text" style="margin-bottom:8px;">
       대화 화제별로 <b>반응이 편했는지</b>를 수치로만 적어 두는 관찰 기록입니다.
-      <b>대화 원문은 저장하지 않고</b> 화제 이름과 숫자만 남아요. 평소에는 기록·열람만 하며
-      캐릭터의 말투나 답변 내용에 <b>반영되지 않습니다</b>. 예외는 위의 <b>먼저 말 걸기</b>
-      하나뿐 — 그 기능을 켜 두면 <b>편한 화제</b> 중에서 말 걸 주제를 고를 때만 참고하고,
-      민감한 화제는 절대 고르지 않습니다.
+      <b>대화 원문은 저장하지 않고</b> 화제 이름과 숫자만 남아요.
+      답변 내용에 쓰이는 곳은 두 군데뿐입니다. <b>먼저 말 걸기</b>를 켜 두면 <b>편한 화제</b> 중에서
+      말 걸 주제를 고를 때 참고하고(민감한 화제는 절대 고르지 않음), <b>채팅</b>에서는 '조심'·'민감'
+      화제를 먼저 꺼내지 않고 내가 꺼내면 짧게만 받도록 화제 이름만 전달합니다.
       분류는 내 PC의 로컬 모델로만 하고, 원시 기록은 90일 뒤 자동으로 지워집니다.
     </div>
 
@@ -976,6 +976,11 @@
     <div class="row">
       <div class="row-label">이벤트</div>
       <span class="row-sub" id="ledger-events" style="font-size:11px;">—</span>
+    </div>
+
+    <div class="row">
+      <div class="row-label">채팅 배려</div>
+      <span class="row-sub" id="ledger-care" style="font-size:11px;">—</span>
     </div>
 
     <div id="ledger-table" style="margin-top:6px;"></div>
@@ -1207,6 +1212,11 @@ function renderLedger(state) {
       `강등 ${e.demote || 0} · 승급 ${e.promote || 0} · 오동결 ${e.falseFreeze || 0} · 오해빙 ${e.falseThaw || 0}`
   }
   if (pathEl) pathEl.textContent = state.path || ''
+  const careEl = document.getElementById('ledger-care')
+  if (careEl) {
+    const care = state.careTopics || []
+    careEl.textContent = `채팅 배려 중인 화제 ${care.length}개` + (care.length ? ' — ' + care.join(', ') : '')
+  }
 
   tableEl.innerHTML = ''
   if (!state.topics || state.topics.length === 0) {
@@ -1284,6 +1294,25 @@ function bindLedgerPanel() {
 
 // ── 선톡 + 마이크 패널 ──────────────────────────────────────────────────────
 function renderMicConsent(st) {
+  // 음성 인식 모듈이 없으면(패키지 빌드·미설치) 마이크 토글을 켤 수 있게 두는 것도
+  // 거짓말 UI다 — 비활성 + 이유를 적는다. null(백엔드 꺼짐)은 건드리지 않는다.
+  const toggle = document.getElementById('mic-enabled-toggle')
+  if (toggle && st && st.sttAvailable === false) {
+    toggle.disabled = true
+    toggle.title = '음성 인식 모듈(whisper)이 설치되지 않았어요'
+    let note = document.getElementById('mic-stt-note')
+    if (!note) {
+      note = document.createElement('div')
+      note.id = 'mic-stt-note'
+      note.className = 'row-sub'
+      note.style.cssText = 'font-size:11px;color:#d9a441;'
+      toggle.closest('.row')?.appendChild(note)
+    }
+    note.textContent = '음성 인식 모듈이 이 설치본에 없어 마이크를 쓸 수 없어요'
+  } else if (toggle && st && st.sttAvailable === true) {
+    toggle.disabled = false
+    document.getElementById('mic-stt-note')?.remove()
+  }
   // 격리 중이면 동의 행 자체를 보여주지 않는다 — 누를 수 있는데 아무 효과가
   // 없는 버튼은 거짓말 UI다.
   const row = document.getElementById('mic-consent-row')

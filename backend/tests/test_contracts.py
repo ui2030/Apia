@@ -416,3 +416,13 @@ def test_files_reindex_rejects_unregistered_folder_with_400(client):
     )
     assert response.status_code == 400
     assert "allowlist" in response.json()["detail"].lower()
+
+
+def test_stt_status_reports_whisper_availability(client, monkeypatch):
+    """설정 창이 마이크 토글을 정직하게 비활성화하는 근거 — 모델 로드 없이 import 가능성만."""
+    import importlib.util
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: None if name == "whisper" else real(name, *a, **k))
+    assert client.get("/stt/status").json() == {"available": False}
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: object() if name == "whisper" else real(name, *a, **k))
+    assert client.get("/stt/status").json() == {"available": True}

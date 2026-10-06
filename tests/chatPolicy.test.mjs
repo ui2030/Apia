@@ -41,3 +41,45 @@ describe('partial 안내', () => {
     expect(notice({ fallback: 'local', fallback_reason: 'error' })).toBe(FALLBACK_NOTICES.error)
   })
 })
+
+// 발주서 19 — 원장이 '조심'으로 본 화제 라벨만 채팅 body에 싣는다(원장은 읽기만).
+describe('care_topics', () => {
+  const { careTopicLabels, attachCareTopics, MAX_CARE_TOPICS } = require('../electron/services/chatPolicy.js')
+  const row = (id, state, goldLabel = null) => ({ id, label: `L-${id}`, state, goldLabel })
+  const BASE = { message: '안녕', history: [] }
+
+  it('frozen·sensitive 포함, neutral/joke_ok 오버라이드·pending·thawed 제외', () => {
+    const state = { topics: [
+      row('a', 'frozen'),
+      row('b', 'pending', 'sensitive'),  // 수동 민감은 상태와 무관하게 포함
+      row('c', 'frozen', 'neutral'),
+      row('d', 'frozen', 'joke_ok'),
+      row('e', 'pending'),
+      row('f', 'thawed'),
+      row('g', 'neutral')
+    ] }
+    expect(careTopicLabels(state)).toEqual(['L-a', 'L-b'])
+    expect(attachCareTopics(BASE, state)).toEqual({ ...BASE, care_topics: ['L-a', 'L-b'] })
+  })
+
+  it('없으면 키 자체를 안 붙인다(같은 객체 그대로)', () => {
+    expect(attachCareTopics(BASE, { topics: [row('e', 'pending')] })).toBe(BASE)
+    expect(attachCareTopics(BASE, { topics: [] })).toBe(BASE)
+    expect(attachCareTopics(BASE, null)).toBe(BASE)
+  })
+
+  it('상한 8', () => {
+    const topics = Array.from({ length: 12 }, (_, i) => row(`t${i}`, 'frozen'))
+    expect(careTopicLabels({ topics }).length).toBe(MAX_CARE_TOPICS)
+  })
+
+  it('send-message·streamStart 둘 다 prepareExchange를 거치고, 거기서 배려를 붙인다', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const src = await readFile(new URL('../electron/main.js', import.meta.url), 'utf-8')
+    const handler = (name) => src.slice(src.indexOf(`ipcMain.handle('${name}'`)).split('\nipcMain.handle(')[0]
+    expect(handler('send-message')).toContain('prepareExchange(')
+    expect(handler('chat:streamStart')).toContain('prepareExchange(')
+    const prep = src.slice(src.indexOf('async function prepareExchange')).split('\n}\n')[0]
+    expect(prep).toMatch(/attachCareTopics\([\s\S]*safeLedgerState\(\)\)/)
+  })
+})

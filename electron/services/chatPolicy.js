@@ -34,4 +34,31 @@ function createFallbackNotice(now = () => new Date()) {
   }
 }
 
-module.exports = { chatTimeoutFor, createFallbackNotice, FALLBACK_NOTICES }
+// ── 채팅 배려 (발주서 19) ──────────────────────────────────────────────────
+// 원장이 '조심'으로 본 화제의 **라벨만** 채팅 요청에 싣는다. 선별 규칙은 관전
+// 거부권(ledgerVeto)과 같다 — 수동 라벨 sensitive면 포함, neutral/joke_ok면 제외,
+// 그 외엔 frozen일 때만. 원장은 읽기만 한다. 메시지별 분류 없음(지연 0).
+const { ledgerVeto } = require('./topicLedger')
+const MAX_CARE_TOPICS = 8 // 백엔드도 같은 상한으로 한 번 더 자른다(신뢰 경계)
+
+function careTopicLabels(ledgerState) {
+  return (ledgerState?.topics || [])
+    .filter((t) => t && ledgerVeto(t).veto)
+    .map((t) => t.label)
+    .slice(0, MAX_CARE_TOPICS)
+}
+
+// 배려할 화제가 없으면 body를 그대로 — 키 자체가 없어야 프롬프트가 바이트 동일.
+function attachCareTopics(body, ledgerState) {
+  const care = careTopicLabels(ledgerState)
+  return care.length ? { ...body, care_topics: care } : body
+}
+
+module.exports = {
+  chatTimeoutFor,
+  createFallbackNotice,
+  FALLBACK_NOTICES,
+  careTopicLabels,
+  attachCareTopics,
+  MAX_CARE_TOPICS
+}

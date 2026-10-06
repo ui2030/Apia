@@ -26,6 +26,7 @@ from ai_config import CONTEXT_MAX_CHARS
 from schemas import ChatCitation, ChatRequest, ChatResponse
 from services.claude_service import ClaudeService
 from services.context_assembler import (
+    SECTION_CARE,
     SECTION_COURSEWARE,
     SECTION_FILES,
     SECTION_SPECTATE,
@@ -139,6 +140,31 @@ def _spectate_block(spectate) -> Optional[str]:
     return "\n".join(lines) or None
 
 
+# 배려 화제 화이트리스트 = electron/services/topicLedger.js TOPICS의 라벨(단일 출처는
+# 저쪽, 동기화는 tests/test_care_topics.py가 지킨다). 목록 밖 문자열은 버린다 —
+# 요청 body의 자유 문자열이 시스템 프롬프트에 들어가는 인젝션 통로를 막는다.
+_CARE_TOPIC_LABELS = frozenset((
+    "일상", "가벼운 잡담", "농담·장난", "업무·일", "공부·학습", "진로·이직",
+    "돈·재정", "게임", "취미", "음악", "영화·드라마", "책", "기술·컴퓨터",
+    "뉴스·사회", "여행", "음식", "건강", "마음·스트레스", "수면", "운동", "외모",
+    "가족", "연애", "친구·인간관계", "반려동물", "계획·미래",
+))
+_CARE_MAX_TOPICS = 8
+
+
+def _care_block(care_topics) -> Optional[str]:
+    """배려 화제 라벨 → 섹션 본문. 쓸 게 없으면 None(= 프롬프트 바이트 동일)."""
+    if not isinstance(care_topics, list):
+        return None
+    kept: List[str] = []
+    for label in care_topics:
+        if isinstance(label, str) and label in _CARE_TOPIC_LABELS and label not in kept:
+            kept.append(label)
+            if len(kept) >= _CARE_MAX_TOPICS:
+                break
+    return "\n".join(f"- {label}" for label in kept) or None
+
+
 def _web_results_to_items(results: List[WebResult]) -> List[ContextItem]:
     items: List[ContextItem] = []
     for i, r in enumerate(results, start=1):
@@ -209,6 +235,11 @@ async def _gather_context(req: ChatRequest, request: Request) -> Tuple[Any, Any,
     spectate = _spectate_block(req.spectate)
     if spectate:
         context_blocks[SECTION_SPECTATE] = spectate
+
+    # 배려는 관전보다도 뒤(서빙 전용 — 그림자·교재·교사 경로엔 이 body가 안 간다).
+    care = _care_block(req.care_topics)
+    if care:
+        context_blocks[SECTION_CARE] = care
 
     return memory, web, (context_blocks or None), web_results
 

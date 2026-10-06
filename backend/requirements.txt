@@ -69,3 +69,9 @@ sentence-transformers>=2.7.0,<6
 # ── 개발/테스트 (dist에는 포함 안 됨, requirements-packaging.txt 참고) ──
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+
+# ── 음성 인식(마이크 받아적기) ──
+# whisper_service가 soundfile로 직접 디코드하므로 ffmpeg 실행 파일은 필요 없다.
+# 2026-10-07: 어떤 환경에도 설치돼 있지 않아 마이크 기능이 조용히 죽어 있던 것을 발견해 핀.
+openai-whisper==20250625
+soxr>=0.5,<2          # whisper_service가 마이크 WAV를 16kHz로 리샘플(ffmpeg 대신)
