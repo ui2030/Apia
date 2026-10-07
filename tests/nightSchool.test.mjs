@@ -74,7 +74,7 @@ describe('트리거 — 다섯 조건 각각이 단독으로 학습을 막는다
   it('유휴 15분 미만이면 거절 — "지금 시작" 버튼도 면제받지 않는다', () => {
     const v = evaluateTrigger({ ...OK, idleSec: IDLE_SEC - 1 })
     expect(v.ok).toBe(false)
-    expect(v.reason).toContain('유휴')
+    expect(v.reason).toContain('자리 비움')
   })
 
   it('렌더 일시정지 기준(5분)보다 짧으면 거절', () => {
@@ -85,7 +85,7 @@ describe('트리거 — 다섯 조건 각각이 단독으로 학습을 막는다
   it('VRAM 여유 8GB 미만이면 거절 — 게임 중 침범 금지', () => {
     const v = evaluateTrigger({ ...OK, vramFreeGb: 7.9 })
     expect(v.ok).toBe(false)
-    expect(v.reason).toContain('VRAM')
+    expect(v.reason).toContain('그래픽 메모리')
   })
 
   it('마지막 성공 후 7일이 안 됐으면 거절', () => {
@@ -221,9 +221,9 @@ describe('그림자 집계 — 점수만 남는다', () => {
 
   it('휴면 사유는 같은 값으로 반복 기록하지 않는다', () => {
     const store = createNightSchoolStore({ dir })
-    store.noteShadowDormant('채택 델타 없음')
+    store.noteShadowDormant('학습 결과 없음')
     const first = fs.statSync(store.paths.statusPath).mtimeMs
-    store.noteShadowDormant('채택 델타 없음')
+    store.noteShadowDormant('학습 결과 없음')
     expect(fs.statSync(store.paths.statusPath).mtimeMs).toBe(first)
   })
 })
@@ -253,7 +253,7 @@ describe('유형별 그림자 (A-4) — 추세를 보려고 보존이 표시 창
     expect(t.priorAvg).toBeCloseTo(0.9, 6)
     expect(t.recentAvg).toBeCloseTo(0.5, 6)
     expect(t.recommended).toBe(false)
-    expect(t.reason).toContain('하락')
+    expect(t.reason).toContain('떨어지는')
   })
 
   it('14일을 넘기면 유형 기록도 버린다', () => {

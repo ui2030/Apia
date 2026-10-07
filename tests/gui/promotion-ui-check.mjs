@@ -177,7 +177,7 @@ try {
     && toggles[1].disabled === true                 // reaction — 시도 부족
     && toggles[2].disabled === true                 // personal — 시도 0
     && toggles[3].disabled === true                 // general — 유사도 부족
-    && badges[0] === '승격 추천'
+    && badges[0] === '맡겨도 좋아요'
 
   // ── 단언 3: 승격 OFF — 첫 요청이 /chat, 응답은 API ────────────────────────
   hits.length = 0
@@ -262,7 +262,7 @@ try {
     greetingToggle: document.querySelector('#growth-promotion input[type=checkbox]').checked
   }))
   const panelOk = panelAfter.demotionsVisible
-    && panelAfter.demotions.includes('자동 강등')
+    && panelAfter.demotions.includes('맡기기 자동 해제')
     && /로컬 \d+회 \/ API \d+회/.test(panelAfter.serving)
     && panelAfter.greetingToggle === false
   await settingsWindow.evaluate(() => document.getElementById('growth-promotion')?.scrollIntoView({ block: 'center' }))

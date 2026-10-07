@@ -79,17 +79,17 @@ function evaluateTrigger({
   cardsAtLastSuccess = 0,
   now = Date.now()
 } = {}) {
-  if (!pythonOk) return { ok: false, reason: '학습용 파이썬 경로 없음' }
+  if (!pythonOk) return { ok: false, reason: '학습 도구(파이썬)가 없음' }
   if (!scriptOk) return { ok: false, reason: '학습 스크립트 없음' }
   if (idleSec < IDLE_SEC) {
-    return { ok: false, reason: `유휴 ${Math.floor(idleSec / 60)}분 (${IDLE_SEC / 60}분 필요)` }
+    return { ok: false, reason: `자리 비움 ${Math.floor(idleSec / 60)}분 (${IDLE_SEC / 60}분 필요)` }
   }
   // 렌더 일시정지는 렌더러가 유휴 5분에 스스로 한다. 유휴 조건이 그보다 길어
   // 사실상 함께 충족되지만, 발주서가 따로 세는 조건이라 따로 센다 — 렌더러가
   // 죽어 있거나 창이 없으면 idleSec 자체가 안 올라오므로 여기서 걸린다.
-  if (idleSec < RENDER_AWAY_SEC) return { ok: false, reason: '렌더링 일시정지 전' }
+  if (idleSec < RENDER_AWAY_SEC) return { ok: false, reason: '캐릭터 화면이 아직 쉬는 중이 아님' }
   if (!(vramFreeGb >= VRAM_MIN_GB)) {
-    return { ok: false, reason: `VRAM 여유 ${vramFreeGb.toFixed(1)}GB (${VRAM_MIN_GB}GB 필요)` }
+    return { ok: false, reason: `그래픽 메모리 여유 ${vramFreeGb.toFixed(1)}GB (${VRAM_MIN_GB}GB 필요)` }
   }
   if (lastSuccessAt) {
     const days = (now - lastSuccessAt) / DAY_MS
@@ -99,7 +99,7 @@ function evaluateTrigger({
   }
   const fresh = Math.max(0, totalCards - cardsAtLastSuccess)
   if (fresh < MIN_NEW_CARDS) {
-    return { ok: false, reason: `신규 교재 ${fresh}장 (${MIN_NEW_CARDS}장 필요)` }
+    return { ok: false, reason: `새 학습 노트 ${fresh}장 (${MIN_NEW_CARDS}장 필요)` }
   }
   return { ok: true, reason: '조건 충족', newCards: fresh }
 }
@@ -512,9 +512,9 @@ function createNightSchoolStore({ dir, now = () => Date.now(), fsImpl = fs, log 
    */
   function rewind(version) {
     const s = loadStatus()
-    if (!s.anchors.includes(version)) return { ok: false, error: '보관 목록에 없는 앵커' }
+    if (!s.anchors.includes(version)) return { ok: false, error: '보관 목록에 없는 학습 결과예요' }
     const target = path.join(anchorsDir, version)
-    if (!isUsableDelta(target)) return { ok: false, error: '앵커 델타가 손상됐거나 사라졌어요' }
+    if (!isUsableDelta(target)) return { ok: false, error: '보관된 학습 결과가 손상됐거나 사라졌어요' }
     const previous = s.adopted
     s.adopted = { version, dir: target, adoptedAt: now(), gate: previous?.gate || null, rewound: true }
     const saved = saveStatus()

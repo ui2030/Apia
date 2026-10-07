@@ -206,7 +206,7 @@
   </style>
 </head>
 <body>
-  <div id="backend-status" class="offline">백엔드 연결 중...</div>
+  <div id="backend-status" class="offline">AI 엔진 연결 중…</div>
   <div id="world-layer"></div>
   <canvas id="vrm-canvas"></canvas>
   <div id="capture-badge"><i></i><span id="capture-badge-label">화면 보는 중</span></div>
@@ -230,7 +230,7 @@
         <div class="status-dot"></div>
         Apia
       </div>
-      <label id="chat-web-toggle-wrap" title="이 대화에서 웹 검색을 켭니다. 답변에 [1] [2] 같은 출처 표시가 붙어요." style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-dim);cursor:pointer;">
+      <label id="chat-web-toggle-wrap" title="이 대화에서 웹 검색을 켜요. 답변에 [1] [2] 같은 출처 표시가 붙어요." style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-dim);cursor:pointer;">
         <input id="chat-web-toggle" type="checkbox" style="margin:0;width:11px;height:11px;cursor:pointer;">
         웹
       </label>
@@ -243,7 +243,7 @@
       </div>
     </div>
     <div id="input-area">
-      <input id="chat-input" type="text" placeholder="메시지 입력... (Enter)">
+      <input id="chat-input" type="text" placeholder="메시지 입력… (Enter로 보내기)">
       <!-- 마이크는 기본 OFF다 — 켠 사용자에게만 컨트롤러가 버튼을 보여준다. -->
       <button class="icon-btn" id="mic-btn" type="button" title="음성 듣기" style="display:none">
         <svg width="13" height="15" viewBox="0 0 13 15" fill="none">

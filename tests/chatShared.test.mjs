@@ -13,7 +13,7 @@ describe('toUserMessage — 에러 한국어화', () => {
   })
 
   it('5xx를 백엔드 오류 안내로 매핑', () => {
-    expect(toUserMessage('[502] Bad Gateway')).toContain('백엔드에서 오류')
+    expect(toUserMessage('[502] Bad Gateway')).toContain('AI 엔진에서 오류')
   })
 
   it('빈/누락 입력은 일반 안내로 폴백', () => {

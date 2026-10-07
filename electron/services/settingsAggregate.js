@@ -117,14 +117,14 @@ APIA_AI_MODE=auto
 # 화면 이미지가 PC 밖으로 나가지 않고 키도 필요 없습니다. 준비물:
 #   1) Ollama 설치 후 실행 (https://ollama.com)
 #   2) ollama pull qwen3-vl:4b-instruct
-# 설정 창의 "관전 코멘트 모델"에서 직접 고르세요(auto는 이 모드를 고르지 않습니다).
+# 설정 창의 "화면 함께 보기 모델"에서 직접 고르세요(auto는 이 모드를 고르지 않습니다).
 # 첫 호출은 모델을 메모리에 올리느라 10초 이상 걸릴 수 있고, 그 tick은 조용히
 # 건너뜁니다 — 두 번째 호출부터 빨라집니다.
 # APIA_OLLAMA_BASE_URL=http://localhost:11434
 # APIA_OLLAMA_VLM_MODEL=qwen3-vl:4b-instruct
 
 # === CosyVoice TTS 엔진 (선택 — 로컬에서 캐릭터 목소리를 복제해 말합니다) ===
-# 설정 창의 "TTS 엔진"에서 CosyVoice를 골라야 동작하고, 아래 경로가 하나라도
+# 설정 창의 "음성 엔진"에서 CosyVoice를 골라야 동작하고, 아래 경로가 하나라도
 # 없으면 조용히 기본 목소리(edge)로 말합니다. 준비물:
 #   1) CosyVoice 저장소 + Fun-CosyVoice3-0.5B 모델을 내려받은 폴더
 #   2) 그 폴더용 파이썬 가상환경(torch/torchaudio 포함) — 백엔드 환경과 별개입니다

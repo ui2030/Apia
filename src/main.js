@@ -630,7 +630,7 @@ window.api?.onSpectateState?.(renderCaptureBadge)
 window.api?.spectateState?.().then(renderCaptureBadge).catch(() => {})
 
 window.api?.onSpectateFullscreenHint?.(() => {
-  showBubble('화면이 안 보여요. 게임을 전체화면 대신 창모드(테두리 없는 창)로 바꿔주세요.', 9000)
+  showBubble('화면이 안 보여요. 게임을 전체 화면 대신 창 모드(테두리 없는 창)로 바꿔 주세요.', 9000)
 })
 
 // 관측을 main에 남긴다 — 채팅 뇌가 "지금 무슨 화면을 보는지" 알아야 화면 질문에

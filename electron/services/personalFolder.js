@@ -8,22 +8,22 @@ const path = require('path')
 
 const PERSONA = 'persona.md'
 
-const README = `이 폴더 = Apia 개인 설정 (내 파일)
+const README = `이 폴더는 Apia 개인 설정(내 파일) 폴더예요.
 
-앱은 기본 설정을 들고 다니고, 이 폴더에 파일이 있으면 그게 기본을 덮어씁니다.
-이 폴더를 비우면(파일을 빼면) 기본 설정으로 돌아갑니다.
-앱 업데이트·재설치는 이 폴더를 건드리지 않습니다.
+앱에는 기본 설정이 들어 있고, 이 폴더에 파일이 있으면 기본 설정 대신 그 파일을 써요.
+이 폴더를 비우면(파일을 빼면) 기본 설정으로 돌아가요.
+앱을 업데이트하거나 다시 설치해도 이 폴더는 그대로 남아요.
 
-구조:
-  persona.md            캐릭터의 성격·말투 (UTF-8 텍스트, 8KB까지 읽음)
-  voice/reference.wav   목소리 참조 (선택)
-  그 밖의 하위 폴더는 자유롭게 써도 됩니다.
+들어가는 파일:
+  persona.md            캐릭터의 성격·말투 (UTF-8 텍스트, 8KB까지 읽어요)
+  voice/reference.wav   목소리 샘플 (선택)
+  그 밖의 하위 폴더는 자유롭게 써도 돼요.
 
-권장:
+권장 사항:
   - 가끔 이 폴더를 통째로 백업해 두세요.
-  - OneDrive·Dropbox 같은 동기화 대상에서는 빼 두는 것이 좋습니다.
+  - OneDrive·Dropbox 같은 동기화 폴더에는 넣지 않는 게 좋아요.
   - 설정 창의 [기본으로 되돌리기]는 persona.md를 지우지 않고
-    persona.md.bak-날짜 로 이름만 바꿉니다.
+    이름만 persona.md.bak-날짜 로 바꿔요.
 `
 
 /** 폴더·README 보장 + 옛 위치(backend-data/persona/persona.md)에서 1회 이동. */

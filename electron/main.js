@@ -646,9 +646,9 @@ ipcMain.handle('mic:setConsent', async (e, { on } = {}) => {
       buttons: ['취소', '동의함'],
       defaultId: 0,
       cancelId: 0,
-      title: '제3자 음성 동의',
-      message: '함께 있는 사람들의 동의를 받았습니까?',
-      detail: '상대방의 음성이 전사·학습에 쓰일 수 있습니다. 이 설정은 이번 실행 동안만 유지되고, 앱을 다시 켜면 자동으로 꺼집니다.'
+      title: '함께 있는 사람 목소리 동의',
+      message: '함께 있는 사람들에게 동의를 받았나요?',
+      detail: '함께 있는 사람의 목소리가 받아 적기와 학습에 쓰일 수 있어요. 이 설정은 이번 실행 동안만 유지되고, 앱을 다시 켜면 저절로 꺼져요.'
     })
     confirmed = response === 1
   } catch { confirmed = false }
@@ -841,7 +841,7 @@ function runTrainer({ adoptedDelta, since }) {
     child.on('error', (error) => finish({ status: 'failed', reason: `spawn: ${error?.message}` }))
     child.on('close', (code) => finish({
       status: code === 0 ? 'failed' : 'interrupted',
-      reason: `학습 프로세스가 결과를 남기지 못했다 (exit ${code})`
+      reason: `학습이 결과를 남기지 못하고 끝났어요 (종료 코드 ${code})`
     }))
   })
 }
@@ -861,7 +861,7 @@ const nightSchoolJob = createNightSchoolJob({
  */
 function localStudentReply(message, timeout) {
   const delta = nightSchool.adoptedDelta()
-  if (!delta) return Promise.resolve({ status: 'dormant', reason: '채택 델타 없음' })
+  if (!delta) return Promise.resolve({ status: 'dormant', reason: '학습 결과 없음' })
   return requestBackendJson('/training/shadow', {
     method: 'POST',
     timeout,
@@ -883,7 +883,7 @@ function localStudentReply(message, timeout) {
  */
 function recordShadow(message, reply, type, topicPromise = null) {
   const delta = nightSchool.adoptedDelta()
-  if (!delta) return nightSchool.noteShadowDormant('채택 델타 없음')
+  if (!delta) return nightSchool.noteShadowDormant('학습 결과 없음')
   if (!message || !reply) return
   // 이미 승격된 유형은 그림자를 돌리지 않는다. 그림자의 용도는 "승격해도 되나"를
   // 재는 것인데 그 판단은 끝났고(이제는 서빙 통계가 그 자리를 대신한다), 승격
@@ -970,7 +970,7 @@ ipcMain.handle('nightSchool:trainNow', async () => {
 ipcMain.handle('nightSchool:setPromotion', (e, { type, enabled } = {}) => {
   try {
     if (enabled && !nightSchool.shadowByType()[type]?.recommended) {
-      return { ...nightSchool.getState(), result: { ok: false, error: '아직 승격 추천 조건을 채우지 못했어요' } }
+      return { ...nightSchool.getState(), result: { ok: false, error: '아직 로컬 모델에 맡길 만큼 검증되지 않았어요' } }
     }
     const result = nightSchool.setPromotion(type, enabled)
     return { ...nightSchool.getState(), result }
@@ -984,15 +984,15 @@ ipcMain.handle('nightSchool:setPromotion', (e, { type, enabled } = {}) => {
 // 다이얼로그를 둔다(기본 버튼 = 취소).
 ipcMain.handle('nightSchool:rewind', async (e, { version } = {}) => {
   try {
-    if (!version) return { ...nightSchool.getState(), result: { ok: false, error: '앵커를 고르지 않았어요' } }
+    if (!version) return { ...nightSchool.getState(), result: { ok: false, error: '되돌릴 학습 결과를 고르지 않았어요' } }
     const { response } = await dialog.showMessageBox(windows.getSettings() || windows.getMain(), {
       type: 'question',
-      buttons: ['취소', '되감기'],
+      buttons: ['취소', '되돌리기'],
       defaultId: 0,
       cancelId: 0,
-      title: '학습 결과 되감기',
+      title: '이전 학습 결과로 되돌리기',
       message: `학습 결과를 ${version} 시점으로 되돌릴까요?`,
-      detail: '지금 쓰는 델타는 앵커로 그대로 남아 다시 앞으로 감을 수 있어요.'
+      detail: '지금 쓰는 학습 결과도 보관 목록에 남아서, 나중에 다시 이 결과로 돌아올 수 있어요.'
     })
     if (response !== 1) return { ...nightSchool.getState(), result: { ok: false, cancelled: true } }
     const result = nightSchool.rewind(version)
@@ -1683,7 +1683,7 @@ ipcMain.handle('store:pickFolder', async () => {
   try {
     const mainWin = windows.getMain()
     const result = await dialog.showOpenDialog(mainWin || null, {
-      title: '인덱싱할 폴더 선택',
+      title: '검색할 폴더 선택',
       properties: ['openDirectory']
     })
     if (result.canceled || !result.filePaths?.[0]) {
@@ -2602,13 +2602,13 @@ function setupTrayAndShortcuts() {
   }
   if (tray) {
     tray.setToolTip(
-      'Apia — 좌클릭 채팅 / 우클릭 메뉴 / Ctrl+Alt+A 채팅 / Ctrl+Alt+Q 종료'
+      'Apia — 왼쪽 클릭: 채팅 · 오른쪽 클릭: 메뉴 · Ctrl+Alt+A: 채팅 · Ctrl+Alt+Q: 끄기'
     )
     const buildMenu = () => Menu.buildFromTemplate([
       { label: '채팅 열기/닫기', click: () => toggleChatWindow() },
       { label: '설정 열기', click: () => windows.openSettings() },
       { type: 'separator' },
-      { label: 'Apia 종료', click: () => quitApia() }
+      { label: 'Apia 끄기', click: () => quitApia() }
     ])
     tray.setContextMenu(buildMenu())
     // Phase F2: left-click → chat toggle (Windows convention).

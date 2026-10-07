@@ -14,9 +14,9 @@ const SLOW_CHAT_MODES = new Set(['auto', 'local', 'claude_code'])
 const chatTimeoutFor = (mode) => (SLOW_CHAT_MODES.has(mode) ? 180000 : 30000)
 
 const FALLBACK_NOTICES = {
-  budget: '오늘 교사 예산을 다 써서 로컬로 답해요',
-  error: '교사에 연결하지 못해서 로컬로 답해요',
-  partial: '교사 연결이 끊겨 답이 중간에 잘렸어요'
+  budget: '오늘 사용 한도를 다 써서 클라우드 모델 대신 로컬 모델이 답해요',
+  error: '연결이 안 돼서 클라우드 모델 대신 로컬 모델이 답해요',
+  partial: '클라우드 모델 연결이 끊겨서 답이 중간에 잘렸어요'
 }
 
 // ponytail: 날짜는 메모리에만 — 앱을 다시 켜면 그날 한 번 더 안내한다.

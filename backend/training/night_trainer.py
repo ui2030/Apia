@@ -616,10 +616,10 @@ def gate(result, general_drop_max, recall_gain_min):
     reasons = []
     if general_drop > general_drop_max:
         reasons.append(f"일반 능력 {before['general']}→{after['general']} "
-                       f"({general_drop:.1f}p 하락 > 허용 {general_drop_max}p)")
+                       f"({general_drop:.1f}점 떨어짐, 허용 {general_drop_max}점)")
     if recall_gain < recall_gain_min:
-        reasons.append(f"교재 리콜 {before['recall']}→{after['recall']} "
-                       f"({recall_gain:+.1f}p < 요구 {recall_gain_min}p)")
+        reasons.append(f"학습 노트 기억률 {before['recall']}→{after['recall']} "
+                       f"({recall_gain:+.1f}점, 필요 {recall_gain_min}점)")
     return {
         "passed": not reasons,
         "general_before": before["general"], "general_after": after["general"],
@@ -686,13 +686,13 @@ def main():
         log(f"VRAM free {free:.2f} GB")
         if free < VRAM_MIN_GB:
             write_result(args.result, dict(base, status="deferred",
-                                           reason=f"VRAM {free:.1f}GB < {VRAM_MIN_GB}GB"))
+                                           reason=f"그래픽 메모리 여유 {free:.1f}GB ({VRAM_MIN_GB}GB 필요)"))
             return 0
 
         cards = load_cards(args.cards, args.max_cards)
         log(f"cards {len(cards)}장")
         if not cards:
-            write_result(args.result, dict(base, status="deferred", reason="교재 없음"))
+            write_result(args.result, dict(base, status="deferred", reason="학습 노트 없음"))
             return 0
 
         chash = corpus_hash(cards)
@@ -744,7 +744,7 @@ def selfcheck():
     assert not broke["passed"] and "일반 능력" in broke["reason"], broke
     lazy = gate({"before": {"general": 80.0, "recall": 30.0},
                  "after": {"general": 80.0, "recall": 31.0}}, 20.0, 10.0)
-    assert not lazy["passed"] and "리콜" in lazy["reason"], lazy
+    assert not lazy["passed"] and "기억률" in lazy["reason"], lazy
 
     with tempfile.TemporaryDirectory() as d:
         Path(d, "2026-01-01.jsonl").write_text(

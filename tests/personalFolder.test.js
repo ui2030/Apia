@@ -19,7 +19,7 @@ describe('personalFolder', () => {
   it('creates the folder + README once; empty folder means default layer', () => {
     ensurePersonalFolder({ personalDir, log: quiet })
     const readme = path.join(personalDir, 'README.txt')
-    expect(fs.readFileSync(readme, 'utf8')).toContain('기본 설정으로 돌아갑니다')
+    expect(fs.readFileSync(readme, 'utf8')).toContain('기본 설정으로 돌아가요')
     fs.writeFileSync(readme, 'user edit')
     ensurePersonalFolder({ personalDir, log: quiet })
     expect(fs.readFileSync(readme, 'utf8')).toBe('user edit') // 덮어쓰지 않는다

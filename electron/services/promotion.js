@@ -80,7 +80,7 @@ function recommendPromotion(stats = {}) {
   if (avg == null || avg < RECOMMEND_MIN_SIMILARITY) {
     return {
       recommended: false,
-      reason: `평균 유사도 ${((avg || 0) * 100).toFixed(0)}% (${RECOMMEND_MIN_SIMILARITY * 100}% 필요)`
+      reason: `평균 점수 ${((avg || 0) * 100).toFixed(0)}% (${RECOMMEND_MIN_SIMILARITY * 100}% 필요)`
     }
   }
   // 추세는 최근 7일 vs 그 이전 7일. 이전 구간에 표본이 없으면 "하락 아님"이다 —
@@ -88,7 +88,7 @@ function recommendPromotion(stats = {}) {
   const recent = Number.isFinite(stats.recentAvg) ? stats.recentAvg : null
   const prior = Number.isFinite(stats.priorAvg) ? stats.priorAvg : null
   if (recent != null && prior != null && recent < prior - TREND_DROP_TOLERANCE) {
-    return { recommended: false, reason: '최근 추세 하락' }
+    return { recommended: false, reason: '최근 점수가 떨어지는 중' }
   }
   return { recommended: true, reason: '조건 충족' }
 }
@@ -123,15 +123,15 @@ const QUALITY_LEN_FLOOR = 120
  */
 function qualityVerdict(reply, message = '') {
   const text = String(reply == null ? '' : reply).trim()
-  if (!text) return { ok: false, reason: '빈 응답' }
-  if (text.length < QUALITY_MIN_LEN) return { ok: false, reason: '응답이 너무 짧음' }
+  if (!text) return { ok: false, reason: '빈 답' }
+  if (text.length < QUALITY_MIN_LEN) return { ok: false, reason: '답이 너무 짧음' }
   const askLen = String(message == null ? '' : message).trim().length
   if (askLen > 0 && text.length > Math.max(askLen * QUALITY_LEN_MULTIPLE, QUALITY_LEN_FLOOR)) {
-    return { ok: false, reason: '응답이 질문의 10배 초과' }
+    return { ok: false, reason: '답이 질문보다 10배 넘게 김' }
   }
-  if (FOREIGN_SCRIPT_RE.test(text)) return { ok: false, reason: '한자·비한글 혼입' }
-  if (MARKDOWN_RE.test(text)) return { ok: false, reason: '마크다운 기호' }
-  if (BANNED_RE.test(text)) return { ok: false, reason: '금칙 패턴' }
+  if (FOREIGN_SCRIPT_RE.test(text)) return { ok: false, reason: '한자나 외국 글자가 섞임' }
+  if (MARKDOWN_RE.test(text)) return { ok: false, reason: '서식 기호가 섞임' }
+  if (BANNED_RE.test(text)) return { ok: false, reason: '쓰면 안 되는 표현' }
   return { ok: true, reason: null }
 }
 
@@ -205,8 +205,8 @@ function createServingGate({ store, generate, timeoutMs = LOCAL_SERVE_TIMEOUT_MS
 
     // 폴백 ①: 채택 델타 없음. 델타 없이는 "로컬 학생"이라는 게 존재하지 않는다.
     if (!store.adoptedDelta()) {
-      store.noteServing({ type, source: 'api', reason: '채택 델타 없음' })
-      return { source: 'api', type, reason: '채택 델타 없음' }
+      store.noteServing({ type, source: 'api', reason: '학습 결과 없음' })
+      return { source: 'api', type, reason: '학습 결과 없음' }
     }
 
     let res
@@ -214,7 +214,7 @@ function createServingGate({ store, generate, timeoutMs = LOCAL_SERVE_TIMEOUT_MS
       res = await generate(message, { timeoutMs })
     } catch (error) {
       // 폴백 ②: 생성 5초 초과(abort) 또는 백엔드 오류.
-      const reason = /abort/i.test(error?.name || error?.message || '') ? '생성 5초 초과' : (error?.message || String(error))
+      const reason = /abort/i.test(error?.name || error?.message || '') ? '답 만들기 5초 초과' : (error?.message || String(error))
       store.noteServing({ type, source: 'api', reason: String(reason).slice(0, 80) })
       return { source: 'api', type, reason }
     }

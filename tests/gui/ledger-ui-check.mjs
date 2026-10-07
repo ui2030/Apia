@@ -62,7 +62,7 @@ try {
   })
   const renderOk = rendered.count === 2
     && rendered.texts.some((t) => t.includes('업무') && t.includes('조심'))
-    && rendered.texts.some((t) => t.includes('게임') && t.includes('편함'))
+    && rendered.texts.some((t) => t.includes('게임') && t.includes('편한 화제'))
     && rendered.status.includes('29건')
 
   // 수동 라벨 → 파일까지 내려가는지

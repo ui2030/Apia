@@ -109,8 +109,8 @@ try {
     delta: document.getElementById('training-delta').textContent,
     shadow: document.getElementById('training-shadow').textContent
   }))
-  const renderOk = rendered.last.includes('채택')
-    && rendered.delta.includes('2026-09-25T02-00') && rendered.delta.includes('앵커 1개')
+  const renderOk = rendered.last.includes('적용함')
+    && rendered.delta.includes('2026-09-25T02-00') && rendered.delta.includes('보관 1개')
     && rendered.shadow.includes('시도 없음')
 
   // ── 그림자: 채팅 한 번 ────────────────────────────────────────────────────
@@ -136,7 +136,7 @@ try {
   await new Promise((r) => setTimeout(r, 2500))
   const afterDormant = await readStatus()
   const dormantOk = shadowAttempts(afterDormant) === 1
-    && String(afterDormant.shadowDormant || '').includes('델타')
+    && String(afterDormant.shadowDormant || '').includes('학습 결과')
 
   // ── '지금 시작': 파이썬 경로가 없으니 연기, 이전 델타는 그대로 ─────────────
   await settingsWindow.click('#training-now-btn')

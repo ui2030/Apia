@@ -97,7 +97,7 @@ try {
   await settingsWindow.evaluate(() => document.getElementById('ledger-care')?.scrollIntoView({ block: 'center' }))
   await new Promise((r) => setTimeout(r, 400))
   const panelText = await settingsWindow.evaluate(() => document.getElementById('ledger-care')?.textContent || '')
-  const panelOk = panelText.startsWith('채팅 배려 중인 화제 1개') && panelText.includes('진로·이직')
+  const panelOk = panelText.startsWith('채팅에 반영 중인 화제 1개') && panelText.includes('진로·이직')
   await settingsWindow.screenshot({ path: join(outDir, 'care_panel.png') })
 
   await mainWindow.evaluate(() => window.api.ledger.setGold('career', 'joke_ok'))

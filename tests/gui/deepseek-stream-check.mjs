@@ -28,7 +28,7 @@ await writeFile(join(userData, 'apia-settings.json'), JSON.stringify({
 
 const PIECES = ['안녕하세요! ', '오늘은 ', '날씨가 ', '꽤 맑네요. ', '산책 어때요?']
 const REPLY = PIECES.join('')
-const NOTICE = '오늘 교사 예산을 다 써서 로컬로 답해요'
+const NOTICE = '오늘 사용 한도를 다 써서 클라우드 모델 대신 로컬 모델이 답해요'
 const captured = []
 
 const server = createServer((req, res) => {

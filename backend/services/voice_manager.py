@@ -101,7 +101,7 @@ class VoiceManager:
         from services import voice_clone_service as clone
 
         if not clone.is_available():
-            raise RuntimeError("이 PC에서는 음성 복제 기능을 사용할 수 없어요 (seed-vc 미설치).")
+            raise RuntimeError("이 PC에서는 목소리 복제 기능을 쓸 수 없어요. 필요한 구성 요소가 설치되어 있지 않아요.")
 
         job_id = uuid.uuid4().hex[:8]
         voice_id = f"voice_{job_id}"
@@ -190,7 +190,7 @@ class VoiceManager:
         try:
             data, sr = sf.read(str(wav_path), dtype="float32")
         except Exception as error:
-            raise RuntimeError(f"음성 파일을 읽을 수 없어요 (WAV 필요): {error}")
+            raise RuntimeError(f"음성 파일을 읽을 수 없어요. WAV 파일이 필요해요: {error}")
 
         if getattr(data, "ndim", 1) > 1:
             data = data.mean(axis=1)

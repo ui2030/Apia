@@ -66,7 +66,7 @@ function startBackendPolling() {
     let ok = false
     try { ok = !!(await window.api?.checkBackend?.())?.ok } catch {}
     dot.style.background = ok ? '#4ade80' : '#ef4444'
-    dot.title = ok ? '백엔드 온라인' : '백엔드 오프라인'
+    dot.title = ok ? 'AI 엔진 연결됨' : 'AI 엔진 꺼짐'
   }
   // 숨겨진(닫힌) 창이 5초마다 백엔드를 두드리던 낭비 차단 — 다시 보일 때 즉시 1회.
   pollWhileVisible(tick, 5000)
@@ -157,7 +157,7 @@ async function sendMessage(text) {
   state.pendingUserText = text
 
   if (!window.api?.chatStreamStart) {
-    finalizeStream('백엔드가 연결되지 않아 오프라인 모드예요. 백엔드를 실행해주세요! 🔧', 'neutral', [], false)
+    finalizeStream('AI 엔진에 연결되지 않았어요. 잠시 뒤 다시 시도하거나 앱을 다시 켜 주세요. 🔧', 'neutral', [], false)
     return
   }
 
@@ -279,7 +279,7 @@ async function _speakOnce(text, emotion) {
     // 음성 복제 폴백 안내 — 세션당 1회 (chat.js와 동일 계약)
     if (r?.fallback && !state.voiceFallbackNotified && String(state.voiceId || '').startsWith('custom:')) {
       state.voiceFallbackNotified = true
-      appendMessage('ai', '(설정한 캐릭터 음성을 준비하지 못해서 기본 음성으로 말했어요. 잠시 뒤 다시 적용될 수 있어요.)')
+      appendMessage('ai', '(설정한 캐릭터 목소리를 준비하지 못해서 기본 목소리로 말했어요. 잠시 뒤에는 캐릭터 목소리로 돌아올 수 있어요.)')
     }
     const bytes = atob(r.audio)
     const buf = new Uint8Array(bytes.length)

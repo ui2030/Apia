@@ -86,13 +86,13 @@ describe('승격 추천 — 세 조건이 각각 단독으로 막는다', () => 
   it('평균 유사도가 0.55 미만이면 거절', () => {
     const v = recommendPromotion({ ...OK, avgSimilarity: RECOMMEND_MIN_SIMILARITY - 0.01 })
     expect(v.recommended).toBe(false)
-    expect(v.reason).toContain('유사도')
+    expect(v.reason).toContain('평균 점수')
   })
 
   it('최근 추세가 하락이면 거절', () => {
     const v = recommendPromotion({ ...OK, recentAvg: 0.6, priorAvg: 0.75 })
     expect(v.recommended).toBe(false)
-    expect(v.reason).toContain('하락')
+    expect(v.reason).toContain('떨어지는')
   })
 
   it('잡음 수준(5%p 이내) 하락은 하락이 아니다', () => {
@@ -126,9 +126,9 @@ describe('품질 필터 — 어색 한국어 네 갈래', () => {
   })
 
   it('마크다운 기호는 미달', () => {
-    expect(qualityVerdict('**맑아요**', ASK).reason).toContain('마크다운')
-    expect(qualityVerdict('- 맑아요\n- 따뜻해요', ASK).reason).toContain('마크다운')
-    expect(qualityVerdict('```\n맑아요\n```', ASK).reason).toContain('마크다운')
+    expect(qualityVerdict('**맑아요**', ASK).reason).toContain('서식 기호')
+    expect(qualityVerdict('- 맑아요\n- 따뜻해요', ASK).reason).toContain('서식 기호')
+    expect(qualityVerdict('```\n맑아요\n```', ASK).reason).toContain('서식 기호')
   })
 
   it('3자 미만은 미달', () => {
@@ -149,8 +149,8 @@ describe('품질 필터 — 어색 한국어 네 갈래', () => {
   })
 
   it('금칙 패턴은 미달', () => {
-    expect(qualityVerdict('제 기록에 따르면 맑습니다', ASK).reason).toContain('금칙')
-    expect(qualityVerdict('저는 AI라서 잘 모르겠어요', ASK).reason).toContain('금칙')
+    expect(qualityVerdict('제 기록에 따르면 맑습니다', ASK).reason).toContain('쓰면 안 되는')
+    expect(qualityVerdict('저는 AI라서 잘 모르겠어요', ASK).reason).toContain('쓰면 안 되는')
   })
 
   it('빈 응답은 미달', () => {
@@ -256,7 +256,7 @@ describe('golden — 승격 → 로컬 서빙 → 품질 미달 → API 폴백 �
     const after = store.getState().serving.total
     expect(await gate.serve('안녕')).toBe(null)
     expect(store.getState().serving.total).toBe(after)
-    expect(state.serving.topReasons.some((r) => /마크다운|한자/.test(r.reason))).toBe(true)
+    expect(state.serving.topReasons.some((r) => /서식 기호|한자/.test(r.reason))).toBe(true)
   })
 
   it('채택 델타가 없으면 승격돼 있어도 API로 — 로컬 로드를 유발하지 않는다', async () => {
@@ -268,7 +268,7 @@ describe('golden — 승격 → 로컬 서빙 → 품질 미달 → API 폴백 �
       store,
       generate: async () => { calls += 1; return { status: 'ok', reply: '안녕하세요' } }
     })
-    expect(await gate.serve('안녕')).toMatchObject({ source: 'api', reason: '채택 델타 없음' })
+    expect(await gate.serve('안녕')).toMatchObject({ source: 'api', reason: '학습 결과 없음' })
     expect(calls).toBe(0) // 생성 자체를 시도하지 않는다
   })
 
@@ -280,7 +280,7 @@ describe('golden — 승격 → 로컬 서빙 → 품질 미달 → API 폴백 �
     const gate = createServingGate({ store, generate: async () => ({ status: 'ok', reply: '' }) })
 
     for (let i = 0; i < DEMOTION_WINDOW; i += 1) {
-      expect(await gate.serve('안녕')).toMatchObject({ source: 'api', reason: '빈 응답' })
+      expect(await gate.serve('안녕')).toMatchObject({ source: 'api', reason: '빈 답' })
     }
     // 빈 답만 뱉는 델타는 환경 탓이 아니라 모델 탓 — 창이 차면 강등된다.
     expect(store.isPromoted('greeting')).toBe(false)
@@ -312,6 +312,6 @@ describe('golden — 승격 → 로컬 서빙 → 품질 미달 → API 폴백 �
     expect(store.getState().demotions).toEqual([])
     const reasons = store.getState().serving.topReasons.map((r) => r.reason)
     expect(reasons.some((r) => r.includes('not resident'))).toBe(true)
-    expect(reasons).toContain('생성 5초 초과')
+    expect(reasons).toContain('답 만들기 5초 초과')
   })
 })

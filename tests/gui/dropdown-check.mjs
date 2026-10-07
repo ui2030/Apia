@@ -143,7 +143,7 @@ try {
     await new Promise((r) => setTimeout(r, 600))
     return [...document.querySelectorAll('select option[value="local"]')].map((o) => o.textContent)
   })
-  check('로컬 라벨이 MODEL_ID 파생', labels.length > 0 && labels.every((t) => t === '로컬 (SomeModel-9Z)'),
+  check('로컬 라벨이 MODEL_ID 파생', labels.length > 0 && labels.every((t) => t === '로컬 모델 (SomeModel-9Z)'),
     JSON.stringify(labels))
 
   // ── 실기 캡처: 모니터 2(가능하면)에서 드롭다운을 실제로 펼친다 ────────

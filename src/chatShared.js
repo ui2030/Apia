@@ -7,15 +7,15 @@
 // one place so both surfaces phrase timeouts / network / backend-down the same.
 export function toUserMessage(raw) {
   const s = String(raw == null ? '' : raw)
-  if (!s.trim()) return '알 수 없는 오류가 발생했어요. 잠시 후 다시 시도해주세요.'
+  if (!s.trim()) return '알 수 없는 오류가 발생했어요. 잠시 후 다시 시도해 주세요.'
   if (/timed out|timeout|ETIMEDOUT|AbortError/i.test(s)) {
-    return '응답이 너무 오래 걸려 시간이 초과됐어요. 잠시 후 다시 시도해주세요.'
+    return '응답이 너무 오래 걸려 시간이 초과됐어요. 잠시 후 다시 시도해 주세요.'
   }
   if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|fetch failed|network|no main window|오프라인|unavailable|백엔드/i.test(s)) {
-    return '백엔드에 연결하지 못했어요. 백엔드가 실행 중인지 확인해주세요.'
+    return 'AI 엔진에 연결하지 못했어요. 잠시 뒤 다시 시도하거나 앱을 다시 켜 주세요.'
   }
   if (/\[5\d\d\]|\b50[0-9]\b|internal server error/i.test(s)) {
-    return '백엔드에서 오류가 발생했어요. 잠시 후 다시 시도해주세요.'
+    return 'AI 엔진에서 오류가 발생했어요. 잠시 후 다시 시도해 주세요.'
   }
   return '오류가 발생했어요: ' + s.slice(0, 120)
 }

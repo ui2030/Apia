@@ -527,7 +527,7 @@ describe('dev-only local engine gate', () => {
   it('marks every dev-only control with data-dev-local', async () => {
     const html = await readSettingsHtml()
     expect(html).toMatch(/<option value="ollama_vlm" data-dev-local>/)
-    expect(html).toMatch(/<div class="row" data-dev-local>\s*<div class="row-label">TTS 엔진<\/div>/)
+    expect(html).toMatch(/<div class="row" data-dev-local>\s*<div class="row-label">음성 엔진<\/div>/)
     expect(html).toMatch(/id="tts-engine-hint" data-dev-local/)
     expect(html).toMatch(/id="cosyvoice-prompt-row" data-dev-local/)
   })

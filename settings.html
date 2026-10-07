@@ -317,9 +317,9 @@
 
     <div class="dropzone" id="dropzone">
       <div class="dropzone-text">
-        캐릭터 파일을 넣어주세요<br>
-        <span>VRM</span>, <span>PMX ZIP</span>, <span>모델 폴더</span>를 지원합니다<br>
-        이름과 설명은 아래에 적고, 클릭하거나 드래그해서 추가하세요
+        캐릭터 파일을 넣어 주세요<br>
+        <span>VRM</span>, <span>PMX ZIP</span>, <span>모델 폴더</span>를 넣을 수 있어요<br>
+        이름과 설명을 아래에 적은 뒤, 클릭하거나 끌어다 놓아 추가해 주세요
       </div>
     </div>
 
@@ -331,7 +331,7 @@
       <input class="input" id="import-summary" type="text" placeholder="한 줄 설명 (선택)">
       <textarea class="textarea" id="import-description" placeholder="원본 캐릭터 설명, 성격 설명, 참고 메모 등을 적어둘 수 있어요 (선택)"></textarea>
       <div class="helper-text">
-        PMX는 ZIP 또는 폴더 형태가 가장 안정적입니다. 가능하면 텍스처가 함께 들어있는 패키지를 넣어주세요.
+        PMX는 ZIP 파일이나 폴더째 넣는 게 가장 안정적이에요. 되도록 텍스처 파일이 함께 들어 있는 묶음을 넣어 주세요.
       </div>
     </div>
   </div>
@@ -341,7 +341,7 @@
     <div class="row">
       <div>
         <div class="row-label">항상 위에 표시</div>
-        <div class="row-sub">다른 창 위에 항상 표시</div>
+        <div class="row-sub">다른 창보다 늘 위에 보여요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="always-on-top" checked>
@@ -371,7 +371,7 @@
     <div class="row">
       <div>
         <div class="row-label">자율 행동</div>
-        <div class="row-sub">캐릭터가 스스로 움직임</div>
+        <div class="row-sub">캐릭터가 알아서 움직여요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="auto-behavior" checked>
@@ -384,10 +384,10 @@
   <div class="section">
     <div class="section-title">AI 설정</div>
     <div class="row">
-      <div class="row-label">AI 모드</div>
+      <div class="row-label">답변 모델</div>
       <select id="ai-mode">
         <option value="auto">자동 (권장)</option>
-        <option value="local">로컬 (내 PC 모델)</option>
+        <option value="local">로컬 모델 (내 PC)</option>
         <option value="groq">Groq API</option>
         <option value="hf_api">HuggingFace API</option>
         <option value="claude">Claude API</option>
@@ -397,13 +397,13 @@
 
     <div class="row">
       <div>
-        <div class="row-label">행동 디렉터 모델</div>
-        <div class="row-sub">캐릭터가 혼자 있을 때의 분위기를 정하는 배경 호출</div>
+        <div class="row-label">혼자 있을 때 쓸 모델</div>
+        <div class="row-sub">캐릭터가 혼자 있을 때 무엇을 할지 정해요</div>
       </div>
       <select id="ai-mode-director">
-        <option value="">기본(대화와 동일)</option>
+        <option value="">대화와 같은 모델</option>
         <option value="auto">자동</option>
-        <option value="local">로컬 (내 PC 모델)</option>
+        <option value="local">로컬 모델 (내 PC)</option>
         <option value="groq">Groq API</option>
         <option value="hf_api">HuggingFace API</option>
         <option value="claude">Claude API</option>
@@ -413,23 +413,23 @@
 
     <div class="row">
       <div>
-        <div class="row-label">관전 코멘트 모델</div>
-        <div class="row-sub">화면을 봐야 하므로 이미지를 읽을 수 있는 모델만 고를 수 있어요<span data-dev-local> · 로컬 VLM은 별도 준비가 필요해요(backend.env.example 참고)</span></div>
+        <div class="row-label">화면 함께 보기 모델</div>
+        <div class="row-sub">화면을 봐야 해서 그림을 읽을 수 있는 모델만 고를 수 있어요<span data-dev-local> · 로컬 그림 모델은 따로 준비해야 해요(backend.env.example 참고)</span></div>
       </div>
       <select id="ai-mode-spectate">
-        <option value="">기본(대화와 동일)</option>
+        <option value="">대화와 같은 모델</option>
         <option value="auto">자동</option>
         <option value="groq">Groq API</option>
         <option value="claude">Claude API</option>
         <option value="claude_code">Claude Code (구독 로그인)</option>
-        <option value="ollama_vlm" data-dev-local>로컬 VLM (Ollama)</option>
+        <option value="ollama_vlm" data-dev-local>로컬 그림 모델 (Ollama)</option>
       </select>
     </div>
 
     <div class="row">
       <div>
         <div class="row-label">backend.env 편집</div>
-        <div class="row-sub">키와 모델 ID를 직접 편집할 수 있어요</div>
+        <div class="row-sub">API 키와 모델 이름을 파일에서 직접 고칠 수 있어요</div>
       </div>
       <div style="display:flex;gap:6px;">
         <button type="button" class="btn btn-ghost" id="open-backend-env-file">파일 열기</button>
@@ -491,8 +491,8 @@
       </div>
 
       <div class="helper-text">
-        키를 비워두면 변경되지 않습니다. 새 값을 입력하면 저장 시 backend.env에 반영되고,
-        삭제 버튼을 누르면 해당 키가 backend.env에서 제거됩니다.
+        칸을 비워 두면 키가 바뀌지 않아요. 새 키를 넣고 저장하면 backend.env에 기록되고,
+        [삭제]를 누르면 그 키가 backend.env에서 지워져요.
       </div>
     </div>
 
@@ -512,18 +512,18 @@
     <div class="row">
       <div>
         <div class="row-label">대화 기억</div>
-        <div class="row-sub">최근 몇 턴 기억</div>
+        <div class="row-sub">최근 대화를 몇 번까지 기억할지</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <input type="range" id="memory-turns" min="2" max="20" value="10">
-        <span class="range-val" id="memory-val">10턴</span>
+        <span class="range-val" id="memory-val">10번</span>
       </div>
     </div>
 
     <div class="row">
       <div>
-        <div class="row-label">바탕화면에 박기</div>
-        <div class="row-sub">켜면 캐릭터·방이 바탕화면 자리(데스크탑 아이콘 뒤)에 들어갑니다. 이 모드에선 캐릭터 클릭·채팅이 안 되니, 인터랙션이 필요하면 끄세요. 종료: 트레이 또는 Ctrl+Alt+Q</div>
+        <div class="row-label">바탕화면에 넣기</div>
+        <div class="row-sub">켜면 캐릭터와 방이 바탕화면 아이콘 뒤로 들어가요. 이때는 캐릭터를 누르거나 채팅할 수 없으니, 대화하려면 꺼 주세요. 앱 끄기: 작업 표시줄 아이콘 메뉴 또는 Ctrl+Alt+Q</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="use-wallpaper-mode">
@@ -536,7 +536,7 @@
   <div class="section">
     <div class="section-title">음성 설정</div>
     <div class="row">
-      <div class="row-label">TTS 활성화</div>
+      <div class="row-label">목소리로 말하기</div>
       <label class="toggle">
         <input type="checkbox" id="tts-enabled" checked>
         <div class="t-track"></div>
@@ -548,10 +548,10 @@
          APIA_DEV_LOCAL_ENGINES=1이 아니면 스크립트가 DOM에서 아예 제거한다 —
          배포본에서 고를 수는 있는데 조용히 기본 목소리로 폴백하면 "고장"으로 읽힌다. -->
     <div class="row" data-dev-local>
-      <div class="row-label">TTS 엔진</div>
+      <div class="row-label">음성 엔진</div>
       <select id="tts-engine">
         <option value="default">기본 (인터넷 음성)</option>
-        <option value="cosyvoice">CosyVoice (로컬 · 캐릭터 목소리)</option>
+        <option value="cosyvoice">CosyVoice (내 PC · 캐릭터 목소리)</option>
       </select>
     </div>
     <div class="helper-text" id="tts-engine-hint" data-dev-local hidden></div>
@@ -560,7 +560,7 @@
     <div class="row" id="cosyvoice-prompt-row" data-dev-local hidden style="flex-direction:column; align-items:stretch; gap:6px;">
       <div>
         <div class="row-label">캐릭터 목소리</div>
-        <div class="row-sub">한국어 음성 파일(3초 이상)을 올리면 그 목소리로 말해요. 안 올리면 기본 한국어 목소리를 참조로 씁니다. 중국어·영어 음성은 발음이 섞이니 피해 주세요.</div>
+        <div class="row-sub">3초 이상인 한국어 음성 파일을 올리면 그 목소리로 말해요. 안 올리면 기본 한국어 목소리를 목소리 샘플로 써요. 중국어나 영어 음성은 발음이 섞이니 피해 주세요.</div>
       </div>
       <div style="display:flex; gap:6px; align-items:center;">
         <input type="file" id="cosyvoice-prompt-file" accept="audio/*" hidden>
@@ -576,7 +576,7 @@
       </select>
     </div>
     <div class="row" id="voice-custom-actions" hidden>
-      <div class="row-label">선택한 복제 음성</div>
+      <div class="row-label">고른 목소리</div>
       <div style="display:flex; gap:6px;">
         <button type="button" class="btn btn-ghost" id="voice-clone-preview-btn">미리듣기</button>
         <button type="button" class="btn btn-red" id="voice-clone-delete-btn">삭제</button>
@@ -587,17 +587,17 @@
     <div class="row" style="flex-direction:column; align-items:stretch; gap:6px;">
       <div>
         <div class="row-label">캐릭터 목소리 만들기</div>
-        <div class="row-sub">캐릭터 음성 파일(mp3/wav)을 올리면 그 목소리로 말해요. 여러 개를 골라도 되고, 고른 순서대로 이어서 하나로 씁니다(5초 이상). 참조는 <b>한 호흡으로 이어지는 조용한 대사</b>가 가장 깨끗해요. 여러 조각을 이어 붙이면 조각 사이 톤 차이가 기계음처럼 들릴 수 있어요. 길수록 깨끗하지만 말이 느려져요(참조 10초당 약 2초 지연 — 10초면 빠르고, 30초면 가장 깨끗). 30초 넘는 부분은 쓰지 않아요. 인터넷 연결이 필요하고, 처음 한 번은 음성 모델 다운로드로 몇 분 걸려요.</div>
+        <div class="row-sub">캐릭터 음성 파일(mp3·wav)을 올리면 그 목소리로 말해요. 여러 개를 골라도 되고, 고른 순서대로 이어 붙여 하나로 써요. 합쳐서 5초 이상이어야 해요. 목소리 샘플은 <b>한 호흡으로 이어지는 조용한 대사</b>가 가장 깨끗해요. 여러 조각을 이어 붙이면 조각 사이 말투 차이가 기계음처럼 들릴 수 있어요. 샘플이 길수록 깨끗하지만 대답이 느려져요. 샘플 10초마다 약 2초씩 늦어지니, 10초면 빠르고 30초면 가장 깨끗해요. 30초가 넘는 부분은 쓰지 않아요. 인터넷 연결이 필요하고, 처음 한 번은 음성 모델을 내려받느라 몇 분 걸려요.</div>
       </div>
       <div style="display:flex; gap:6px; align-items:center;">
-        <input type="text" id="voice-clone-name" placeholder="음성 이름 (예: 내 캐릭터)" style="flex:1; min-width:0;">
+        <input type="text" id="voice-clone-name" placeholder="목소리 이름 (예: 내 캐릭터)" style="flex:1; min-width:0;">
         <input type="file" id="voice-clone-file" accept="audio/*,.mp3,.wav" multiple hidden>
         <button type="button" class="btn btn-ghost" id="voice-clone-pick">파일 선택</button>
         <button type="button" class="btn btn-purple" id="voice-clone-start" disabled>만들기</button>
       </div>
       <div id="voice-clone-file-label" class="helper-text" hidden></div>
       <div id="voice-clone-progress-wrap" hidden>
-        <div id="voice-clone-status" class="helper-text">음성 합성 중입니다…</div>
+        <div id="voice-clone-status" class="helper-text">목소리 만드는 중…</div>
         <div style="height:8px; border-radius:4px; background:rgba(255,255,255,0.08); overflow:hidden; margin-top:4px;">
           <div id="voice-clone-bar" style="height:100%; width:0%; background:#a78bfa; transition:width .4s;"></div>
         </div>
@@ -612,15 +612,15 @@
        다음 reload 때도 유지). Step 1.
        ───────────────────────────────────────────────────────────── -->
   <div class="section" id="persona-section">
-    <div class="section-title">캐릭터 컨셉</div>
+    <div class="section-title">캐릭터 성격</div>
     <div class="helper-text" id="persona-active-label" style="margin-bottom:8px;">
-      활성 캐릭터: 없음
+      지금 캐릭터: 없음
     </div>
 
     <div class="row">
       <div style="min-width:0;">
         <div class="row-label">내 파일 (개인 설정)</div>
-        <div class="row-sub">persona.md를 넣으면 기본 성격 대신 그걸 써요. 업데이트해도 안 지워져요.</div>
+        <div class="row-sub">persona.md 파일을 넣으면 기본 성격 대신 그 파일을 써요. 앱을 업데이트해도 지워지지 않아요.</div>
         <div class="row-sub" id="personal-dir" style="font-size:11px; word-break:break-all;">—</div>
         <div class="row-sub" id="personal-state" style="font-size:11px;">—</div>
       </div>
@@ -633,7 +633,7 @@
     <div class="row">
       <div>
         <div class="row-label">활발함</div>
-        <div class="row-sub">걸음 빠르기·팔 swing·체중 이동 크기</div>
+        <div class="row-sub">걸음 빠르기·팔 흔들기·몸을 싣는 정도</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <input type="range" id="persona-energy" min="0" max="100" value="50">
@@ -655,7 +655,7 @@
     <div class="row">
       <div>
         <div class="row-label">시선 강도</div>
-        <div class="row-sub">마우스/유저를 얼마나 또렷이 응시</div>
+        <div class="row-sub">마우스나 나를 얼마나 또렷이 바라보는지</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <input type="range" id="persona-gaze" min="0" max="100" value="45">
@@ -677,7 +677,7 @@
     <div class="row">
       <div>
         <div class="row-label">잔동작</div>
-        <div class="row-sub">두리번거림·앉아있는 시간 짧아짐</div>
+        <div class="row-sub">두리번거림이 늘고 앉아 있는 시간이 짧아져요</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <input type="range" id="persona-fidget" min="0" max="100" value="30">
@@ -693,19 +693,19 @@
        백엔드 재시작 흐름(485cc18)에 합류한다.
        ───────────────────────────────────────────────────────────── -->
   <div class="section" id="spectate-section">
-    <div class="section-title">관전 모드</div>
+    <div class="section-title">화면 함께 보기</div>
     <div class="helper-text" style="margin-bottom:8px;">
-      고른 창 하나를 가끔 들여다보고 짧게 반응해요. <b>창 하나만</b> 봅니다 —
-      전체 화면이나 다른 창은 캡처하지 않아요. 보는 동안에는 화면 구석에 빨간 표시가
-      계속 떠 있고, <b>Ctrl+Alt+S</b>로 언제든 즉시 멈출 수 있어요. 멈춤은 앱을 다시
-      켜도 유지되고, 직접 재개하기 전까지 화면을 보지 않습니다.
-      그림은 저장하지 않고 판단에만 쓰고 바로 버려요.
+      고른 창 하나를 가끔 들여다보고 짧게 반응해요. <b>그 창 하나만</b> 봐요.
+      전체 화면이나 다른 창은 찍지 않아요. 보는 동안에는 화면 구석에 빨간 표시가
+      계속 떠 있고, <b>Ctrl+Alt+S</b>로 언제든 바로 멈출 수 있어요. 멈춘 상태는 앱을 다시
+      켜도 그대로이고, 직접 다시 켜기 전까지 화면을 보지 않아요.
+      화면 사진은 저장하지 않고, 보고 나면 바로 지워요.
     </div>
 
     <div class="row">
       <div style="flex:1; min-width:0;">
         <div class="row-label">볼 창</div>
-        <div class="row-sub" id="spectate-status">선택 안 함 — 관전이 꺼져 있어요</div>
+        <div class="row-sub" id="spectate-status">고른 창 없음 — 화면 함께 보기가 꺼져 있어요</div>
       </div>
     </div>
     <div style="display:flex; gap:8px; margin:6px 0 10px;">
@@ -717,8 +717,8 @@
 
     <div class="row">
       <div>
-        <div class="row-label">일시정지</div>
-        <div class="row-sub">Ctrl+Alt+S와 같은 스위치입니다</div>
+        <div class="row-label">잠시 멈춤</div>
+        <div class="row-sub">Ctrl+Alt+S와 같은 스위치예요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="spectate-paused-toggle">
@@ -731,15 +731,15 @@
   <div class="section" id="data-section">
     <div class="section-title">정보 활용</div>
     <div class="helper-text" style="margin-bottom:8px;">
-      장기 기억(과거 대화 기억), 파일 검색(허용한 폴더 안 문서 검색),
-      웹 검색을 켜거나 끌 수 있어요. 켜면 다음 채팅부터 적용됩니다.
+      장기 기억, 파일 검색, 웹 검색을 켜거나 끌 수 있어요.
+      바꾼 설정은 다음 채팅부터 적용돼요.
     </div>
 
     <!-- 장기 기억 -->
     <div class="row">
       <div>
         <div class="row-label">장기 기억 사용</div>
-        <div class="row-sub">예전 대화를 의미로 기억하고 가끔 요약합니다</div>
+        <div class="row-sub">예전 대화를 기억해 두고 가끔 요약해요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="memory-enabled-toggle">
@@ -759,7 +759,7 @@
     <div class="row" style="margin-top:6px;">
       <div>
         <div class="row-label">파일 검색 사용</div>
-        <div class="row-sub">허용한 폴더 안 문서를 검색합니다</div>
+        <div class="row-sub">허용한 폴더 안의 문서를 찾아봐요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="files-enabled-toggle">
@@ -774,14 +774,14 @@
     <ul id="files-folder-list" style="list-style:none;padding:0;margin:0 0 6px 0;font-size:11px;color:var(--text-dim);"></ul>
     <div class="row">
       <div>
-        <div class="row-label">텍스트 직접 추가</div>
-        <div class="row-sub">짧은 메모/노트를 검색 대상에 바로 넣기</div>
+        <div class="row-label">글 직접 추가</div>
+        <div class="row-sub">짧은 메모를 검색 대상에 바로 넣어요</div>
       </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px;">
-      <input class="input" type="text" id="files-ingest-label" placeholder="라벨(예: 회의 노트)" style="font-size:11px;">
-      <textarea class="input" id="files-ingest-text" rows="3" placeholder="여기에 텍스트를 붙여넣으세요…" style="font-size:11px;font-family:inherit;resize:vertical;"></textarea>
-      <button type="button" class="btn btn-ghost" id="files-ingest-btn" style="align-self:flex-end;">텍스트 추가</button>
+      <input class="input" type="text" id="files-ingest-label" placeholder="제목 (예: 회의 메모)" style="font-size:11px;">
+      <textarea class="input" id="files-ingest-text" rows="3" placeholder="여기에 글을 붙여 넣어 주세요…" style="font-size:11px;font-family:inherit;resize:vertical;"></textarea>
+      <button type="button" class="btn btn-ghost" id="files-ingest-btn" style="align-self:flex-end;">글 추가</button>
     </div>
     <div class="row">
       <div class="row-label">파일 상태</div>
@@ -792,7 +792,7 @@
     <div class="row" style="margin-top:6px;">
       <div>
         <div class="row-label">웹 검색 기본 사용</div>
-        <div class="row-sub">새 채팅을 항상 웹 검색으로 시작합니다 (채팅창 토글로 일회성 변경 가능)</div>
+        <div class="row-sub">대화를 늘 웹 검색을 켠 채로 시작해요. 채팅창의 '웹' 토글로 그때그때 바꿀 수 있어요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="use-web-default-toggle">
@@ -802,8 +802,8 @@
     </div>
     <div class="row">
       <div>
-        <div class="row-label">웹 검색 공급자</div>
-        <div class="row-sub">none이면 비활성. tavily/brave는 위 "웹 검색 API 키" 필요</div>
+        <div class="row-label">웹 검색 서비스</div>
+        <div class="row-sub">'사용 안 함'이면 꺼져요. Tavily·Brave는 위의 '웹 검색 API 키'가 필요해요</div>
       </div>
       <select id="web-provider-select">
         <option value="none">사용 안 함</option>
@@ -819,13 +819,13 @@
     <!-- 임베딩 -->
     <div class="row" style="margin-top:6px;">
       <div>
-        <div class="row-label">임베딩 모델</div>
-        <div class="row-sub">처음 한 번 ~480MB 받아옵니다. 메모리/파일/웹 검색 공통 사용</div>
+        <div class="row-label">검색 모델</div>
+        <div class="row-sub">처음 한 번 약 480MB를 내려받아요. 장기 기억·파일·웹 검색에 함께 써요</div>
       </div>
       <button type="button" class="btn btn-ghost" id="embedding-warmup-btn">지금 받기</button>
     </div>
     <div class="row">
-      <div class="row-label">임베딩 상태</div>
+      <div class="row-label">검색 모델 상태</div>
       <span class="row-sub" id="embedding-status-text" style="font-size:11px;">읽는 중…</span>
     </div>
   </div>
@@ -834,12 +834,12 @@
        아래 세 패널(원장·교재·야간 학습)이 모두 "비서가 자라는 과정"이라서
        같은 성장 묶음 아래로 들어왔다. 이 판만이 **승격을 켜는 유일한 표면**이다. -->
   <div class="section" id="growth-section">
-    <div class="section-title">성장 관제판</div>
+    <div class="section-title">성장 · 야간 학습</div>
     <div class="helper-text" style="margin-bottom:8px;">
-      내 PC의 로컬 모델이 얼마나 자랐는지 보고, <b>어떤 종류의 말부터 직접 맡길지</b>
-      정하는 곳입니다. 승격은 <b>여기서 직접 켤 때만</b> 일어나고, 품질이 떨어지면
-      <b>알아서 다시 내려갑니다</b>. 로컬이 어색한 답을 내면 사용자가 보기 전에
-      기존 방식(API)으로 조용히 바뀝니다.
+      내 PC의 로컬 모델이 얼마나 자랐는지 보고, <b>어떤 종류의 말부터 맡길지</b>
+      정하는 곳이에요. 로컬 모델에 맡기기는 <b>여기서 직접 켤 때만</b> 시작되고, 품질이 떨어지면
+      <b>알아서 맡기기가 해제돼요</b>. 로컬 모델이 어색한 답을 내면 사용자가 보기 전에
+      클라우드 모델이 조용히 대신 답해요.
     </div>
 
     <div class="row" style="margin-top:4px;">
@@ -850,43 +850,43 @@
       <button type="button" class="btn btn-ghost" id="training-now-btn" style="white-space:nowrap; flex:0 0 auto;">이번 주 학습 지금 시작</button>
     </div>
     <div class="row">
-      <div class="row-label">다음 예정 조건</div>
+      <div class="row-label">다음 학습 조건</div>
       <span class="row-sub" id="training-next" style="font-size:11px;">—</span>
     </div>
     <div class="row">
-      <div class="row-label">채택 델타</div>
+      <div class="row-label">쓰고 있는 학습 결과</div>
       <span class="row-sub" id="training-delta" style="font-size:11px;">—</span>
     </div>
     <div class="row">
-      <div class="row-label">화제별 카드 수</div>
+      <div class="row-label">화제별 학습 노트 수</div>
       <span class="row-sub" id="training-topics" style="font-size:11px; white-space:normal; text-align:right;">—</span>
     </div>
     <div class="row">
       <div>
-        <div class="row-label">되감기</div>
-        <div class="row-sub">예전 학습 결과(앵커)로 되돌립니다</div>
+        <div class="row-label">이전 학습 결과로 되돌리기</div>
+        <div class="row-sub">보관본에서 골라요</div>
       </div>
       <div style="display:flex; gap:6px; flex:0 0 auto; align-items:center;">
         <select id="training-anchor-select" style="max-width:190px;"></select>
-        <button type="button" class="btn btn-ghost" id="training-rewind-btn" style="white-space:nowrap;">되감기</button>
+        <button type="button" class="btn btn-ghost" id="training-rewind-btn" style="white-space:nowrap;">되돌리기</button>
       </div>
     </div>
 
     <div class="row" style="margin-top:10px;">
-      <div class="row-label">그림자 (최근 7일 전체)</div>
+      <div class="row-label">답변 비교 점수 (최근 7일 전체)</div>
       <span class="row-sub" id="training-shadow" style="font-size:11px;">—</span>
     </div>
-    <div class="row-sub" style="margin-top:2px;">유형별 시도 · 평균 유사도 · 승격 추천</div>
+    <div class="row-sub" style="margin-top:2px;">로컬 모델의 답이 클라우드 모델 답과 얼마나 비슷한지 말의 종류별로 보여 줘요</div>
     <div id="growth-shadow-table" style="margin-top:4px;"></div>
 
     <div class="row" style="margin-top:10px;">
-      <div class="row-label">승격 (추천된 유형만 켤 수 있어요)</div>
+      <div class="row-label">로컬 모델에 맡기기 (추천된 종류만 켤 수 있어요)</div>
     </div>
     <div id="growth-promotion"></div>
     <div class="row-sub" id="growth-demotions" style="margin-top:6px; display:none;"></div>
 
     <div class="row" style="margin-top:10px;">
-      <div class="row-label">서빙 (최근 7일)</div>
+      <div class="row-label">누가 답했나 (최근 7일)</div>
       <span class="row-sub" id="growth-serving" style="font-size:11px;">—</span>
     </div>
     <div class="row-sub" id="growth-serving-reasons" style="margin-top:2px; display:none;"></div>
@@ -896,15 +896,15 @@
   <div class="section" id="proactive-section">
     <div class="section-title">먼저 말 걸기 · 음성 입력</div>
     <div class="helper-text" style="margin-bottom:8px;">
-      둘 다 <b>기본 꺼짐</b>입니다. 켜면 Apia가 <b>하루 1회</b> 자리에 있을 때 먼저 한 줄 말을 걸고, <b>말로</b> 답할 수 있어요.
-      마이크는 <b>채팅창이 열려 있을 때만</b> 듣고, 듣는 동안 채팅창의 🎤 버튼이 빨갛게 깜빡입니다.
-      창을 닫거나 숨기면 마이크를 완전히 놓습니다. <b>원음은 저장하지 않고</b> 받아 적은 글자만 씁니다.
+      둘 다 <b>처음엔 꺼져 있어요</b>. 켜면 Apia가 <b>하루 1회</b> 자리에 있을 때 먼저 한 줄 말을 걸고, <b>말로</b> 답할 수 있어요.
+      마이크는 <b>채팅창이 열려 있을 때만</b> 듣고, 듣는 동안 채팅창의 🎤 버튼이 빨갛게 깜빡여요.
+      창을 닫거나 숨기면 마이크를 완전히 꺼요. <b>녹음한 소리는 저장하지 않고</b> 받아 적은 글자만 써요.
     </div>
 
     <div class="row">
       <div>
         <div class="row-label">먼저 말 걸기</div>
-        <div class="row-sub">하루 1회, 자리에 있고 대화 중이 아닐 때만 가볍게 한 줄 건네요. 기본 꺼짐</div>
+        <div class="row-sub">하루 1회, 자리에 있고 대화 중이 아닐 때만 가볍게 한 줄 건네요. 처음엔 꺼져 있어요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="proactive-opener-toggle">
@@ -920,14 +920,14 @@
       </select>
     </div>
     <div class="row">
-      <div class="row-label">선톡 기록</div>
+      <div class="row-label">먼저 말 건 기록</div>
       <span class="row-sub" id="opener-counts" style="font-size:11px;">—</span>
     </div>
 
     <div class="row">
       <div>
         <div class="row-label">음성 듣기 (마이크)</div>
-        <div class="row-sub">채팅창에서 말로 입력합니다. 무음이면 캡처하지 않아요(상시 녹음 아님). 기본 꺼짐</div>
+        <div class="row-sub">채팅창에서 말로 입력해요. 조용할 때는 녹음하지 않아요. 처음엔 꺼져 있어요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="mic-enabled-toggle">
@@ -940,26 +940,26 @@
          main의 mic:getState가 ambientIsolated=false를 줄 때만 보인다. -->
     <div class="row" id="mic-consent-row" hidden>
       <div>
-        <div class="row-label">제3자 음성 동의 (세션 단위)</div>
-        <div class="row-sub" id="mic-consent-status">꺼짐 — 함께 있는 사람의 음성은 학습에 쓰지 않아요</div>
+        <div class="row-label">함께 있는 사람 목소리 동의 (세션 단위)</div>
+        <div class="row-sub" id="mic-consent-status">꺼짐 — 함께 있는 사람 목소리는 학습에 쓰지 않아요</div>
       </div>
       <button type="button" class="btn btn-ghost" id="mic-consent-btn" style="white-space:nowrap;">동의 켜기</button>
     </div>
     <div class="row">
-      <div class="row-label">전사 건수(이번 실행)</div>
+      <div class="row-label">받아 적은 횟수 (이번 실행)</div>
       <span class="row-sub" id="mic-transcript-count" style="font-size:11px;">—</span>
     </div>
   </div>
 
   <div class="section" id="ledger-section">
-    <div class="section-title">성장 · 눈치 원장 (계측 전용)</div>
+    <div class="section-title">성장 · 대화 눈치 메모 (기록 전용)</div>
     <div class="helper-text" style="margin-bottom:8px;">
-      대화 화제별로 <b>반응이 편했는지</b>를 수치로만 적어 두는 관찰 기록입니다.
-      <b>대화 원문은 저장하지 않고</b> 화제 이름과 숫자만 남아요.
-      답변 내용에 쓰이는 곳은 두 군데뿐입니다. <b>먼저 말 걸기</b>를 켜 두면 <b>편한 화제</b> 중에서
-      말 걸 주제를 고를 때 참고하고(민감한 화제는 절대 고르지 않음), <b>채팅</b>에서는 '조심'·'민감'
-      화제를 먼저 꺼내지 않고 내가 꺼내면 짧게만 받도록 화제 이름만 전달합니다.
-      분류는 내 PC의 로컬 모델로만 하고, 원시 기록은 90일 뒤 자동으로 지워집니다.
+      대화 화제마다 <b>반응이 편했는지</b>를 숫자로만 적어 두는 기록이에요.
+      <b>대화 내용은 저장하지 않고</b> 화제 이름과 숫자만 남아요.
+      답변에 쓰이는 곳은 두 군데뿐이에요. <b>먼저 말 걸기</b>를 켜 두면 <b>편한 화제</b> 중에서
+      말 걸 주제를 골라요(민감한 화제는 절대 고르지 않아요). <b>채팅</b>에서는 <b>조심하는 화제</b>와
+      민감한 화제를 먼저 꺼내지 않고, 내가 꺼내면 짧게만 받아요. 이때 넘기는 건 화제 이름뿐이에요.
+      화제 분류는 내 PC의 로컬 모델로만 하고, 쌓인 기록은 90일이 지나면 저절로 지워져요.
     </div>
 
     <div class="row">
@@ -974,12 +974,12 @@
     </div>
 
     <div class="row">
-      <div class="row-label">이벤트</div>
+      <div class="row-label">화제 상태 변화</div>
       <span class="row-sub" id="ledger-events" style="font-size:11px;">—</span>
     </div>
 
     <div class="row">
-      <div class="row-label">채팅 배려</div>
+      <div class="row-label">조심하는 화제 반영</div>
       <span class="row-sub" id="ledger-care" style="font-size:11px;">—</span>
     </div>
 
@@ -988,18 +988,18 @@
   </div>
 
   <div class="section" id="courseware-section">
-    <div class="section-title">성장 · 교재 파이프라인</div>
+    <div class="section-title">성장 · 학습 노트</div>
     <div class="helper-text" style="margin-bottom:8px;">
-      그날의 대화를 자리 비운 사이에 <b>익명 복습 교재</b>로 바꾸고, 바꾸는 데 성공한
-      날의 <b>원본은 지웁니다</b>(실패하면 원본을 그대로 두고 다음에 다시 시도해요).
-      쌓인 교재는 <b>주 1회, 자리를 비운 사이에만</b> 로컬 모델 학습에 쓰입니다 —
-      학습 결과가 기준에 못 미치면 버리고 이전 것을 그대로 씁니다.
+      그날 나눈 대화를 자리를 비운 사이에 <b>이름을 지운 학습 노트</b>로 만들고, 노트를 만든
+      날의 <b>대화 원문은 지워요</b>(실패하면 원문을 그대로 두고 다음에 다시 해요).
+      쌓인 학습 노트로 <b>일주일에 한 번, 자리를 비운 사이에만</b> 클라우드 모델이 로컬 모델을 가르쳐요.
+      학습 결과가 기준에 못 미치면 버리고 이전 결과를 그대로 써요.
     </div>
 
     <div class="row">
       <div>
-        <div class="row-label">기억 참조</div>
-        <div class="row-sub">지금 한 말과 관련된 교재를 찾아 대화에 참고로 넘깁니다 (끄면 검색도 하지 않아요)</div>
+        <div class="row-label">학습 노트 참고</div>
+        <div class="row-sub">지금 한 말과 관련된 학습 노트를 찾아 대화에 참고해요. 끄면 찾지도 않아요</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="courseware-reference-toggle">
@@ -1008,27 +1008,27 @@
       </label>
     </div>
     <div class="row">
-      <div class="row-label">참조된 대화</div>
+      <div class="row-label">참고한 횟수</div>
       <span class="row-sub" id="courseware-reference-count" style="font-size:11px;">—</span>
     </div>
 
     <div class="row">
       <div>
-        <div class="row-label">교재</div>
+        <div class="row-label">학습 노트</div>
         <div class="row-sub" id="courseware-cards">읽는 중…</div>
       </div>
-      <button type="button" class="btn btn-ghost" id="courseware-convert-btn" style="white-space:nowrap; flex:0 0 auto;">지금 변환</button>
+      <button type="button" class="btn btn-ghost" id="courseware-convert-btn" style="white-space:nowrap; flex:0 0 auto;">학습 노트 만들기</button>
     </div>
     <div class="row">
-      <div class="row-label">변환 대기</div>
+      <div class="row-label">아직 노트로 만들지 않은 대화</div>
       <span class="row-sub" id="courseware-pending" style="font-size:11px;">—</span>
     </div>
     <div class="row">
-      <div class="row-label">최근 7일 교사·채팅 합산 지출</div>
+      <div class="row-label">최근 7일 클라우드 모델 사용료 (채팅 포함)</div>
       <span class="row-sub" id="courseware-spend" style="font-size:11px;">—</span>
     </div>
     <div class="row">
-      <div class="row-label">마지막 변환</div>
+      <div class="row-label">마지막으로 만든 때</div>
       <span class="row-sub" id="courseware-last" style="font-size:11px;">—</span>
     </div>
     <div class="row-sub" id="courseware-warn" style="margin-top:6px; display:none;"></div>
@@ -1043,7 +1043,7 @@
 <div class="loading-overlay" id="loading-overlay">
   <div class="loading-box">
     <div class="loading-title">캐릭터 가져오는 중</div>
-    <div class="loading-text" id="loading-text">파일을 분석하고 있습니다...</div>
+    <div class="loading-text" id="loading-text">파일을 살펴보고 있어요…</div>
     <div class="loading-steps" id="loading-steps"></div>
   </div>
 </div>
@@ -1083,17 +1083,17 @@ async function init() {
     function renderSpectateStatus(st) {
       if (!spectateStatus) return
       if (!st || (!st.active && !st.sourceName)) {
-        spectateStatus.textContent = '선택 안 함 — 관전이 꺼져 있어요'
+        spectateStatus.textContent = '고른 창 없음 — 화면 함께 보기가 꺼져 있어요'
       } else if (st.paused) {
-        spectateStatus.textContent = '일시정지됨 — 화면을 보지 않는 중'
+        spectateStatus.textContent = '잠시 멈춤 — 화면을 보지 않고 있어요'
       } else if (st.active) {
         spectateStatus.textContent = '보는 중: ' + st.sourceName
       } else {
-        spectateStatus.textContent = '선택 안 함 — 관전이 꺼져 있어요'
+        spectateStatus.textContent = '고른 창 없음 — 화면 함께 보기가 꺼져 있어요'
       }
       // 눈치 원장이 막은 마지막 코멘트 — 사유와 화제만(원문 없음).
       if (st?.lastVeto) {
-        spectateStatus.textContent += ' · 최근 참은 말: ' + st.lastVeto.reason + '/' + (st.lastVeto.topicId || '?')
+        spectateStatus.textContent += ' · 최근에 참은 말: ' + st.lastVeto.reason + '/' + (st.lastVeto.topicId || '?')
           + ' (' + new Date(st.lastVeto.at).toLocaleTimeString() + ')'
       }
       if (spectatePausedToggle) spectatePausedToggle.checked = st?.paused === true
@@ -1115,7 +1115,7 @@ async function init() {
       if (list.length === 0) {
         const empty = document.createElement('option')
         empty.disabled = true
-        empty.textContent = '(고를 수 있는 창이 없어요 — 창을 띄우고 새로고침)'
+        empty.textContent = '(고를 수 있는 창이 없어요. 창을 연 뒤 새로고침을 눌러 주세요)'
         spectateSelect.appendChild(empty)
       }
       if (keep && list.some((w) => w.id === keep)) spectateSelect.value = keep
@@ -1182,12 +1182,12 @@ async function init() {
 // 읽기 + 수동 라벨 + 삭제 + 초기화. 여기서 바꾼 값은 원장 파일에만 쓰이고
 // 캐릭터 동작에는 아무 영향이 없다(계측 전용).
 const LEDGER_GOLD_OPTIONS = [
-  ['', '라벨 없음'],
-  ['sensitive', '민감'],
-  ['neutral', '중립'],
-  ['joke_ok', '농담OK']
+  ['', '내 표시 없음'],
+  ['sensitive', '민감한 화제'],
+  ['neutral', '보통'],
+  ['joke_ok', '농담 괜찮음']
 ]
-const LEDGER_STATE_TEXT = { pending: '판단 보류', neutral: '보통', frozen: '조심', thawed: '편함' }
+const LEDGER_STATE_TEXT = { pending: '아직 모름', neutral: '보통', frozen: '조심하는 화제', thawed: '편한 화제' }
 
 function renderLedger(state) {
   const statusEl = document.getElementById('ledger-status')
@@ -1197,7 +1197,7 @@ function renderLedger(state) {
   if (!statusEl || !tableEl) return
 
   if (!state || state.error) {
-    statusEl.textContent = '원장을 읽지 못했어요' + (state?.error ? ' — ' + state.error : '')
+    statusEl.textContent = '대화 눈치 메모를 읽지 못했어요' + (state?.error ? ' — ' + state.error : '')
     tableEl.innerHTML = ''
     return
   }
@@ -1205,24 +1205,24 @@ function renderLedger(state) {
   const last = state.lastAggregatedAt
     ? new Date(state.lastAggregatedAt).toLocaleString('ko-KR')
     : '아직 없음'
-  statusEl.textContent = `원시 기록 ${state.rawCount}건 / ${state.rawDays}일 · 마지막 집계 ${last}`
+  statusEl.textContent = `쌓인 기록 ${state.rawCount}건 (${state.rawDays}일치) · 마지막 집계 ${last}`
   if (eventsEl) {
     const e = state.events || {}
     eventsEl.textContent =
-      `강등 ${e.demote || 0} · 승급 ${e.promote || 0} · 오동결 ${e.falseFreeze || 0} · 오해빙 ${e.falseThaw || 0}`
+      `조심으로 바뀜 ${e.demote || 0} · 편해짐 ${e.promote || 0} · 내 표시와 다른 조심 ${e.falseFreeze || 0} · 내 표시와 다른 편함 ${e.falseThaw || 0}`
   }
   if (pathEl) pathEl.textContent = state.path || ''
   const careEl = document.getElementById('ledger-care')
   if (careEl) {
     const care = state.careTopics || []
-    careEl.textContent = `채팅 배려 중인 화제 ${care.length}개` + (care.length ? ' — ' + care.join(', ') : '')
+    careEl.textContent = `채팅에 반영 중인 화제 ${care.length}개` + (care.length ? ' — ' + care.join(', ') : '')
   }
 
   tableEl.innerHTML = ''
   if (!state.topics || state.topics.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'row-sub'
-    empty.textContent = '아직 모인 기록이 없어요. 대화를 나누면 화제별로 쌓입니다.'
+    empty.textContent = '아직 모인 기록이 없어요. 대화를 나누면 화제별로 쌓여요.'
     tableEl.appendChild(empty)
     return
   }
@@ -1241,7 +1241,7 @@ function renderLedger(state) {
     const sub = document.createElement('div')
     sub.className = 'row-sub'
     const scoreText = t.score == null ? '—' : t.score.toFixed(2)
-    sub.textContent = `점수 ${scoreText} · 증거 ${t.evidence}건 · ${LEDGER_STATE_TEXT[t.state] || t.state}`
+    sub.textContent = `점수 ${scoreText} · 근거 ${t.evidence}건 · ${LEDGER_STATE_TEXT[t.state] || t.state}`
     left.appendChild(name)
     left.appendChild(sub)
 
@@ -1284,7 +1284,7 @@ function bindLedgerPanel() {
     renderLedger(await window.api.ledger.aggregate())
   })
   document.getElementById('ledger-reset-btn')?.addEventListener('click', async () => {
-    if (!confirm('눈치 원장의 기록을 전부 지울까요? 되돌릴 수 없습니다.')) return
+    if (!confirm('대화 눈치 메모를 전부 지울까요? 되돌릴 수 없어요.')) return
     renderLedger(await window.api.ledger.reset())
   })
   window.api.ledger.getState().then(renderLedger).catch(() => {})
@@ -1299,7 +1299,7 @@ function renderMicConsent(st) {
   const toggle = document.getElementById('mic-enabled-toggle')
   if (toggle && st && st.sttAvailable === false) {
     toggle.disabled = true
-    toggle.title = '음성 인식 모듈(whisper)이 설치되지 않았어요'
+    toggle.title = '음성 인식 기능이 설치되어 있지 않아요'
     let note = document.getElementById('mic-stt-note')
     if (!note) {
       note = document.createElement('div')
@@ -1308,7 +1308,7 @@ function renderMicConsent(st) {
       note.style.cssText = 'font-size:11px;color:#d9a441;'
       toggle.closest('.row')?.appendChild(note)
     }
-    note.textContent = '음성 인식 모듈이 이 설치본에 없어 마이크를 쓸 수 없어요'
+    note.textContent = '이 설치본에는 음성 인식 기능이 없어서 마이크를 쓸 수 없어요'
   } else if (toggle && st && st.sttAvailable === true) {
     toggle.disabled = false
     document.getElementById('mic-stt-note')?.remove()
@@ -1322,8 +1322,8 @@ function renderMicConsent(st) {
   const on = st?.consent === true
   if (statusEl) {
     statusEl.textContent = on
-      ? `켜짐 (${st.consentDate || '오늘'}) — 앱을 다시 켜면 자동으로 꺼집니다`
-      : '꺼짐 — 함께 있는 사람의 음성은 학습에 쓰지 않아요'
+      ? `켜짐 (${st.consentDate || '오늘'}) — 앱을 다시 켜면 저절로 꺼져요`
+      : '꺼짐 — 함께 있는 사람 목소리는 학습에 쓰지 않아요'
   }
   if (btn) btn.textContent = on ? '동의 끄기' : '동의 켜기'
   const countEl = document.getElementById('mic-transcript-count')
@@ -1336,7 +1336,7 @@ function renderOpenerCounts(st) {
   if (!st || st.error) { el.textContent = '—'; return }
   const c = st.counts || {}
   const last = st.lastOpenerAt ? new Date(st.lastOpenerAt).toLocaleString('ko-KR') : '아직 없음'
-  el.textContent = `발송 ${c.sent || 0} · 응답 ${c.replied || 0} · 무시 ${c.ignored || 0} (마지막: ${last})`
+  el.textContent = `말 건 횟수 ${c.sent || 0} · 대답함 ${c.replied || 0} · 넘어감 ${c.ignored || 0} (마지막: ${last})`
 }
 
 function bindProactivePanel() {
@@ -1358,11 +1358,11 @@ function renderCourseware(state) {
     cardsEl.textContent = '상태를 읽지 못했어요' + (state?.error ? ' — ' + state.error : '')
     return
   }
-  cardsEl.textContent = `카드 ${state.totalCards}장 / ${state.cardDays}일치`
+  cardsEl.textContent = `${state.totalCards}장 (${state.cardDays}일치)`
   const pendingEl = document.getElementById('courseware-pending')
   if (pendingEl) {
     pendingEl.textContent = state.pendingDays > 0
-      ? `${state.pendingDays}일 (가장 오래된 ${state.oldestPendingDay})`
+      ? `${state.pendingDays}일치 (가장 오래된 날: ${state.oldestPendingDay})`
       : '없음'
   }
   const spendEl = document.getElementById('courseware-spend')
@@ -1383,7 +1383,7 @@ function renderCourseware(state) {
   const warnEl = document.getElementById('courseware-warn')
   if (warnEl) {
     const parts = []
-    for (const w of state.warnings || []) parts.push(`${w.day} 변환이 ${w.streak}회 연속 실패했어요 (원본은 그대로 있습니다)`)
+    for (const w of state.warnings || []) parts.push(`${w.day} 학습 노트 만들기가 ${w.streak}번 연속 실패했어요 (대화 원문은 그대로 있어요)`)
     if (state.lastError) parts.push(`최근 오류: ${state.lastError.day} — ${state.lastError.message}`)
     warnEl.textContent = parts.join(' · ')
     warnEl.style.display = parts.length ? '' : 'none'
@@ -1398,12 +1398,12 @@ function bindCoursewarePanel() {
   const btn = document.getElementById('courseware-convert-btn')
   btn?.addEventListener('click', async () => {
     btn.disabled = true
-    btn.textContent = '변환 중…'
+    btn.textContent = '만드는 중…'
     try {
       renderCourseware(await window.api.courseware.convertNow())
     } finally {
       btn.disabled = false
-      btn.textContent = '지금 변환'
+      btn.textContent = '학습 노트 만들기'
     }
   })
   window.api.courseware.getState().then(renderCourseware).catch(() => {})
@@ -1411,8 +1411,8 @@ function bindCoursewarePanel() {
 
 // ── 성장 관제판 (A-3 학습 + A-4 승격) ───────────────────────────────────────
 const TRAINING_STATUS_LABEL = {
-  passed: '채택', discarded: '폐기', interrupted: '중단',
-  deferred: '연기', failed: '실패'
+  passed: '적용함', discarded: '버림', interrupted: '중단',
+  deferred: '미룸', failed: '실패'
 }
 
 // 유형 이름은 관제판에서만 쓰는 사용자용 라벨이다 — 판정 로직의 유형 id는
@@ -1420,7 +1420,7 @@ const TRAINING_STATUS_LABEL = {
 const PROMOTION_TYPE_LABEL = {
   greeting: '인사·안부',
   reaction: '짧은 호응',
-  personal: '내 얘기 (기억 참조)',
+  personal: '내 얘기 (기억 참고)',
   general: '그 밖의 대화'
 }
 
@@ -1443,12 +1443,12 @@ function renderGrowthTypes(state) {
     sub.className = 'row-sub'
     sub.style.fontSize = '11px'
     const sim = Number.isFinite(t.avgSimilarity) ? `${(t.avgSimilarity * 100).toFixed(0)}%` : '—'
-    sub.textContent = `시도 ${t.attempts || 0}회 · 평균 유사도 ${sim}`
+    sub.textContent = `시도 ${t.attempts || 0}회 · 평균 점수 ${sim}`
     left.appendChild(sub)
     const badge = document.createElement('span')
     badge.className = 'row-sub'
     badge.style.cssText = 'font-size:11px; flex:0 0 auto; white-space:nowrap;'
-    badge.textContent = t.recommended ? '승격 추천' : (t.reason || '—')
+    badge.textContent = t.recommended ? '맡겨도 좋아요' : (t.reason || '—')
     if (t.recommended) badge.style.color = '#a78bfa'
     row.appendChild(left)
     row.appendChild(badge)
@@ -1463,8 +1463,8 @@ function renderGrowthTypes(state) {
     const pSub = document.createElement('div')
     pSub.className = 'row-sub'
     pSub.textContent = promotion[type]
-      ? '로컬이 직접 답합니다 (어색하면 자동으로 원래대로)'
-      : (t.recommended ? '켜면 로컬이 이 종류의 말을 맡습니다' : '아직 검증이 덜 됐어요')
+      ? '맡김 — 로컬 모델이 직접 답해요. 어색하면 저절로 원래대로 돌아가요'
+      : (t.recommended ? '켜면 로컬 모델이 이 종류의 말을 맡아요' : '아직 검증이 덜 됐어요')
     pLeft.appendChild(pSub)
     const toggle = document.createElement('label')
     toggle.className = 'toggle'
@@ -1493,7 +1493,7 @@ function renderGrowthTypes(state) {
   const demoEl = document.getElementById('growth-demotions')
   if (demoEl) {
     const list = (state.demotions || []).slice(0, 3).map((d) =>
-      `${new Date(d.at).toLocaleDateString('ko-KR')} ${PROMOTION_TYPE_LABEL[d.type] || d.type} 자동 강등 — ${d.reason}`)
+      `${new Date(d.at).toLocaleDateString('ko-KR')} ${PROMOTION_TYPE_LABEL[d.type] || d.type} 맡기기 자동 해제 — ${d.reason}`)
     demoEl.textContent = list.join(' · ')
     demoEl.style.display = list.length ? '' : 'none'
   }
@@ -1504,12 +1504,12 @@ function renderGrowthServing(state) {
   if (!el) return
   const s = state.serving || {}
   el.textContent = s.total
-    ? `로컬 ${s.local}회 / API ${s.api}회 (로컬 ${((s.local / s.total) * 100).toFixed(0)}%)`
-    : '아직 없음 (승격된 유형이 없거나 해당 발화가 없었어요)'
+    ? `로컬 모델 ${s.local}회 · 클라우드 모델 ${s.api}회 (로컬 모델 ${((s.local / s.total) * 100).toFixed(0)}%)`
+    : '아직 없음 (맡긴 종류가 없거나 그런 말이 없었어요)'
   const reasonsEl = document.getElementById('growth-serving-reasons')
   if (reasonsEl) {
     const parts = (s.topReasons || []).map((r) => `${r.reason} ${r.count}회`)
-    reasonsEl.textContent = parts.length ? `API로 넘어간 사유: ${parts.join(' · ')}` : ''
+    reasonsEl.textContent = parts.length ? `클라우드 모델이 대신 답한 이유: ${parts.join(' · ')}` : ''
     reasonsEl.style.display = parts.length ? '' : 'none'
   }
 }
@@ -1525,7 +1525,7 @@ function renderGrowthAnchors(state) {
     // 안내 문구가 있는데도 빈칸으로 보인다.
     opt.value = ''
     opt.disabled = true
-    opt.textContent = '보관된 앵커 없음'
+    opt.textContent = '보관된 학습 결과 없음'
     select.appendChild(opt)
   }
   for (const version of anchors) {
@@ -1555,15 +1555,15 @@ function renderNightSchool(state) {
   const deltaEl = document.getElementById('training-delta')
   if (deltaEl) {
     deltaEl.textContent = state.adoptedVersion
-      ? `${state.adoptedVersion} / 앵커 ${state.anchorCount}개`
-      : '아직 없음 (그림자 휴면)'
+      ? `${state.adoptedVersion} · 보관 ${state.anchorCount}개`
+      : '아직 없음 (답변 비교 쉬는 중)'
   }
   const topicsEl = document.getElementById('training-topics')
   if (topicsEl) {
     const rows = state.topicCounts || []
     topicsEl.textContent = rows.length
       ? rows.map((t) => `${t.label} ${t.count}`).join(' · ')
-      : '아직 없음 (다음 학습 때 분류)'
+      : '아직 없음 (다음 학습 때 나눠요)'
   }
   const nextEl = document.getElementById('training-next')
   if (nextEl) nextEl.textContent = state.next?.reason || '—'
@@ -1571,7 +1571,7 @@ function renderNightSchool(state) {
   if (shadowEl) {
     const s = state.shadow || {}
     shadowEl.textContent = s.attempts7d
-      ? `시도 ${s.attempts7d}회 / 평균 유사도 ${(s.avgSimilarity * 100).toFixed(1)}%`
+      ? `시도 ${s.attempts7d}회 · 평균 점수 ${(s.avgSimilarity * 100).toFixed(1)}%`
       : `시도 없음${s.dormantReason ? ` (${s.dormantReason})` : ''}`
   }
   renderGrowthAnchors(state)
@@ -1581,7 +1581,7 @@ function renderNightSchool(state) {
   if (noteEl) {
     const parts = []
     if (state.result?.reason) parts.push(state.result.reason)
-    if (state.signals && !state.signals.pythonOk) parts.push('학습용 파이썬 경로가 없어 학습 기능이 꺼져 있어요')
+    if (state.signals && !state.signals.pythonOk) parts.push('학습 도구(파이썬)가 없어서 학습 기능이 꺼져 있어요')
     noteEl.textContent = parts.join(' · ')
     noteEl.style.display = parts.length ? '' : 'none'
   }
@@ -1842,12 +1842,12 @@ async function importFile(file) {
     (file?.path && !fileName.includes('.'))
 
   if (!isDirectoryCandidate && !['zip', 'vrm', 'pmx', 'pmd'].includes(ext)) {
-    showToast('지원하지 않는 소스입니다. ZIP / VRM / PMX / PMD / 모델 폴더만 가능합니다.', 'error')
+    showToast('지원하지 않는 파일이에요. ZIP·VRM·PMX·PMD 파일이나 모델 폴더만 넣을 수 있어요.', 'error')
     return
   }
 
   if (typeof window.api.importCharacterZip !== 'function') {
-    showToast('캐릭터 import API가 연결되지 않았습니다.', 'error')
+    showToast('캐릭터 가져오기 기능이 연결되지 않았어요.', 'error')
     return
   }
 
@@ -1869,14 +1869,14 @@ async function importFile(file) {
   )
   if (dupByName) {
     const confirmed = confirm(
-      `"${dupByName.displayName || dupByName.customName}" 캐릭터가 이미 등록되어 있습니다.\n그래도 추가로 등록할까요?`
+      `"${dupByName.displayName || dupByName.customName}" 캐릭터가 이미 등록되어 있어요.\n그래도 하나 더 등록할까요?`
     )
     if (!confirmed) return
   }
 
-  const STEPS = ['소스 분석', '모델 파일 탐색', '텍스처 매핑 생성', '프로필 생성', '레지스트리 등록']
+  const STEPS = ['파일 살펴보기', '모델 파일 찾기', '텍스처 연결', '캐릭터 정보 만들기', '목록에 등록']
 
-  setLoading(true, '캐릭터를 등록하고 있습니다...')
+  setLoading(true, '캐릭터를 등록하고 있어요…')
   let stepTimer = null
   setLoadingStep(STEPS, 0)
 
@@ -1902,7 +1902,7 @@ async function importFile(file) {
     setLoadingStep(STEPS, STEPS.length) // 전부 완료 표시
 
     if (!result || result.error) {
-      throw new Error(result?.error || '응답이 비어 있습니다.')
+      throw new Error(result?.error || '응답이 비어 있어요.')
     }
 
     // 배지("적용 중")는 레지스트리 활성 캐릭터만 따른다 — 가져오기가 활성으로
@@ -1969,12 +1969,12 @@ function showToast(message, type = 'info', duration = 3000) {
 // 문의 스크린샷 한 장으로 원인이 잡히게.
 const ERROR_PATTERNS = [
   [/No module named ['"]?([\w.]+)/i, (m) => `필요한 부품(${m[1]})이 설치되지 않았어요`],
-  [/CUDA out of memory|OutOfMemoryError|DefaultCPUAllocator/i, () => '메모리가 부족해요 (다른 프로그램을 닫고 다시 시도해 주세요)'],
-  [/ECONNREFUSED|ConnectError|Connection refused|백엔드 (?:응답|연결)/i, () => '백엔드에 연결할 수 없어요'],
+  [/CUDA out of memory|OutOfMemoryError|DefaultCPUAllocator/i, () => '메모리가 부족해요. 다른 프로그램을 닫고 다시 시도해 주세요'],
+  [/ECONNREFUSED|ConnectError|Connection refused|백엔드 (?:응답|연결)/i, () => 'AI 엔진에 연결할 수 없어요'],
   [/getaddrinfo|ENOTFOUND|Temporary failure in name resolution|SSLError|Max retries/i, () => '인터넷 연결에 실패했어요'],
   [/AbortError|ETIMEDOUT|timed? ?out|ReadTimeout/i, () => '시간이 초과됐어요'],
   [/401|Unauthorized|invalid[_ ]api[_ ]key|authentication_error|API key/i, () => 'API 키가 없거나 잘못됐어요'],
-  [/429|rate[_ ]limit/i, () => '요청이 너무 많아요 (잠시 뒤 다시)'],
+  [/429|rate[_ ]limit/i, () => '요청이 너무 많아요. 잠시 뒤 다시 시도해 주세요'],
   [/ENOENT|FileNotFoundError|No such file/i, () => '파일을 찾을 수 없어요'],
   [/EACCES|EPERM|PermissionError|Access is denied/i, () => '권한이 없어요'],
   [/Format not recognised|Error opening|unsupported format/i, () => '음성 파일 형식을 읽을 수 없어요'],
@@ -2012,7 +2012,7 @@ function applyToUI() {
   document.getElementById('ai-mode-director').value = settings.aiModeDirector || ''
   document.getElementById('ai-mode-spectate').value = settings.aiModeSpectate || ''
   document.getElementById('memory-turns').value = settings.memoryTurns || 10
-  document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '턴'
+  document.getElementById('memory-val').textContent = (settings.memoryTurns || 10) + '번'
   document.getElementById('tts-enabled').checked = settings.ttsEnabled !== false
   // 개발자 게이트가 꺼진 배포본에선 이 select가 DOM에 없다.
   const ttsEngineSel = document.getElementById('tts-engine')
@@ -2034,7 +2034,7 @@ document.getElementById('char-scale').addEventListener('input', e => {
 })
 
 document.getElementById('memory-turns').addEventListener('input', e => {
-  document.getElementById('memory-val').textContent = e.target.value + '턴'
+  document.getElementById('memory-val').textContent = e.target.value + '번'
 })
 
 // ── 다중 모니터 선택 ──
@@ -2052,7 +2052,7 @@ document.getElementById('memory-turns').addEventListener('input', e => {
     for (const d of displays) {
       const opt = document.createElement('option')
       opt.value = String(d.id)
-      opt.textContent = `모니터 ${d.index}${d.primary ? ' (주)' : ''} — ${d.width}×${d.height}`
+      opt.textContent = `모니터 ${d.index}${d.primary ? ' (주 모니터)' : ''} — ${d.width}×${d.height}`
       if (d.current) opt.selected = true
       sel.appendChild(opt)
     }
@@ -2066,11 +2066,11 @@ document.getElementById('memory-turns').addEventListener('input', e => {
           lastValue = picked
         } else {
           sel.value = lastValue
-          showToast('모니터 이동에 실패했어요. 연결 상태를 확인해 주세요.', 'error')
+          showToast('모니터를 옮기지 못했어요. 모니터 연결을 확인해 주세요.', 'error')
         }
       } catch {
         sel.value = lastValue
-        showToast('모니터 이동에 실패했어요.', 'error')
+        showToast('모니터를 옮기지 못했어요.', 'error')
       } finally {
         sel.disabled = false
       }
@@ -2128,9 +2128,8 @@ function renderProviderHint(status) {
   if (available.length === 0 && status?.mode !== 'local') {
     hintEl.hidden = false
     hintEl.textContent =
-      'No provider has credentials. Set APIA_GROQ_KEY, APIA_ANTHROPIC_KEY, ' +
-      'or APIA_HF_TOKEN in backend.env, or install torch+transformers for ' +
-      'local mode. Restart the backend after changes.'
+      '쓸 수 있는 답변 모델이 없어요. 위에서 API 키를 넣거나 로컬 모델을 설치한 뒤 ' +
+      '[저장 및 적용]을 눌러 주세요.'
     return
   }
   hintEl.hidden = true
@@ -2164,7 +2163,7 @@ function applyLocalModelLabel(modelId) {
   const short = String(modelId || '').split('/').pop().replace(/-Instruct.*$/i, '')
   if (!short) return
   for (const opt of document.querySelectorAll('select option[value="local"]')) {
-    opt.textContent = `로컬 (${short})`
+    opt.textContent = `로컬 모델 (${short})`
   }
 }
 
@@ -2187,7 +2186,7 @@ async function refreshProviderStatus() {
   if (!status) {
     setProviderStatusValue('ps-active', '--', null)
     setProviderStatusValue('ps-available', '--', null)
-    setProviderStatusValue('ps-state', '백엔드에 연결할 수 없어요', 'ps-state-unreachable')
+    setProviderStatusValue('ps-state', 'AI 엔진에 연결할 수 없어요', 'ps-state-unreachable')
     if (errorRow) errorRow.hidden = true
     renderProviderHint(null)
     clearProviderStatusAutoRefresh() // no point auto-retrying against a dead backend
@@ -2268,7 +2267,7 @@ function updateCosyvoiceRow() {
   if (label) {
     label.textContent = cosyvoicePromptName
       ? `선택됨: ${cosyvoicePromptName}`
-      : '아직 없음 — 기본 한국어 목소리를 참조로 씁니다'
+      : '아직 없음 — 기본 한국어 목소리를 샘플로 써요'
   }
 }
 
@@ -2285,7 +2284,7 @@ async function pickCosyvoicePrompt(file) {
     cosyvoicePromptName = file.name
     updateCosyvoiceRow()
   } catch (error) {
-    setErrorText(label, error, '참조 음성 저장에 실패했어요')
+    setErrorText(label, error, '목소리 샘플 저장에 실패했어요')
   }
 }
 
@@ -2296,7 +2295,7 @@ async function loadVoices() {
     updateCosyvoiceRow()
     const sel = document.getElementById('voice-select')
     sel.innerHTML = '<option value="">기본 목소리</option>'
-    if (sel.firstElementChild) sel.firstElementChild.textContent = 'Default Voice'
+    if (sel.firstElementChild) sel.firstElementChild.textContent = '기본 목소리'
     d.voices?.forEach(v => {
       const o = document.createElement('option')
       o.value = v.id
@@ -2328,7 +2327,7 @@ const VOICE_CLONE_MAX_SEC = 30
 const VOICE_CLONE_STATUS_LABELS = {
   preparing: '준비 중…',
   validating: '음성 파일 확인 중…',
-  loading_model: '음성 모델 준비 중… (처음 한 번은 다운로드로 몇 분 걸려요)',
+  loading_model: '음성 모델 준비 중… (처음 한 번은 내려받느라 몇 분 걸려요)',
   generating_preview: '미리듣기 만드는 중…',
   done: '완성!',
   error: '실패했어요'
@@ -2493,7 +2492,7 @@ function renderVoiceCloneFiles() {
   total.textContent = `총 ${totalSec.toFixed(1)}초` + (
     tooShort ? ` — 너무 짧아요 (${VOICE_CLONE_MIN_SEC}초 이상 필요)` :
     overLong ? ' — 앞 30초만 사용해요' :
-    ' — 사용 범위(5~30초)'
+    ' — 쓸 수 있는 길이예요 (5~30초)'
   )
   listEl.appendChild(total)
 }
@@ -2530,7 +2529,7 @@ async function startVoiceClone() {
   doneEl.title = ''
   wrapEl.hidden = false
   barEl.style.width = '0%'
-  statusEl.textContent = '음성 합성 중입니다…'
+  statusEl.textContent = '목소리 만드는 중…'
 
   try {
     const wavBase64 = await buffersToCloneWavBase64(voiceCloneItems.map(it => it.buffer))
@@ -2541,7 +2540,7 @@ async function startVoiceClone() {
     const result = await new Promise((resolve, reject) => {
       const poll = async () => {
         const p = await window.api.voiceCloneProgress(res.job_id)
-        statusEl.textContent = `음성 합성 중입니다… ${VOICE_CLONE_STATUS_LABELS[p.status] || p.status} (${p.progress || 0}%)`
+        statusEl.textContent = `목소리 만드는 중… ${VOICE_CLONE_STATUS_LABELS[p.status] || p.status} (${p.progress || 0}%)`
         barEl.style.width = `${Math.max(2, p.progress || 0)}%`
         if (p.status === 'done') return resolve(p)
         if (p.status === 'error') return reject(new Error(p.error || '복제 준비에 실패했어요'))
@@ -2553,7 +2552,7 @@ async function startVoiceClone() {
           if (d?.voices?.some(v => v.id === `custom:${voiceId}`)) {
             return resolve({ status: 'done', progress: 100, voice_id: voiceId })
           }
-          return reject(new Error('작업 상태를 잃어버렸어요 (백엔드 재시작?). 다시 시도해 주세요.'))
+          return reject(new Error('진행 상황을 놓쳤어요. AI 엔진이 다시 시작됐을 수 있어요. 다시 시도해 주세요.'))
         }
         setTimeout(poll, 1000)
       }
@@ -2747,7 +2746,7 @@ async function save() {
     // retry. The rest of the settings still flow through `applySettings`.
     const envOk = await persistBackendEnvUpdates({
       onPhase: (phase) => {
-        if (phase === 'restarting') saveBusy.set('백엔드 재시작 중…')
+        if (phase === 'restarting') saveBusy.set('AI 엔진 다시 시작 중…')
       }
     })
     if (!envOk) return
@@ -2782,12 +2781,12 @@ async function refreshPersonalRow() {
 function bindPersonalFolder() {
   document.getElementById('personal-open')?.addEventListener('click', async () => {
     const r = await window.api.openPersonalFolder().catch((e) => ({ ok: false, error: e }))
-    if (!r?.ok) showToast('폴더를 열지 못했습니다: ' + friendlyError(r?.error, '알 수 없는 오류'), 'error')
+    if (!r?.ok) showToast('폴더를 열지 못했어요: ' + friendlyError(r?.error, '알 수 없는 오류'), 'error')
     refreshPersonalRow()
   })
   document.getElementById('personal-reset')?.addEventListener('click', async () => {
     const r = await window.api.resetPersonalPersona().catch((e) => ({ ok: false, error: e }))
-    if (!r?.ok) showToast('되돌리지 못했습니다: ' + friendlyError(r?.error, '알 수 없는 오류'), 'error')
+    if (!r?.ok) showToast('되돌리지 못했어요: ' + friendlyError(r?.error, '알 수 없는 오류'), 'error')
     else if (r.backup) showToast('기본 성격으로 돌아갔어요. 내 파일은 .bak으로 남겨 뒀어요.', 'info', 3000)
     refreshPersonalRow()
   })
@@ -2803,10 +2802,10 @@ function bindBackendEnvControls() {
       try {
         const result = await window.api.openBackendDataDir()
         if (!result?.ok) {
-          showToast('폴더를 열지 못했습니다: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error')
+          showToast('폴더를 열지 못했어요: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error')
           return
         }
-        showToast('backend.env 폴더를 열었습니다.', 'info', 1800)
+        showToast('backend.env 폴더를 열었어요.', 'info', 1800)
       } catch (err) {
         showToast('폴더 열기 실패: ' + friendlyError(err), 'error')
       }
@@ -2819,15 +2818,15 @@ function bindBackendEnvControls() {
       try {
         const result = await window.api.openBackendEnvFile()
         if (!result?.ok) {
-          showToast('backend.env 파일을 열지 못했습니다: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error')
+          showToast('backend.env 파일을 열지 못했어요: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error')
           return
         }
         if (result.missing) {
-          showToast('backend.env가 아직 없어 폴더만 열었습니다. API 키를 저장하면 생성됩니다.', 'info', 3500)
+          showToast('backend.env가 아직 없어서 폴더만 열었어요. API 키를 저장하면 파일이 생겨요.', 'info', 3500)
         } else if (result.fallback) {
-          showToast('편집기 연결이 없어 파일을 폴더에서 표시했습니다.', 'info', 2800)
+          showToast('파일을 열 프로그램이 없어서 폴더에서 보여 드렸어요.', 'info', 2800)
         } else {
-          showToast('backend.env 파일을 열었습니다.', 'info', 1800)
+          showToast('backend.env 파일을 열었어요.', 'info', 1800)
         }
       } catch (err) {
         showToast('파일 열기 실패: ' + friendlyError(err), 'error')
@@ -2860,7 +2859,7 @@ function bindBackendEnvControls() {
         clearBtn.disabled = true
         const statusEl = row.querySelector('[data-status]')
         if (statusEl) {
-          statusEl.textContent = '저장 시 삭제됨'
+          statusEl.textContent = '저장하면 삭제돼요'
           statusEl.classList.remove('present')
         }
       })
@@ -2980,26 +2979,26 @@ async function persistBackendEnvUpdates({ onPhase } = {}) {
 //  - real failure → error toast + false
 async function triggerBackendRestart() {
   if (typeof window.api.restartBackend !== 'function') return true
-  showToast('백엔드 재시작 중…', 'info', 2500)
+  showToast('AI 엔진 다시 시작 중…', 'info', 2500)
   try {
     const result = await window.api.restartBackend()
     if (result?.skipped === 'e2e') return true
     if (result?.skipped === 'not-managed') {
-      showToast('외부 백엔드라 재시작을 건너뛰었습니다. 수동으로 재시작하세요.', 'info', 4000)
+      showToast('따로 실행 중인 AI 엔진이라 다시 시작하지 않았어요. 직접 다시 시작해 주세요.', 'info', 4000)
       return true
     }
     if (result?.skipped === 'failed-start') {
-      showToast('백엔드가 시작되지 않은 상태입니다. 로그를 확인하세요.', 'error', 5000)
+      showToast('AI 엔진이 켜져 있지 않아요. 기록 파일을 확인해 주세요.', 'error', 5000)
       return false
     }
     if (result?.ok) {
-      showToast('백엔드 재시작 완료. 새 키가 적용되었습니다.', 'info', 2800)
+      showToast('AI 엔진을 다시 시작했어요. 새 키가 적용됐어요.', 'info', 2800)
       return true
     }
-    showToast('백엔드 재시작 실패: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error', 5000)
+    showToast('AI 엔진 다시 시작 실패: ' + friendlyError(result?.error, '알 수 없는 오류'), 'error', 5000)
     return false
   } catch (err) {
-    showToast('백엔드 재시작 실패: ' + friendlyError(err), 'error', 5000)
+    showToast('AI 엔진 다시 시작 실패: ' + friendlyError(err), 'error', 5000)
     return false
   }
 }
@@ -3031,12 +3030,12 @@ function bindDataPanelControls() {
     try {
       const result = await window.api.store.memorySummarize()
       if (result?.summary_id != null) {
-        showToast('새 요약 ' + result.summary_id + '번 생성', 'info', 2500)
+        showToast('요약을 새로 만들었어요 (' + result.summary_id + '번)', 'info', 2500)
       } else {
         const reason = result?.stats?.last_error
           ? friendlyError(result.stats.last_error)
-          : '아직 임계치에 못 미쳤어요'
-        showToast('요약 안 만들어짐: ' + reason, 'info', 3500)
+          : '아직 요약할 만큼 대화가 쌓이지 않았어요'
+        showToast('요약을 만들지 않았어요: ' + reason, 'info', 3500)
       }
     } catch (err) {
       showToast('요약 실패: ' + friendlyError(err), 'error', 4000)
@@ -3054,11 +3053,11 @@ function bindDataPanelControls() {
       if (picked?.canceled || !picked?.path) return
       const result = await window.api.store.filesAddFolder(picked.path)
       if (result?.status === 'rejected') {
-        showToast('폴더 추가 거부: ' + (result.reason || '알 수 없음'), 'error', 4500)
+        showToast('폴더를 추가할 수 없어요: ' + (result.reason || '알 수 없음'), 'error', 4500)
       } else if (result?.status === 'exists') {
-        showToast('이미 등록된 폴더입니다.', 'info', 2500)
+        showToast('이미 등록된 폴더예요.', 'info', 2500)
       } else if (result?.status === 'added') {
-        showToast('폴더 추가됨. 재인덱싱을 권장합니다.', 'info', 2800)
+        showToast('폴더를 추가했어요. [다시 읽기]를 눌러 주세요.', 'info', 2800)
       } else {
         showToast('폴더 추가 실패', 'error', 3500)
       }
@@ -3075,7 +3074,7 @@ function bindDataPanelControls() {
     const label = document.getElementById('files-ingest-label').value.trim() || 'note'
     const text = document.getElementById('files-ingest-text').value.trim()
     if (!text) {
-      showToast('추가할 텍스트를 입력하세요.', 'error', 2500)
+      showToast('추가할 글을 입력해 주세요.', 'error', 2500)
       return
     }
     ingestBtn.disabled = true
@@ -3083,14 +3082,14 @@ function bindDataPanelControls() {
       const result = await window.api.store.filesIngestText(label, text)
       const added = result?.chunks_added ?? 0
       if (added > 0) {
-        showToast('텍스트 ' + added + '조각으로 저장됨', 'info', 2500)
+        showToast('글을 ' + added + '조각으로 나눠 저장했어요', 'info', 2500)
         document.getElementById('files-ingest-text').value = ''
         document.getElementById('files-ingest-label').value = ''
       } else {
-        showToast('저장된 조각이 없어요. 텍스트가 너무 짧을 수 있습니다.', 'info', 3000)
+        showToast('저장된 조각이 없어요. 글이 너무 짧았을 수 있어요.', 'info', 3000)
       }
     } catch (err) {
-      showToast('텍스트 저장 실패: ' + friendlyError(err), 'error', 4000)
+      showToast('글 저장 실패: ' + friendlyError(err), 'error', 4000)
     } finally {
       ingestBtn.disabled = false
       refreshFilesPanel()
@@ -3101,12 +3100,12 @@ function bindDataPanelControls() {
   if (warmupBtn) warmupBtn.addEventListener('click', async () => {
     warmupBtn.disabled = true
     const statusEl = document.getElementById('embedding-status-text')
-    if (statusEl) statusEl.textContent = '다운로드/로딩 중… 처음에는 몇 분 걸려요.'
+    if (statusEl) statusEl.textContent = '내려받는 중… 처음에는 몇 분 걸려요.'
     try {
       const result = await window.api.store.embeddingWarmup()
       renderEmbeddingStatus(result)
     } catch (err) {
-      setErrorText(statusEl, err, '임베딩 모델을 받지 못했어요', '실패: ')
+      setErrorText(statusEl, err, '검색 모델을 받지 못했어요', '실패: ')
     } finally {
       warmupBtn.disabled = false
     }
@@ -3132,10 +3131,10 @@ async function refreshMemoryPanel() {
   if (!el) return
   try {
     const stats = await window.api.store.memoryStats()
-    if (!stats) { el.textContent = '백엔드 응답 없음'; return }
+    if (!stats) { el.textContent = 'AI 엔진 응답 없음'; return }
     if (!stats.enabled) { el.textContent = '기억 꺼짐'; return }
     const lastErr = stats.last_error ? ` · 최근 오류: ${friendlyError(stats.last_error)}` : ''
-    el.textContent = `대화 ${stats.turn_count}턴 · 요약 ${stats.summary_count}개` + lastErr
+    el.textContent = `대화 ${stats.turn_count}번 · 요약 ${stats.summary_count}개` + lastErr
     el.title = stats.last_error ? String(stats.last_error) : ''
   } catch {
     el.textContent = '읽기 실패'
@@ -3148,9 +3147,9 @@ async function refreshFilesPanel() {
   if (!statsEl) return
   try {
     const stats = await window.api.store.filesStats()
-    if (!stats) { statsEl.textContent = '백엔드 응답 없음'; return }
+    if (!stats) { statsEl.textContent = 'AI 엔진 응답 없음'; return }
     if (!stats.enabled) { statsEl.textContent = '파일 검색 꺼짐'; return }
-    statsEl.textContent = `폴더 ${stats.folder_count} · 청크 ${stats.chunk_count} (드롭 ${stats.dropped_count})`
+    statsEl.textContent = `폴더 ${stats.folder_count}개 · 조각 ${stats.chunk_count}개 (건너뜀 ${stats.dropped_count}개)`
   } catch {
     statsEl.textContent = '읽기 실패'
   }
@@ -3167,7 +3166,7 @@ async function refreshFilesFolders() {
   const folders = payload?.folders || []
   if (folders.length === 0) {
     const li = document.createElement('li')
-    li.textContent = '아직 추가한 폴더가 없습니다.'
+    li.textContent = '아직 추가한 폴더가 없어요.'
     li.style.padding = '4px 0'
     ul.appendChild(li)
     return
@@ -3184,15 +3183,15 @@ async function refreshFilesFolders() {
     const reindex = document.createElement('button')
     reindex.type = 'button'
     reindex.className = 'btn btn-ghost'
-    reindex.textContent = '재인덱싱'
+    reindex.textContent = '다시 읽기'
     reindex.addEventListener('click', async () => {
       reindex.disabled = true
       try {
         const result = await window.api.store.filesReindex(folder.path, false)
         if (result) {
-          showToast(`인덱싱 끝: 파일 ${result.files_indexed}/${result.files_seen}, 청크 +${result.chunks_added}`, 'info', 3500)
+          showToast(`다시 읽기 끝: 파일 ${result.files_indexed}/${result.files_seen}개, 조각 +${result.chunks_added}개`, 'info', 3500)
         } else {
-          showToast('재인덱싱 실패', 'error', 3500)
+          showToast('다시 읽기 실패', 'error', 3500)
         }
       } finally {
         reindex.disabled = false
@@ -3208,7 +3207,7 @@ async function refreshFilesFolders() {
       try {
         const result = await window.api.store.filesRemoveFolder(folder.path)
         const deleted = result?.chunks_deleted ?? 0
-        showToast('폴더 제거 · 정리된 청크 ' + deleted, 'info', 2800)
+        showToast('폴더를 뺐어요 · 지운 조각 ' + deleted + '개', 'info', 2800)
       } finally {
         remove.disabled = false
         refreshFilesPanel()
@@ -3227,10 +3226,10 @@ async function refreshWebPanel() {
   if (!el) return
   try {
     const stats = await window.api.store.webStats()
-    if (!stats) { el.textContent = '백엔드 응답 없음'; return }
-    const label = stats.enabled ? '사용 가능' : '비활성'
+    if (!stats) { el.textContent = 'AI 엔진 응답 없음'; return }
+    const label = stats.enabled ? '쓸 수 있음' : '꺼짐'
     const reason = stats.last_error ? ` · ${friendlyError(stats.last_error)}` : ''
-    el.textContent = `${label} · 공급자 ${stats.provider}` + reason
+    el.textContent = `${label} · 검색 서비스 ${stats.provider}` + reason
     el.title = stats.last_error ? String(stats.last_error) : ''
   } catch {
     el.textContent = '읽기 실패'
@@ -3245,18 +3244,18 @@ async function refreshEmbeddingPanel() {
 function renderEmbeddingStatus(payload) {
   const el = document.getElementById('embedding-status-text')
   if (!el) return
-  if (!payload) { el.textContent = '백엔드 응답 없음'; return }
+  if (!payload) { el.textContent = 'AI 엔진 응답 없음'; return }
   if (payload.error) {
-    setErrorText(el, payload.error, '임베딩 모델을 준비할 수 없어요', '오류: ')
+    setErrorText(el, payload.error, '검색 모델을 준비할 수 없어요', '오류: ')
     return
   }
   el.title = ''
   if (payload.loaded) {
-    el.textContent = `준비됨 (${payload.model_name}, ${payload.dim}차원)`
+    el.textContent = `준비됨 (${payload.model_name})`
   } else if (payload.loading) {
     el.textContent = '받는 중…'
   } else {
-    el.textContent = '아직 안 받음 — 첫 사용 시 자동으로 시작합니다'
+    el.textContent = '아직 안 받음 — 처음 쓸 때 저절로 받아요'
   }
 }
 
@@ -3351,14 +3350,14 @@ function bindPersonaPanel() {
 async function refreshPersonaPanel() {
   const label = document.getElementById('persona-active-label')
   if (!window.api?.getActiveCharacter) {
-    if (label) label.textContent = '활성 캐릭터를 불러올 수 없음'
+    if (label) label.textContent = '지금 캐릭터를 불러올 수 없어요'
     return
   }
   let active = null
   try { active = await window.api.getActiveCharacter() } catch {}
   if (!active?.character) {
     personaActiveCharacterId = null
-    if (label) label.textContent = '활성 캐릭터: 없음 (캐릭터 import 후 다시 열어주세요)'
+    if (label) label.textContent = '지금 캐릭터: 없음 (캐릭터를 추가한 뒤 다시 열어 주세요)'
     for (const [, sliderId] of PERSONA_KEYS) {
       const slider = document.getElementById(sliderId)
       if (slider) slider.disabled = true
@@ -3367,7 +3366,7 @@ async function refreshPersonaPanel() {
   }
   personaActiveCharacterId = active.character.id
   const name = active.character.customName || active.character.displayName || active.character.id
-  if (label) label.textContent = `활성 캐릭터: ${name}`
+  if (label) label.textContent = `지금 캐릭터: ${name}`
   for (const [, sliderId] of PERSONA_KEYS) {
     const slider = document.getElementById(sliderId)
     if (slider) slider.disabled = false
@@ -3401,7 +3400,7 @@ async function persistPersonaOverrides() {
     await window.api.setCharacterPersonalityOverrides(personaActiveCharacterId, overrides)
   } catch (error) {
     if (typeof showToast === 'function') {
-      showToast('컨셉 저장 실패: ' + friendlyError(error), 'error', 4000)
+      showToast('성격 저장 실패: ' + friendlyError(error), 'error', 4000)
     }
   }
 }

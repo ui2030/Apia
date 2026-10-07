@@ -289,7 +289,7 @@ async function checkBackend() {
     if (_backendOnline !== true) loadVoices()
     _backendOnline = true
   } else {
-    statusEl.textContent = '● 백엔드 오프라인'; statusEl.className = 'offline'
+    statusEl.textContent = '● AI 엔진 꺼짐'; statusEl.className = 'offline'
     _backendOnline = false
   }
 }
@@ -331,7 +331,7 @@ async function sendMessage(text) {
   else requestFaceCamera({ durationMs: 12000, approach: true })
 
   if (!window.api?.chatStreamStart) {
-    finalizeStream('백엔드가 연결되지 않아 오프라인 모드예요. 백엔드를 실행해주세요! 🔧', 'neutral', [], false)
+    finalizeStream('AI 엔진에 연결되지 않았어요. 잠시 뒤 다시 시도하거나 앱을 다시 켜 주세요. 🔧', 'neutral', [], false)
     return
   }
 
@@ -521,7 +521,7 @@ async function _speakOnce(text, talkMotion = null, priority = 'user', sfx = null
     // (모델 워밍업/변환 실패) 세션당 1회만 정직하게 알린다.
     if (r?.fallback && !state.voiceFallbackNotified && String(state.voiceId || '').startsWith('custom:')) {
       state.voiceFallbackNotified = true
-      appendMessage('ai', '(설정한 캐릭터 음성을 준비하지 못해서 기본 음성으로 말했어요. 잠시 뒤 다시 적용될 수 있어요.)')
+      appendMessage('ai', '(설정한 캐릭터 목소리를 준비하지 못해서 기본 목소리로 말했어요. 잠시 뒤에는 캐릭터 목소리로 돌아올 수 있어요.)')
     }
 
     if (r.audio) {
