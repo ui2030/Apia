@@ -6,10 +6,15 @@ pyttsx3==2.90
 soundfile==0.12.1
 numpy==1.26.0
 tzdata>=2024.1
-httpx>=0.27.0
-huggingface_hub>=0.21.0
-anthropic>=0.18.0
-groq>=0.4.0
+# 아래 4개는 상한 핀 필수(2026-10-08 실측): 상한이 없으면 깨끗한 venv가 개발 환경과
+# 다른 메이저를 받는다 — anthropic 1.12 / huggingface_hub 2.1 / httpx 0.28 / groq 1.7이
+# 깔려 번들됐다(개발·테스트는 anthropic 0.109, hub 0.36, httpx 0.27, groq 1.4).
+# 스모크는 키 없이 돌아 채팅 제공자 코드 경로를 못 밟으므로 이런 드리프트를 못 잡는다.
+# 상한은 requirements.txt와 같은 값으로 맞춘다.
+httpx>=0.27.0,<0.28
+huggingface_hub>=0.21.0,<1.0
+anthropic>=0.18.0,<0.110
+groq>=0.4.0,<1.5
 pyinstaller>=6.12,<7
 
 # openai-whisper는 의도적으로 제외(numba 등 패키징 난이도·용량). 패키지 빌드에선

@@ -11,6 +11,8 @@ python-multipart==0.0.9
 # hub 0.x API 전제다. 상한이 없으면 `pip install -r`만으로 음성 복제가 죽는다.
 transformers>=4.51,<5
 accelerate>=0.27.0
+# sentencepiece: 2026-10-08 감사 시점 backend/.venv에 미설치. 기본 Qwen3 토크나이저는
+# tokenizers로 돌아 필요 없다 — 구모델(sentencepiece 토크나이저) 쓸 때만 의미. 핀 없음 유지.
 sentencepiece
 protobuf
 
@@ -39,7 +41,9 @@ numpy==1.26.0
 # 주의: 패키징 exe(requirements-packaging.txt)에는 넣지 않는다 — 용량 수 GB.
 # `pip check`가 "seed-vc requires ipython"을 계속 띄우는데, 패키지 코드 어디에도
 # IPython import가 없다(데모 노트북용 허수 메타데이터). 설치하지 않는다.
-seed-vc
+# 0.4.3 고정: 위 BigVGAN hub 패치가 이 버전 기준으로 검증됐다. 핀이 없으면 새 릴리스가
+# 의존성을 바꿔도 `pip install -r`이 그대로 받아 음성 복제가 조용히 죽는다.
+seed-vc==0.4.3
 # decorator: seed-vc → librosa의 하드 의존인데, librosa 휠이 이미 깔린 환경
 # (anaconda base 상속)에서는 pip가 librosa를 건드리지 않아 이것만 빠진 채로
 # 남는다. 그러면 `import seed_vc`(빈 __init__)는 통과하고 실제 모델 로드
@@ -53,8 +57,10 @@ decorator>=5
 httpx>=0.27.0,<0.28
 # hub 상한 <1.0 — 위 transformers<5와 같은 이유(seed-vc BigVGAN 패치가 0.x API).
 huggingface_hub>=0.21.0,<1.0
-anthropic>=0.18.0
-groq>=0.4.0
+# 상한: 패키징 venv(requirements-packaging.txt)와 같은 값. 상한 없이 새로 깔면
+# anthropic 1.x / groq 1.7이 들어온다(2026-10-08 실측) — 개발 검증은 0.109 / 1.4.
+anthropic>=0.18.0,<0.110
+groq>=0.4.0,<1.5
 
 # ── 임베딩 (장기 기억 / 파일 이해 / 웹 검색 결과 의미 비교) ──
 # sentence-transformers는 첫 실행 때 모델(~480MB)을 HuggingFace에서 다운받아
@@ -75,3 +81,15 @@ pytest-asyncio>=0.23.0
 # 2026-10-07: 어떤 환경에도 설치돼 있지 않아 마이크 기능이 조용히 죽어 있던 것을 발견해 핀.
 openai-whisper==20250625
 soxr>=0.5,<2          # whisper_service가 마이크 WAV를 16kHz로 리샘플(ffmpeg 대신)
+
+# ── PDF 읽기 (폴더 이해) ──
+# file_index_service가 import하지만 요구사항에 없어 어떤 환경에도 안 깔려 있었다
+# (2026-10-08 감사). 없으면 PDF만 조용히 건너뛴다 — 그래서 아무도 몰랐다.
+pypdf>=4,<7
+
+# ── 야간 학습용 인터프리터 (이 venv에 설치하지 않음 — 참고 기록) ──
+# 학습은 설정값 trainingPythonPath의 별도 venv가 한다. 그 venv의 요구사항 파일이
+# repo에 없다. 2026-10-08 개발 PC 실측 버전:
+#   torch==2.8.0+cu128 unsloth==2026.9.6 unsloth_zoo==2026.9.5 transformers==5.5.0
+#   trl==0.24.0 peft==0.21.0 datasets==4.3.0 accelerate==1.14.0 bitsandbytes==0.49.2
+# night_trainer.py는 unsloth를 transformers보다 먼저 import해야 torchao 충돌을 피한다.

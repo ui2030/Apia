@@ -1,4 +1,4 @@
-import { access, mkdir, open, rm } from 'node:fs/promises'
+import { access, mkdir, open, readFile, rm } from 'node:fs/promises'
 import { delimiter, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
@@ -10,6 +10,15 @@ const backendDistDir = resolve(rootDir, 'backend-dist')
 const backendBuildDir = resolve(rootDir, 'backend-build')
 const pyinstallerWorkDir = resolve(backendBuildDir, 'pyinstaller-work')
 const pyinstallerSpecDir = resolve(backendBuildDir, 'pyinstaller-spec')
+// 패키징 전용 깨끗한 venv. PATH의 python에 바로 pip install 하면 ① 시스템 파이썬을
+// 핀 버전으로 오염시키고 ② 3.13 같은 새 파이썬은 numpy==1.26.0 휠이 없어 실패하며
+// ③ anaconda 상속 환경은 requirements-packaging.txt에 없는 패키지까지 번들에 섞인다.
+// 베이스 인터프리터는 APIA_PACKAGING_PYTHON(예: anaconda3\python.exe, 3.11)로 지정.
+const packagingVenvDir = resolve(backendBuildDir, 'pkg-venv')
+const packagingVenvPython = resolve(
+  packagingVenvDir,
+  process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'
+)
 const backendExePath = resolve(
   backendDistDir,
   process.platform === 'win32' ? 'ApiaBackend.exe' : 'ApiaBackend'
@@ -98,6 +107,8 @@ function runCommand(command, args, options = {}) {
       env: {
         ...process.env,
         PYTHONNOUSERSITE: '1',
+        // requirements-*.txt에 한국어 주석이 있다. 구버전 pip는 로캘(cp949)로 읽다 죽는다.
+        PYTHONUTF8: '1',
         ...(options.env || {})
       },
       windowsHide: true,
@@ -146,6 +157,7 @@ function runCommand(command, args, options = {}) {
 
 async function findPythonRunner() {
   const candidates = [
+    ...(process.env.APIA_PACKAGING_PYTHON ? [createRunner(process.env.APIA_PACKAGING_PYTHON)] : []),
     createRunner('python'),
     createRunner('py', ['-3'])
   ]
@@ -234,13 +246,13 @@ async function getMissingModules(runPython) {
 }
 
 async function ensurePackagingModules(runPython) {
-  const missing = await getMissingModules(runPython)
-  if (missing.length === 0) {
-    return
-  }
-
-  console.log(`[BUILD_BACKEND_INSTALL] missing modules: ${missing.join(', ')}`)
+  // 전용 venv라 매번 맞춘다 — "빠진 모듈이 있을 때만" 설치하면 핀을 고쳐도 이전
+  // 버전이 그대로 남아 번들된다(이미 깔려 있으면 pip는 금방 끝난다).
   await runPython(['-m', 'pip', 'install', '-r', packagingRequirements])
+  const missing = await getMissingModules(runPython)
+  if (missing.length > 0) {
+    throw new Error(`[BUILD_BACKEND_MODULES_MISSING] ${missing.join(', ')}`)
+  }
 }
 
 async function buildBackendExe(runPython) {
@@ -286,6 +298,9 @@ async function buildBackendExe(runPython) {
   args.push('--collect-data', 'pyttsx3')
   // 기본 설정(성격 등) — ai_config가 모듈 옆 defaults/에서 읽는다. 개인 설정은 userData/personal.
   args.push('--add-data', `${resolve(backendDir, 'defaults')}${delimiter}defaults`)
+  // DB 스키마 — store_service가 <번들>/store/migrations/*.sql을 읽는다. 빠지면 새 PC의
+  // 빈 apia.db에 테이블이 안 생겨 기억·파일·웹 통계가 전부 500(2026-10-08 실측).
+  args.push('--add-data', `${resolve(backendDir, 'store', 'migrations')}${delimiter}store/migrations`)
   args.push(entryPath)
 
   await runPython(args)
@@ -358,12 +373,17 @@ async function killChildTree(child) {
 async function smokeTestBackendExe() {
   const smokePort = String(18765)
   const smokeDataDir = resolve(backendBuildDir, 'smoke-data')
+  // 매번 빈 폴더에서 시작한다 — 이전 실행의 apia.db(테이블 있음)가 남아 있으면
+  // store/migrations 번들 누락을 /store/memory/stats가 못 잡는다(astra 지적).
+  await rm(smokeDataDir, { recursive: true, force: true })
   await mkdir(smokeDataDir, { recursive: true })
 
   const child = spawn(backendExePath, [], {
     cwd: backendDistDir,
     env: {
       ...process.env,
+      // 빌드용으로 앞에 붙인 conda DLL 경로를 뺀 원래 PATH — 번들이 스스로 서는지 본다.
+      PATH: process.env.APIA_SMOKE_PATH || process.env.PATH,
       APIA_BACKEND_HOST: '127.0.0.1',
       APIA_BACKEND_PORT: smokePort,
       DATA_DIR: smokeDataDir,
@@ -402,6 +422,8 @@ async function smokeTestBackendExe() {
     if (!Array.isArray(voicesPayload?.voices)) {
       throw new Error('[BUILD_BACKEND_SMOKE_VOICES_FAILED] /voices did not return a voices array')
     }
+    // 스키마가 실제로 깔렸는지 — 테이블이 없으면 500이라 fetchJson이 던진다.
+    await fetchJson(`http://127.0.0.1:${smokePort}/store/memory/stats`, 10000)
   } finally {
     await killChildTree(child)
     await waitForFileRelease(backendExePath)
@@ -409,7 +431,34 @@ async function smokeTestBackendExe() {
 }
 
 async function main() {
-  const runPython = await findPythonRunner()
+  // 기존 pkg-venv가 지금 지정한 베이스(APIA_PACKAGING_PYTHON)로 만든 것인지 확인한다.
+  // 다른 파이썬(3.13·비-anaconda)으로 만든 묵은 venv를 재사용하면 위의 수정이 통째로
+  // 무효가 된다 — 베이스가 다르면 지우고 새로 만든다(astra 지적).
+  if (await ensurePathExists(packagingVenvPython)) {
+    const cfg = await readFile(resolve(packagingVenvDir, 'pyvenv.cfg'), 'utf8').catch(() => '')
+    const home = cfg.match(/^home\s*=\s*(.+)$/m)?.[1]?.trim()
+    const wanted = process.env.APIA_PACKAGING_PYTHON && resolve(process.env.APIA_PACKAGING_PYTHON, '..')
+    if (wanted && home && resolve(home).toLowerCase() !== wanted.toLowerCase()) {
+      console.log(`[BUILD_BACKEND_VENV_RECREATE] base changed: ${home} -> ${wanted}`)
+      await rm(packagingVenvDir, { recursive: true, force: true })
+    }
+  }
+  if (!(await ensurePathExists(packagingVenvPython))) {
+    const runBase = await findPythonRunner()
+    await runBase(['-m', 'venv', packagingVenvDir])
+  }
+  const runPython = createRunner(packagingVenvPython)
+  // anaconda 베이스면 _ssl·_sqlite3가 쓰는 DLL(libssl·sqlite3·ffi)이 <base>\Libraryin에
+  // 있는데, venv에선 PATH에 안 잡혀 PyInstaller가 못 모은다 → exe가 _ssl import에서 죽는다
+  // (2026-10-08 실측). 베이스 경로는 pyvenv.cfg의 home.
+  const venvHome = (await readFile(resolve(packagingVenvDir, 'pyvenv.cfg'), 'utf8'))
+    .match(/^home\s*=\s*(.+)$/m)?.[1]?.trim()
+  const condaBin = venvHome && resolve(venvHome, 'Library', 'bin')
+  if (condaBin && (await ensurePathExists(condaBin))) {
+    // 연기 테스트는 원래 PATH로 돌린다 — 빌드 PC의 DLL이 번들 누락을 가려 주면 안 된다.
+    process.env.APIA_SMOKE_PATH = process.env.PATH
+    process.env.PATH = `${condaBin}${delimiter}${process.env.PATH}`
+  }
   await assertExists(entryPath, 'BUILD_BACKEND_ENTRY_MISSING')
   await assertExists(packagingRequirements, 'BUILD_BACKEND_REQUIREMENTS_MISSING')
   await ensurePackagingModules(runPython)

@@ -98,6 +98,11 @@ async function main() {
   const builderArgs = [
     getBuilderEntrypoint(),
     ...process.argv.slice(2),
+    // electron-as-wallpaper의 네이티브 .node는 Visual Studio 없이는 못 굽는다(이 PC 포함).
+    // node_modules에도 바이너리가 없어서 rebuild는 실패만 하고, 앱은 원래
+    // Progman-child 폴백(win-wallpaper.exe)으로 붙는다 — smoke:release가 허용하는 경로.
+    // VS 빌드 도구를 갖춘 PC에서 네이티브 경로를 살리려면 이 줄을 빼면 된다.
+    '--config.npmRebuild=false',
     `--config.directories.output=${resolve(rootDir, 'release')}`
   ]
 

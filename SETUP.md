@@ -91,6 +91,8 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
+> 요구사항 파일에 한국어 주석이 있어 구버전 pip는 `UnicodeDecodeError('cp949' …)`로 멈출 수 있어요. 그럴 땐 `set PYTHONUTF8=1` 뒤에 다시 실행하거나 `python -m pip install --upgrade pip`를 먼저 하세요.
+
 ---
 
 ## 🧠 시스템 핵심 구조
