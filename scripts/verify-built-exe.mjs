@@ -19,12 +19,15 @@ async function readPackageVersion() {
   const raw = await readFile(resolve(rootDir, 'package.json'), 'utf8')
   const version = JSON.parse(raw).version
   if (!version) throw new Error('[VERIFY_EXE_NO_PACKAGE_VERSION] package.json has no version')
-  // Require a 3-part semver so the prefix match below can't be loosened by a
-  // 2-part version (e.g. "1.0" spuriously matching "1.0.0").
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error(`[VERIFY_EXE_BAD_PACKAGE_VERSION] expected X.Y.Z semver, got "${version}"`)
+  // Require a 3-part semver core so the prefix match below can't be loosened by a
+  // 2-part version (e.g. "1.0" spuriously matching "1.0.0"). A prerelease suffix
+  // (1.0.0-alpha.2) is allowed — Windows version resources hold only X.Y.Z, so the
+  // exe is compared against the core triple.
+  const m = /^(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(version)
+  if (!m) {
+    throw new Error(`[VERIFY_EXE_BAD_PACKAGE_VERSION] expected X.Y.Z[-prerelease] semver, got "${version}"`)
   }
-  return version
+  return m[1]
 }
 
 async function readExeFileVersion() {
