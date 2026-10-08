@@ -24,6 +24,11 @@ const vmdModules = import.meta.glob('./assets/motions/vmd/**/*.vmd', {
   query: '?url',
   import: 'default'
 })
+// 재배포 금지 원본(dev-assets/, gitignore)은 개발 모드에서만 — dev 서버가 루트 경로를 그대로
+// 서빙하니 glob은 파일 목록만 쓰고(eager 아님 = 빌드에서 에셋 emit 안 됨) URL은 키 자체다.
+const devVmdModules = import.meta.env.DEV
+  ? Object.fromEntries(Object.keys(import.meta.glob('/dev-assets/motions/vmd/**/*.vmd')).map((k) => [k, k]))
+  : {}
 const fbxModules = import.meta.glob('./assets/motions/fbx/**/*.fbx', {
   eager: true,
   query: '?url',
@@ -40,7 +45,10 @@ function buildPathMap(modules, stripPrefix) {
 }
 
 const vrmaPathToUrl = buildPathMap(vrmaModules, /^\.\/assets\/motions\/vrma\//)
-const vmdPathToUrl = buildPathMap(vmdModules, /^\.\/assets\/motions\/vmd\//)
+const vmdPathToUrl = new Map([
+  ...buildPathMap(vmdModules, /^\.\/assets\/motions\/vmd\//),
+  ...buildPathMap(devVmdModules, /^\/dev-assets\/motions\/vmd\//)
+])
 const fbxPathToUrl = buildPathMap(fbxModules, /^\.\/assets\/motions\/fbx\//)
 
 function resolveFromManifest(manifest, pathToUrl, motionName, kind) {

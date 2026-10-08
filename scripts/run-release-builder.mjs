@@ -30,7 +30,11 @@ const requiredEntries = [
   'node_modules',
   'package.json',
   'package-lock.json',
-  'electron-builder.yml'
+  'electron-builder.yml',
+  // extraResources로 resources/docs/에 동봉하는 문서(electron-builder.yml).
+  'THIRD_PARTY_NOTICES.md',
+  'PRIVACY.md',
+  'docs/user'
 ]
 
 function assertSafeStageDir(targetPath) {

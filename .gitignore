@@ -19,6 +19,8 @@ src/assets/motions/fbx/**/*.FBX
 # the author's permission statement); the .vmd binaries are not.
 src/assets/motions/vmd/**/*.vmd
 src/assets/motions/vmd/**/*.VMD
+# 재배포 금지 원본(Deedee524 등)은 여기 — 개발 모드에서만 읽고 설치본엔 안 들어간다.
+dev-assets/
 # …but Apia-generated original clips (scripts/gen-vmd.py) carry no license
 # restriction and are model-agnostic (gesture deltas; the per-model arm hang is
 # composed at runtime), so ship them. Whitelist each generated file.

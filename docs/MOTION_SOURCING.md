@@ -16,8 +16,10 @@
    (이름은 `idle_*`/`talk_*`/`react_*` 규약 — motionManager 어휘와 일치해야 자율 행동이 집어 씀)
 4. **빌드+검수**: `npm run build` 후 `node tests/gui/vmd-check.mjs`(3각도 스크린샷),
    문제 있으면 `tests/gui/cloth-measure.mjs`(물리)와 `smoothness-check.mjs`(전환)로 좁힌다.
-5. **라이선스**: 재배포 금지 모션은 커밋 금지(.gitignore가 vmd를 기본 차단,
-   자체 생성분만 화이트리스트). 폴더에 `LICENSE-<작자>.txt`로 허락 문구를 남긴다.
+5. **라이선스**: 재배포 금지 모션은 커밋도 설치본 동봉도 금지 — `src/assets/motions/vmd/`가
+   아니라 `dev-assets/motions/vmd/<카테고리>/`(gitignore)에 둔다. 개발 모드(`npm run dev`)에서만
+   읽히고 `npm run build`엔 안 들어간다. 자체 생성분만 `src/assets`에 두고 .gitignore 화이트리스트.
+   허락 문구는 `src/assets/motions/vmd/<카테고리>/LICENSE-<작자>.txt`로 남긴다(커밋됨).
 
 > 표정 트랙이 든 연기 클립은 재생 중 **앱이 표정 소유권을 클립에 양보**한다
 > (2026-07-03 엔진 수정). 즉 모션에 표정까지 들어 있으면 그대로 살아난다.
@@ -74,6 +76,14 @@ granular clipMask 덕에 頭/首 클립 소유가 가능해졌고(소유 중 시
 
 ## 현재 로컬 자산 참고
 
-- Deedee524 idle 팩(재배포 금지, 로컬 전용): `air_scent.vmd` 등 — **표정 트랙
-  65종 포함** 확인. 표정 양보 수정으로 이제 표정 연기까지 살아난다.
-- 자체 생성분(gen-vmd, 커밋됨): talk 6종·idle 포즈 6종 등.
+- Deedee524 idle 팩 9종(`air_scent`·`confident`·`fix_hair`·`impatient`·`skywatch`·`stretch`·
+  `sway`·`tidy`·`tracker`) — **원본은 설치본에 동봉하지 않음.** 원본 재배포 금지라 개발자가
+  [원본 페이지](https://www.deviantart.com/deedee524/art/Idle-Animation-Pack-759426476)에서 직접 받아
+  `dev-assets/motions/vmd/idle/`에 넣는다(개발 모드 전용, 설치본에선 가용성 필터가 어휘에서 뺀다).
+  크레딧: **motions by deedee524**. 허락 문구 `src/assets/motions/vmd/idle/LICENSE-deedee524.txt`.
+  **표정 트랙 65종 포함** 확인. 표정 양보 수정으로 이제 표정 연기까지 살아난다.
+- 자체 생성분(`scripts/gen-vmd.py`, 라이선스 제약 없음 — 설치본 동봉): 27종
+  - idle 14: arms_crossed·curious·hand_on_hip·hands_back·hands_clasped·lean_in·look_hands·ponder·relaxed·sip·stretch_arms·sway_relax·wave·yawn
+  - talk 6: explain·explain_soft·happy·neutral·soft·think
+  - react 7: bow·excited·giggle·happy·pout·shy·sigh
+  - `idle/sip.vmd`만 .gitignore 화이트리스트에 없어 미커밋(로컬 생성분) — `python scripts/gen-vmd.py`로 재생성된다.

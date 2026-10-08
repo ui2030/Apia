@@ -35,7 +35,7 @@ MMD 캐릭터용 `.vmd` 모션 클립 드롭 위치. VRMA 매니페스트(`../ma
    }
    ```
 
-## 현재 들어 있는 모션 (idle/)
+## Deedee524 idle 팩 (개발 전용, dev-assets/)
 [Deedee524 Idle Animation Pack](https://www.deviantart.com/deedee524/art/Idle-Animation-Pack-759426476)
 — 게임 사용 OK, 크레딧 필수, 원본 재배포 X. 라이센스 전문은
 [`idle/LICENSE-deedee524.txt`](./idle/LICENSE-deedee524.txt) 참조. 10개 클립:
@@ -54,9 +54,10 @@ MMD 캐릭터용 `.vmd` 모션 클립 드롭 위치. VRMA 매니페스트(`../ma
 >
 > 또한 `playMMDAnimation`에서 `.vmd` 클립의 **root + IK 본 position track**을 자동 제거 — `センター/グルーブ/腰/全ての親/左足IK/右足IK/左つま先IK/右つま先IK/左足IK親/右足IK親` (전각 ＩＫ 정규화). 회전·모프 트랙은 유지. 클립이 캐릭터를 방 밖으로 *걸어 보내는* 사고 방지.
 
-`.vmd` 바이너리는 `.gitignore`로 git에서 제외 (원본 재배포 금지 준수). 사용자가
+원본 재배포 금지라 이 9종은 **이 폴더가 아니라 `dev-assets/motions/vmd/idle/`**(gitignore)에
+둔다 — 개발 모드에서만 읽히고 빌드(설치본)엔 안 들어간다. 개발자가
 [원본 페이지](https://www.deviantart.com/deedee524/art/Idle-Animation-Pack-759426476)에서
-받아 본 폴더에 드롭 → auto-register가 픽업.
+받아 그 폴더에 드롭 → auto-register가 픽업. 크레딧: motions by deedee524.
 
 ## 런타임 흐름
 - `src/motionAssets.js` `resolveMmdMotionAsset(name)` → `{ url, loop, fadeIn } | null`

@@ -60,7 +60,7 @@ const MANUAL = [
   { group: '에셋', name: 'VRMA 모션 클립 (virtual-avatar-sdk)', version: '-', license: 'MIT', url: 'https://github.com/hirokazuniimoto/virtual-avatar-sdk', text: `Copyright (c) 2026 Virtual Avatar SDK Contributors\n\n${MIT}` },
   { group: '에셋', name: 'VRMA 모션 클립 (vrm-viewer)', version: '-', license: 'MIT', url: 'https://github.com/tk256ailab/vrm-viewer', text: `Copyright (c) 2025 TK256\n\n${MIT}` },
   { group: '에셋', name: 'VRMA 샘플 클립 (three-vrm test.vrma)', version: '-', license: 'MIT', url: 'https://github.com/pixiv/three-vrm', note: '@pixiv/three-vrm과 같은 라이선스 — 아래 npm 항목 전문 참조' },
-  { group: '에셋', name: 'Deedee524 Idle Animation Pack (VMD 원본 9종)', version: '-', license: '원본 재배포 금지 · 크레딧 필수 (작가 고유 조건)', url: 'https://www.deviantart.com/deedee524/art/Idle-Animation-Pack-759426476', note: 'git에선 제외(.gitignore)지만 로컬에 파일이 있으면 vite 빌드가 dist/assets에 넣어 설치본에 들어간다: air_scent·confident·fix_hair·impatient·skywatch·stretch·sway·tidy·tracker.vmd. Credit: motions by deedee524.', text: readRepo('src/assets/motions/vmd/idle/LICENSE-deedee524.txt').split('NOTES:')[0].trim(), caution: true },
+  { group: '에셋', name: 'Deedee524 Idle Animation Pack (VMD 원본 9종)', version: '설치본 미포함(개발 전용)', license: '원본 재배포 금지 · 크레딧 필수 (작가 고유 조건)', url: 'https://www.deviantart.com/deedee524/art/Idle-Animation-Pack-759426476', note: '설치본에 동봉하지 않는다 — 원본은 git·빌드 밖의 dev-assets/motions/vmd/idle/(개발자가 직접 받아 넣음)에 두고 개발 모드에서만 읽는다: air_scent·confident·fix_hair·impatient·skywatch·stretch·sway·tidy·tracker.vmd. Credit: motions by deedee524.', text: readRepo('src/assets/motions/vmd/idle/LICENSE-deedee524.txt').split('NOTES:')[0].trim(), caution: true },
   { group: '자체', name: 'win-wallpaper.exe', version: '-', license: 'Apia 자체 코드 (scripts/win-wallpaper.cs)', url: '-' }
 ]
 

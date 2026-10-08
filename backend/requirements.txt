@@ -30,7 +30,8 @@ peft>=0.13
 # PyInstaller 포함 대상이라 상한 핀 — aiohttp 등 전이 의존성 drift가
 # 릴리스 빌드에서만 깨지는 사고 방지.
 edge-tts>=7.2,<8
-pyttsx3==2.90
+# 2.91부터 MPL-2.0(2.90은 GPL-3.0). 2.99는 Windows에서 두 번째 runAndWait가 멈춤(실측) — 상한 2.99 미만.
+pyttsx3>=2.91,<2.99
 soundfile==0.12.1
 numpy==1.26.0
 

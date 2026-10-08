@@ -32,6 +32,15 @@ extraResources:
   # from inside the .asar. wallpaperMode.js resolves resourcesPath/scripts first.
   - from: scripts/win-wallpaper.exe
     to: scripts/win-wallpaper.exe
+  # 고지·개인정보·사용 안내 문서 — 설치 폴더 resources/docs/ 에서 바로 열어 볼 수 있게.
+  - from: THIRD_PARTY_NOTICES.md
+    to: docs/THIRD_PARTY_NOTICES.md
+  - from: PRIVACY.md
+    to: docs/PRIVACY.md
+  - from: docs/user
+    to: docs
+    filter:
+      - '*.md'
 
 win:
   target:

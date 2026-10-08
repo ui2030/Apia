@@ -2,7 +2,8 @@ fastapi==0.109.0
 uvicorn[standard]==0.27.0
 python-multipart==0.0.9
 edge-tts>=7.2,<8
-pyttsx3==2.90
+# 2.91부터 MPL-2.0(2.90은 GPL-3.0). 2.99는 Windows에서 두 번째 runAndWait가 멈춤(실측) — 상한 2.99 미만.
+pyttsx3>=2.91,<2.99
 soundfile==0.12.1
 numpy==1.26.0
 tzdata>=2024.1
