@@ -47,7 +47,8 @@ contextBridge.exposeInMainWorld('api', {
   saveWorld: (d) => ipcRenderer.invoke('save-world', d),
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (d) => ipcRenderer.invoke('save-settings', d),
-  openSettings: () => ipcRenderer.invoke('open-settings'),
+  // section: 'ai' | 'character' | 'about' — 설정 창을 그 칸으로 바로 연다.
+  openSettings: (section) => ipcRenderer.invoke('open-settings', section),
   applySettings: (d) => ipcRenderer.invoke('apply-settings', d),
   onSettingsApplied: (cb) => ipcRenderer.on('settings-applied', (e, s) => cb(s)),
   // true once the window is actually attached as a desktop wallpaper, so the
@@ -66,6 +67,17 @@ contextBridge.exposeInMainWorld('api', {
   getBackendEnvKeys: () => ipcRenderer.invoke('settings:getBackendEnvKeys'),
   saveBackendEnvKeys: (updates) => ipcRenderer.invoke('settings:saveBackendEnvKeys', updates),
   restartBackend: () => ipcRenderer.invoke('settings:restartBackend'),
+
+  // 발주서 24 — 시작 안내 카드 · 정보·도움 패널 · 문제 신고용 묶기 · 저사양 재시작.
+  firstRun: {
+    state: () => ipcRenderer.invoke('firstRun:state'),
+    dismiss: () => ipcRenderer.invoke('firstRun:dismiss')
+  },
+  appInfo: () => ipcRenderer.invoke('app:info'),
+  openHelp: (kind) => ipcRenderer.invoke('app:openHelp', kind),
+  openLogsFolder: () => ipcRenderer.invoke('app:openLogsFolder'),
+  bundleReport: () => ipcRenderer.invoke('app:bundleReport'),
+  relaunchLowEnd: () => ipcRenderer.invoke('app:relaunchLowEnd'),
 
   // citation chip click — main process enforces http/https only.
   openExternal: (url) => ipcRenderer.invoke('open-external', url),

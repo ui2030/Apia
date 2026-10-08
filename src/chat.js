@@ -3,7 +3,8 @@ import { setState, getState } from './characterController.js'
 import { setEmotion, requestFaceCamera } from './characterController.js'
 import { analyzeWav, playTimeline, stopTimeline } from './lipsyncRuntime.js'
 import { createTouchClassifier } from './touchInteraction.js'
-import { toUserMessage, isActiveFrame, createSpeechQueue, parseSfx, SFX_KINDS, pollWhileVisible, showFallbackOffer } from './chatShared.js'
+import { createBackendBanner, createFirstRunCard } from './supportUi.js'
+import { toUserMessage, isActiveFrame, createSpeechQueue, parseSfx, SFX_KINDS, pollWhileVisible, showFallbackOffer, needsSetupReply, attachSettingsButton } from './chatShared.js'
 import { createMicController } from './micListener.js'
 
 // Step 3: character raycaster injected by main.js. null = wallpaper mode
@@ -72,9 +73,18 @@ export function initChat({
   window.api?.onChatStreamDelta?.((payload) => onStreamDelta(payload))
   window.api?.onChatStreamDone?.((payload) => onStreamDone(payload))
   window.api?.onChatStreamError?.((payload) => onStreamError(payload))
+  // 발주서 24 — 연결 띠(채팅 패널 상단)와 시작 안내 카드(캐릭터 옆).
+  _backendBanner = createBackendBanner({ doc: document, api: window.api, anchor: document.querySelector('#chat-panel .panel-header') })
+  _firstRunCard = createFirstRunCard({ doc: document, api: window.api, host: document.body, floating: true })
+  window.api?.onSettingsApplied?.(() => _firstRunCard.refresh())
+  // 벽지로 붙고 나면 이 창은 누를 수 없다 — 다시 물으면 main이 채팅 창에 띄운다.
+  window.api?.onWallpaperOpaque?.((on) => { if (on) _firstRunCard.refresh() })
   // 창이 숨겨져 있는 동안은 폴링을 멈춘다(닫기=hide라 예전엔 계속 돌았다).
   pollWhileVisible(checkBackend, 5000)
 }
+
+let _backendBanner = null
+let _firstRunCard = null
 
 function applyRuntimeSettings(settings = {}) {
   if (typeof settings.voiceId === 'string') {
@@ -284,9 +294,10 @@ async function checkBackend() {
   if (!statusEl) return
   if (!window.api) { statusEl.textContent = '개발 모드'; statusEl.className='offline'; return }
   const r = await window.api.checkBackend()
+  _backendBanner?.report(r.ok)
   if (r.ok) {
     statusEl.textContent = '● 연결됨'; statusEl.className = 'online'
-    if (_backendOnline !== true) loadVoices()
+    if (_backendOnline !== true) { loadVoices(); _firstRunCard?.refresh() }
     _backendOnline = true
   } else {
     statusEl.textContent = '● AI 엔진 꺼짐'; statusEl.className = 'offline'
@@ -368,7 +379,11 @@ function onStreamDone(payload) {
   const emotion = payload.emotion || 'neutral'
   const citations = Array.isArray(payload.citations) ? payload.citations : []
   const text = state.pendingUserText
+  const row = state.streamRow
   finalizeStream(reply, emotion, citations, true)
+  if (!payload.fallbackOffer && needsSetupReply(reply)) {
+    attachSettingsButton(document, row, () => window.api?.openSettings?.('ai'))
+  }
   // 교사 대신 로컬이 답한 날의 첫 답에만 붙는 안내(main이 하루 1회로 거른다).
   if (payload.notice) appendMessage('ai', payload.notice)
   if (payload.fallbackOffer) offerCloudFallback(payload.fallbackOffer, text)
@@ -385,7 +400,7 @@ function offerCloudFallback(offer, text) {
     offer,
     resend: () => sendMessage(text, { allowCloudFallback: true, resend: true }),
     savePolicy: (policy) => window.api?.saveSettings?.({ cloudFallbackPolicy: policy }),
-    openSettings: () => window.api?.openSettings?.()
+    openSettings: () => window.api?.openSettings?.('ai')
   })
 }
 

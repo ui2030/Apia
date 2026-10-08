@@ -493,8 +493,8 @@ export function createSceneRuntime({ canvasEl }) {
   function applyViewport() {
     const aspect = viewportAspect()
     // Cap DPR at 2 — a 3x/4x monitor would otherwise blow up the transparent
-    // overlay's WebGL buffer for no visible gain.
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    // overlay's WebGL buffer for no visible gain. 저사양 모드는 1로 내린다.
+    const dpr = Math.min(window.devicePixelRatio || 1, pixelRatioCap)
     renderer.setPixelRatio(dpr)
     renderer.setSize(window.innerWidth, window.innerHeight)
     outlineEffect.setSize(window.innerWidth, window.innerHeight)
@@ -503,6 +503,12 @@ export function createSceneRuntime({ canvasEl }) {
     camera.aspect = aspect
     camera.fov = adaptiveFov(live.fov, aspect)
     camera.updateProjectionMatrix()
+  }
+
+  let pixelRatioCap = 2
+  function setPixelRatioCap(cap) {
+    pixelRatioCap = cap
+    applyViewport()
   }
 
   applyCameraDefault()
@@ -715,6 +721,7 @@ export function createSceneRuntime({ canvasEl }) {
     CAM_DEFAULT: live, // caller can mutate pos/target/fov on this; applyCameraDefault uses it
     applyCameraDefault,
     applyViewport, // re-fit renderer+camera to current viewport (size/aspect/DPI)
+    setPixelRatioCap, // 저사양 모드 — 화면 배율 상한(기본 2)
     disposeResolutionWatcher,
     setWallpaperOpaque,
     ROOM,

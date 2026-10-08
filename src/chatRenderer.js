@@ -15,7 +15,8 @@
 //     it; reopen via tray click / Ctrl+Alt+A is instant.
 
 import { analyzeWav } from './lipsyncRuntime.js'
-import { toUserMessage, isActiveFrame, createSpeechQueue, pollWhileVisible, showFallbackOffer } from './chatShared.js'
+import { createBackendBanner, createFirstRunCard } from './supportUi.js'
+import { toUserMessage, isActiveFrame, createSpeechQueue, pollWhileVisible, showFallbackOffer, needsSetupReply, attachSettingsButton } from './chatShared.js'
 import { createMicController } from './micListener.js'
 
 const state = {
@@ -62,11 +63,19 @@ function init() {
 function startBackendPolling() {
   const dot = document.querySelector('.status-dot')
   if (!dot) return
+  // 발주서 24 — 연결 띠(헤더 아래)와 시작 안내 카드(벽지 모드에선 여기가 유일한 표면).
+  const banner = createBackendBanner({ doc: document, api: window.api, anchor: document.querySelector('.panel-header') })
+  const firstRun = createFirstRunCard({ doc: document, api: window.api, anchor: document.querySelector('.panel-header') })
+  window.addEventListener('focus', () => firstRun.refresh())
+  let wasOk = false
   const tick = async () => {
     let ok = false
     try { ok = !!(await window.api?.checkBackend?.())?.ok } catch {}
     dot.style.background = ok ? '#4ade80' : '#ef4444'
     dot.title = ok ? 'AI 엔진 연결됨' : 'AI 엔진 꺼짐'
+    banner.report(ok)
+    if (ok && !wasOk) firstRun.refresh()
+    wasOk = ok
   }
   // 숨겨진(닫힌) 창이 5초마다 백엔드를 두드리던 낭비 차단 — 다시 보일 때 즉시 1회.
   pollWhileVisible(tick, 5000)
@@ -196,7 +205,11 @@ function onStreamDone(payload) {
   const emotion = payload.emotion || 'neutral'
   const citations = Array.isArray(payload.citations) ? payload.citations : []
   const text = state.pendingUserText
+  const row = state.streamRow
   finalizeStream(reply, emotion, citations, true)
+  if (!payload.fallbackOffer && needsSetupReply(reply)) {
+    attachSettingsButton(document, row, () => window.api?.openSettings?.('ai'))
+  }
   // 교사 대신 로컬이 답한 날의 첫 답에만 붙는 안내(main이 하루 1회로 거른다).
   if (payload.notice) appendMessage('ai', payload.notice)
   if (payload.fallbackOffer) offerCloudFallback(payload.fallbackOffer, text)
@@ -213,7 +226,7 @@ function offerCloudFallback(offer, text) {
     offer,
     resend: () => sendMessage(text, { allowCloudFallback: true, resend: true }),
     savePolicy: (policy) => window.api?.saveSettings?.({ cloudFallbackPolicy: policy }),
-    openSettings: () => window.api?.openSettings?.()
+    openSettings: () => window.api?.openSettings?.('ai')
   })
 }
 

@@ -170,10 +170,18 @@ export function showFallbackOffer({ doc, append, offer, resend, savePolicy, open
   attachButtons(row, choiceButtons(doc, FALLBACK_CHOICES, (id) => runFallbackChoice(id, {
     resend,
     savePolicy,
-    decline: () => attachButtons(
-      append(FALLBACK_DECLINED_TEXT),
-      choiceButtons(doc, [['settings', '설정 열기']], () => openSettings())
-    )
+    decline: () => attachSettingsButton(doc, append(FALLBACK_DECLINED_TEXT), openSettings)
   })))
   return row
+}
+
+// 답변 모델이 없을 때 백엔드가 주는 안내문(claude_service._build_unavailable_reply)
+// 뒤에도 같은 [설정 열기]를 붙인다(발주서 24 — 키 없이 채팅을 보낸 경우).
+const NEEDS_SETUP_RE = /설정 → AI 설정에서 API 키를/
+export function needsSetupReply(reply) {
+  return NEEDS_SETUP_RE.test(String(reply || ''))
+}
+
+export function attachSettingsButton(doc, row, openSettings) {
+  attachButtons(row, choiceButtons(doc, [['settings', '설정 열기']], () => openSettings()))
 }

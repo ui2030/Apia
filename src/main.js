@@ -17,6 +17,7 @@ import {
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
+import { lowEndLevers, showGraphicsFailCard } from './supportUi.js'
 import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector, setSeatedHipHeight, releaseSit, getWalkSpeed, setStageNavigation } from './characterController.js'
 import { applyInertialization, recordDisplayedPose, setInertializationEnabled } from './inertialization.js'
 import { parseSpectate, createCommentGate, isSpectateSkip, spectateRawOf } from './spectateDriver.js'
@@ -238,8 +239,35 @@ window.__applyMotion = playMotion
 // (scene/camera/renderer/clock + applyCameraDefault) are pulled out for
 // the existing call sites; everything boot-time used to live here is
 // now in src/sceneRuntime.js.
-const _sceneRuntime = createSceneRuntime({
-  canvasEl: document.getElementById('vrm-canvas')
+// WebGL을 못 만들거나 잃으면 흰 화면 대신 안내 카드(발주서 24).
+const _sceneRuntime = (() => {
+  try {
+    return createSceneRuntime({ canvasEl: document.getElementById('vrm-canvas') })
+  } catch (error) {
+    showGraphicsFailCard({ doc: document, api: window.api })
+    throw error
+  }
+})()
+document.getElementById('vrm-canvas')?.addEventListener('webglcontextlost', () => {
+  showGraphicsFailCard({ doc: document, api: window.api })
+})
+
+// 저사양 모드(발주서 24) — 이미 있는 손잡이만 돌린다: 후처리·화면 배율·물리 스텝·관전 간격.
+let _lowEnd = lowEndLevers(false)
+async function applyLowEndMode(on) {
+  _lowEnd = lowEndLevers(on === true)
+  _sceneRuntime.postFx?.setEnabled(_lowEnd.postFx)
+  _sceneRuntime.setPixelRatioCap?.(_lowEnd.pixelRatioCap)
+  if (currentModel?.type === 'mmd') {
+    const { helper } = await getMmdRuntime()
+    const physics = helper?.objects?.get(currentModel.obj)?.physics
+    if (physics) Object.assign(physics, _lowEnd.physics)
+  }
+}
+window.__lowEndState = () => ({
+  ..._lowEnd,
+  postFxOn: _sceneRuntime.postFx?.isEnabled?.() ?? null,
+  pixelRatio: _sceneRuntime.renderer.getPixelRatio()
 })
 const scene = _sceneRuntime.scene
 const camera = _sceneRuntime.camera
@@ -603,6 +631,7 @@ const spectateRunner = createDirectorRunner({
   isSkipResult: isSpectateSkip,
   minIntervalMs: 25000,
   jitterMs: 15000,
+  intervalScale: () => _lowEnd.spectateIntervalScale,
   // 디렉터와 같은 이유 — main의 관전 IPC 상한(claude_code 30s)보다 뒤에 끊긴다.
   timeoutMs: 35000
 })
@@ -1453,7 +1482,8 @@ async function loadMMDRuntimeModel(url, loadToken, textureMap = null) {
           // unitStep 1/120: 기본 1/65는 60Hz 초과 화면에서 옷 물리가 계단·배속
           // (patchRealtimePhysicsStep 참조)으로 보인다. 120Hz 스텝이면 어떤
           // 주사율에서도 부드럽고, maxStepNum 4로 30fps까지 정속 커버.
-          helper?.add?.(mesh, { physics: true, warmup: 0, unitStep: 1 / 120, maxStepNum: 4 })
+          // (저사양 모드면 1/60·2스텝 — lowEndLevers)
+          helper?.add?.(mesh, { physics: true, warmup: 0, ..._lowEnd.physics })
           const physicsBody = mesh.geometry?.userData?.MMD
           const rigidBodyCount = physicsBody?.rigidBodies?.length ?? 0
           const constraintCount = physicsBody?.constraints?.length ?? 0
@@ -2422,6 +2452,7 @@ window.api?.onWallpaperOpaque?.((on) => {
 
 if (window.api) {
   window.api.getSettings().then(async (s) => {
+    applyLowEndMode(s.lowEndMode).catch(() => {})
     currentUserScale = (s.charScale || 100) / 100
     autoBehaviorEnabled = s.autoBehavior !== false
     scheduleAutoBehavior()
@@ -2451,6 +2482,7 @@ if (window.api) {
   })
 
   window.api.onSettingsApplied(async (s) => {
+    applyLowEndMode(s.lowEndMode).catch(() => {})
     currentUserScale = (s.charScale || 100) / 100
     autoBehaviorEnabled = s.autoBehavior !== false
     scheduleAutoBehavior()

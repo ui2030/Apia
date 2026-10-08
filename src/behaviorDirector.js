@@ -175,7 +175,8 @@ export function createDirectorRunner({
   backoffBaseMs = 60000,  // 실패 시 1분부터 2배씩
   maxBackoffMs = 1800000, // 최대 30분
   timeoutMs = 8000,
-  rng = Math.random
+  rng = Math.random,
+  intervalScale = () => 1 // 정상 주기 배율(저사양 모드의 관전 간격 2배)
 } = {}) {
   let directive = null
   let inFlight = false
@@ -191,14 +192,14 @@ export function createDirectorRunner({
       if (isSkipResult(raw)) {
         // 정상 무발화 tick — 백오프 금지, 다음 정상 주기만 예약.
         failStreak = 0
-        nextAllowedAt = now() + minIntervalMs + Math.floor(rng() * jitterMs)
+        nextAllowedAt = now() + (minIntervalMs + Math.floor(rng() * jitterMs)) * intervalScale()
         return current(now())
       }
       const parsed = parse(raw, now())
       if (parsed) {
         directive = parsed
         failStreak = 0
-        nextAllowedAt = now() + minIntervalMs + Math.floor(rng() * jitterMs)
+        nextAllowedAt = now() + (minIntervalMs + Math.floor(rng() * jitterMs)) * intervalScale()
       } else {
         failStreak += 1
         nextAllowedAt = now() + backoffMs(failStreak, backoffBaseMs, maxBackoffMs)

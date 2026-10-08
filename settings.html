@@ -310,7 +310,7 @@
 </div>
 
 <div class="content">
-  <div class="section">
+  <div class="section" id="section-character">
     <div class="section-title">캐릭터 모델</div>
 
     <div id="model-list"></div>
@@ -379,9 +379,21 @@
         <div class="t-thumb"></div>
       </label>
     </div>
+
+    <div class="row">
+      <div>
+        <div class="row-label">저사양 모드</div>
+        <div class="row-sub">화면이 버벅이거나 안 나오면 켜 보세요. 효과를 줄여 가볍게 그려요</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="low-end-mode">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
   </div>
 
-  <div class="section">
+  <div class="section" id="section-ai">
     <div class="section-title">AI 설정</div>
     <div class="row">
       <div class="row-label">답변 모델</div>
@@ -1060,6 +1072,22 @@
     </div>
     <div class="row-sub" id="courseware-warn" style="margin-top:6px; display:none;"></div>
   </div>
+
+  <div class="section" id="section-about">
+    <div class="section-title">정보 · 도움</div>
+    <div class="row"><div class="row-label">앱 버전</div><span class="row-sub" id="about-version" style="font-size:11px;">—</span></div>
+    <div class="row"><div class="row-label">설치 종류</div><span class="row-sub" id="about-kind" style="font-size:11px;">—</span></div>
+    <div class="row"><div class="row-label">AI 엔진</div><span class="row-sub" id="about-backend" style="font-size:11px;">확인하는 중…</span></div>
+    <div class="row"><div class="row-label">로컬 모델</div><span class="row-sub" id="about-local" style="font-size:11px;">확인하는 중…</span></div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;padding:10px 0 4px;">
+      <button type="button" class="btn btn-ghost" id="about-guide">사용 설명서</button>
+      <button type="button" class="btn btn-ghost" id="about-privacy">개인정보 안내</button>
+      <button type="button" class="btn btn-ghost" id="about-logs">로그 폴더 열기</button>
+      <button type="button" class="btn btn-purple" id="about-report">문제 신고용 묶기</button>
+      <button type="button" class="btn btn-ghost" id="about-personal">내 파일 폴더 열기</button>
+    </div>
+    <div class="row-sub">문제 신고용 묶기는 기록(로그)과 설정을 바탕화면에 zip 파일로 모아요. API 키·대화 내용·목소리·내 파일은 넣지 않아요.</div>
+  </div>
 </div>
 
 <div class="footer">
@@ -1218,6 +1246,7 @@ async function init() {
   bindBackendEnvControls()
   refreshBackendEnvPresence()
   bindPersonalFolder()
+  bindAboutPanel()
   bindPersonaPanel()
   await refreshPersonaPanel()
   // Codex MUST-FIX (step 1 round 2): re-resolve the active character when
@@ -1235,6 +1264,7 @@ async function init() {
     refreshPersonaPanel()
   })
   bindDataPanelControls()
+  scrollToHashSection()
   // syncDataPanelEnvFromBackend runs ONCE at init so user edits aren't
   // overwritten by later refreshes. Stats panels poll separately via
   // refreshDataPanelStats so memory/files/web counts can refresh on user
@@ -2118,6 +2148,7 @@ function applyToUI() {
   document.getElementById('char-scale').value = settings.charScale || 100
   document.getElementById('scale-val').textContent = (settings.charScale || 100) + '%'
   document.getElementById('auto-behavior').checked = settings.autoBehavior !== false
+  document.getElementById('low-end-mode').checked = settings.lowEndMode === true
   document.getElementById('ai-mode').value = settings.aiMode || 'auto'
   document.getElementById('cloud-fallback-policy').value = settings.cloudFallbackPolicy || 'ask'
   // 저장된 값이 이 드롭다운에 없는 항목이면(관전에서 local 등) value 대입이
@@ -2824,6 +2855,7 @@ async function save() {
     alwaysOnTop: document.getElementById('always-on-top').checked,
     charScale: parseInt(document.getElementById('char-scale').value, 10),
     autoBehavior: document.getElementById('auto-behavior').checked,
+    lowEndMode: document.getElementById('low-end-mode').checked,
     aiMode: document.getElementById('ai-mode').value,
     cloudFallbackPolicy: document.getElementById('cloud-fallback-policy').value,
     aiModeDirector: document.getElementById('ai-mode-director').value,
@@ -2900,6 +2932,45 @@ async function refreshPersonalRow() {
     : '성격 파일 없음 — 기본 설정 사용 중'
   document.getElementById('personal-reset').disabled = !s.personal
 }
+
+// ── 정보·도움 (발주서 24) ─────────────────────────────────────────────────
+async function refreshAboutPanel() {
+  const info = await window.api.appInfo?.().catch(() => null)
+  if (!info) return
+  document.getElementById('about-version').textContent = info.version
+  document.getElementById('about-kind').textContent = info.packaged ? '설치본' : '개발'
+  document.getElementById('about-backend').textContent =
+    (info.backendConnected ? '연결됨' : '연결 안 됨') + ` (포트 ${info.backendPort})`
+  document.getElementById('about-local').textContent = info.localModel == null
+    ? '확인하지 못했어요'
+    : (info.localModel ? '들어 있어요' : '들어 있지 않아요')
+}
+
+function bindAboutPanel() {
+  const failToast = (r) => showToast('열지 못했어요: ' + friendlyError(r?.error, '알 수 없는 오류'), 'error')
+  const bind = (id, run) => document.getElementById(id)?.addEventListener('click', async () => {
+    const r = await run().catch((e) => ({ ok: false, error: e }))
+    if (!r?.ok) failToast(r)
+    return r
+  })
+  bind('about-guide', () => window.api.openHelp('guide'))
+  bind('about-privacy', () => window.api.openHelp('privacy'))
+  bind('about-logs', () => window.api.openLogsFolder())
+  bind('about-personal', () => window.api.openPersonalFolder())
+  document.getElementById('about-report')?.addEventListener('click', async () => {
+    const r = await window.api.bundleReport().catch((e) => ({ ok: false, error: e }))
+    if (r?.ok) showToast('묶었어요. 깃허브 이슈에 첨부해 주세요', 'success', 4000)
+    else showToast('묶지 못했어요: ' + friendlyError(r?.error, '알 수 없는 오류'), 'error')
+  })
+  refreshAboutPanel()
+}
+
+// 설정 창을 특정 칸으로 열기(시작 안내 카드의 [API 키 넣기]·[캐릭터 넣기]).
+function scrollToHashSection() {
+  const id = (location.hash || '').slice(1)
+  if (id) document.getElementById('section-' + id)?.scrollIntoView({ block: 'start' })
+}
+window.addEventListener('hashchange', scrollToHashSection)
 
 function bindPersonalFolder() {
   document.getElementById('personal-open')?.addEventListener('click', async () => {

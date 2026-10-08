@@ -98,7 +98,13 @@ const SETTINGS_DEFAULTS = Object.freeze({
   micEnabled: false,
   // 고른 클라우드 모델이 안 켜질 때 다른 클라우드로 대신 답할지. 'ask'(기본,
   // 그때 묻는다) | 'always' | 'never'. 다른 키의 요금이 나가므로 기본은 묻기.
-  cloudFallbackPolicy: 'ask'
+  cloudFallbackPolicy: 'ask',
+  // 저사양 모드 — 후처리 끔·화면 배율 1.0·물리 스텝 완화·화면 함께 보기 간격 2배.
+  lowEndMode: false,
+  // 시작 안내 카드(발주서 24). 답변 모델이 생기면 true로 영구 종료,
+  // [나중에]는 횟수만 센다(3회 넘으면 다시 안 띄움).
+  firstRunDone: false,
+  firstRunDismissCount: 0
 })
 
 const BACKEND_ENV_EXAMPLE_FILENAME = 'backend.env.example'
@@ -242,6 +248,11 @@ class SettingsRepository {
       settings.proactiveOpenerFrequency = SETTINGS_DEFAULTS.proactiveOpenerFrequency
     }
     settings.micEnabled = settings.micEnabled === true
+    settings.lowEndMode = settings.lowEndMode === true
+    settings.firstRunDone = settings.firstRunDone === true
+    settings.firstRunDismissCount = Number.isInteger(settings.firstRunDismissCount)
+      ? Math.max(0, Math.min(99, settings.firstRunDismissCount))
+      : 0
     if (!['ask', 'always', 'never'].includes(settings.cloudFallbackPolicy)) {
       settings.cloudFallbackPolicy = SETTINGS_DEFAULTS.cloudFallbackPolicy
     }

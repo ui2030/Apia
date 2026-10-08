@@ -1833,8 +1833,8 @@ ipcMain.handle('save-settings', (e, data) => {
   return { ok: true, settings }
 })
 
-ipcMain.handle('open-settings', () => {
-  windows.openSettings()
+ipcMain.handle('open-settings', (e, section) => {
+  windows.openSettings(section)
   return { ok: true }
 })
 
@@ -2054,6 +2054,128 @@ ipcMain.handle('settings:restartBackend', async () => {
     logWarn('[BACKEND_RESTART_WARN]', error)
     return { ok: false, error: error?.message || String(error) }
   }
+})
+
+// ── 처음 켜기 · 정보·도움 · 문제 신고용 묶기 (발주서 24) ─────────────────────
+const os = require('os')
+const AdmZip = require('adm-zip')
+const { firstRunDecision, helpLinkUrl, buildReportEntries, reportStamp } = require('./services/appSupport')
+
+// 답변 모델 목록. 백엔드에 못 붙으면 null(모름) — []와 구분해야 카드가 오판하지 않는다.
+async function readAvailableModes() {
+  try {
+    await backend.ensureAvailableForRequest()
+    const w = await requestBackendJson('/warmup', { method: 'GET', timeout: 3000 })
+    return Array.isArray(w?.available_modes) ? w.available_modes : null
+  } catch {
+    return null
+  }
+}
+
+let firstRunHiddenThisRun = false
+ipcMain.handle('firstRun:state', async (event) => {
+  const settings = loadSettings()
+  if (settings.firstRunDone === true) return { show: false }
+  const decision = firstRunDecision({
+    settings, availableModes: await readAvailableModes(), hiddenThisRun: firstRunHiddenThisRun
+  })
+  if (decision.markDone) patchSettings({ firstRunDone: true })
+  // 벽지 모드의 메인 창은 바탕화면 뒤라 누를 수 없다 — 카드는 채팅 창에 띄운다.
+  const main = windows.getMain()
+  if (decision.show && wallpaperMode.isAttached() && main && event.sender === main.webContents) {
+    const win = ensureChatWindow()
+    if (!win.isVisible()) win.show()
+  }
+  return { show: decision.show }
+})
+ipcMain.handle('firstRun:dismiss', () => {
+  firstRunHiddenThisRun = true
+  patchSettings({ firstRunDismissCount: (loadSettings().firstRunDismissCount || 0) + 1 })
+  return { ok: true }
+})
+
+ipcMain.handle('app:info', async () => {
+  const modes = await readAvailableModes()
+  return {
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    backendConnected: await backend.isHealthy(1200).catch(() => false),
+    backendPort: backend.getSpawnConfig().port,
+    localModel: modes ? modes.includes('local') : null
+  }
+})
+
+ipcMain.handle('app:openHelp', async (_event, kind) => {
+  const url = helpLinkUrl(kind)
+  if (!url) return { ok: false, error: 'unknown link' }
+  if (APIA_E2E_NO_SHELL_OPEN) return { ok: true, url, stubbed: true }
+  try {
+    await shell.openExternal(url)
+    return { ok: true, url }
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) }
+  }
+})
+
+ipcMain.handle('app:openLogsFolder', async () => {
+  try {
+    fs.mkdirSync(RUNTIME_LOG_DIR, { recursive: true })
+    if (APIA_E2E_NO_SHELL_OPEN) return { ok: true, path: RUNTIME_LOG_DIR, stubbed: true }
+    const errorMessage = await shell.openPath(RUNTIME_LOG_DIR)
+    return errorMessage ? { ok: false, error: errorMessage } : { ok: true, path: RUNTIME_LOG_DIR }
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) }
+  }
+})
+
+async function gpuSummary() {
+  try {
+    const info = await app.getGPUInfo('basic')
+    const devices = (info?.gpuDevice || []).map((d) => d.deviceString ||
+      `vendor 0x${Number(d.vendorId || 0).toString(16)} device 0x${Number(d.deviceId || 0).toString(16)}`)
+    return devices.join(' / ') || '알 수 없음'
+  } catch {
+    return '알 수 없음'
+  }
+}
+
+ipcMain.handle('app:bundleReport', async () => {
+  try {
+    const settings = loadSettings()
+    const summaryLines = [
+      `Apia ${app.getVersion()} (${app.isPackaged ? '설치본' : '개발'})`,
+      `OS: ${os.type()} ${os.release()} ${os.arch()} (${process.getSystemVersion?.() || ''})`,
+      `Electron ${process.versions.electron} / Chrome ${process.versions.chrome}`,
+      `GPU: ${await gpuSummary()}`,
+      `백엔드: ${(await backend.isHealthy(1200).catch(() => false)) ? '연결됨' : '연결 안 됨'} (포트 ${backend.getSpawnConfig().port})`,
+      `답변 모델 설정: ${settings.aiMode} / 저사양 모드: ${settings.lowEndMode ? '켜짐' : '꺼짐'}`,
+      `만든 때: ${new Date().toISOString()}`
+    ]
+    const entries = buildReportEntries({
+      logDir: RUNTIME_LOG_DIR,
+      settingsPath: path.join(app.getPath('userData'), 'apia-settings.json'),
+      summaryLines,
+      userName: os.userInfo().username
+    })
+    const zipPath = path.join(app.getPath('desktop'), `apia-report-${reportStamp()}.zip`)
+    const zip = new AdmZip()
+    for (const entry of entries) zip.addFile(entry.name, Buffer.from(entry.data, 'utf-8'))
+    zip.writeZip(zipPath)
+    logInfo('[REPORT_BUNDLE]', { files: entries.map((entry) => entry.name) })
+    if (!APIA_E2E_NO_SHELL_OPEN) shell.showItemInFolder(zipPath)
+    return { ok: true, path: zipPath, files: entries.map((entry) => entry.name) }
+  } catch (error) {
+    logWarn('[REPORT_BUNDLE_FAIL]', error?.message || error)
+    return { ok: false, error: error?.message || String(error) }
+  }
+})
+
+// 그래픽 실패 카드의 [저사양 모드 켜고 다시 시작].
+ipcMain.handle('app:relaunchLowEnd', () => {
+  patchSettings({ lowEndMode: true })
+  app.relaunch()
+  quitApia()
+  return { ok: true }
 })
 
 process.on('uncaughtException', (error) => {

@@ -360,9 +360,15 @@ class WindowManager {
     return this.#main
   }
 
-  openSettings() {
+  // section('ai'|'character'|'about') — 그 칸으로 바로 스크롤. 이미 열려 있으면
+  // 다시 띄우지 않고 해시만 바꾼다(settings.html이 hashchange로 따라간다).
+  openSettings(section = null) {
+    const hash = typeof section === 'string' && /^[a-z]{1,20}$/.test(section) ? section : null
     if (this.#settings && !this.#settings.isDestroyed()) {
       this.#settings.focus()
+      if (hash) {
+        this.#settings.webContents.executeJavaScript(`location.hash = ''; location.hash = ${JSON.stringify(hash)}`).catch(() => {})
+      }
       return this.#settings
     }
 
@@ -404,7 +410,7 @@ class WindowManager {
     this.#log.info('[SETTINGS_WINDOW_LOADFILE]', {
       settingsPath: settingsHtmlPath, exists: fs.existsSync(settingsHtmlPath)
     })
-    this.#settings.loadFile(settingsHtmlPath).catch((error) => {
+    this.#settings.loadFile(settingsHtmlPath, hash ? { hash } : undefined).catch((error) => {
       this.showStartupError('Settings window failed to load.', error).catch((nestedError) => {
         this.#log.error('[SETTINGS_WINDOW_ERROR_FALLBACK_FAILED]', nestedError)
       })

@@ -91,6 +91,10 @@ const SettingsSchema = z.object({
   // 고른 클라우드 모델이 안 켜질 때 다른 클라우드로 대신 답할지(발주서 23).
   // optional: 구버전 settings.json은 'ask'로 하이드레이트.
   cloudFallbackPolicy: z.enum(['ask', 'always', 'never']).optional(),
+  // 발주서 24 — 저사양 모드·시작 안내 카드 상태. optional: 구버전은 기본값으로.
+  lowEndMode: z.boolean().optional(),
+  firstRunDone: z.boolean().optional(),
+  firstRunDismissCount: z.number().int().min(0).optional(),
   // 참조 음성의 원본 파일명 — 표시 전용. 실제 wav는 backend-data/cosyvoice/
   // prompt.wav 한 곳에 있고(백엔드가 그 규약 경로를 읽는다) 경로를 설정에
   // 중복 저장하지 않는다.

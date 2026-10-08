@@ -278,6 +278,24 @@ describe('createDirectorRunner', () => {
     await Promise.all([p1, p2])
   })
 
+  it('intervalScale stretches the normal interval live (low-end mode x2)', async () => {
+    let t = 0
+    let scale = 2
+    const call = vi.fn().mockResolvedValue({ activityBias: 0.5 })
+    const runner = createDirectorRunner({ call, now: () => t, minIntervalMs: 1000, jitterMs: 0, intervalScale: () => scale })
+    await runner.maybeRun(ctx)
+    t = 1500
+    await runner.maybeRun(ctx)
+    expect(call).toHaveBeenCalledTimes(1) // 2000ms가 아직 안 됨
+    t = 2001
+    await runner.maybeRun(ctx)
+    expect(call).toHaveBeenCalledTimes(2)
+    scale = 1
+    t = 3002
+    await runner.maybeRun(ctx)
+    expect(call).toHaveBeenCalledTimes(2) // 직전 예약은 2배로 잡혔다
+  })
+
   it('reset clears directive and timers', async () => {
     let t = 0
     const call = vi.fn().mockResolvedValue({ activityBias: 0.5 })
