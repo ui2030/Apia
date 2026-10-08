@@ -90,6 +90,10 @@ _MODE_LABELS = {
     "ollama_vlm": "Ollama (내 PC 그림 모델)",
 }
 
+# PC 안에서 도는 provider. 이 밖은 전부 클라우드다 — 클라우드끼리 넘어가면 다른
+# 키의 요금이 나가므로 사용자에게 먼저 묻는다(발주서 23).
+_LOCAL_MODES = frozenset(("local", "ollama_vlm"))
+
 class BanTokenIds:
     """generate()용 logits processor — 주어진 토큰 id의 logit을 -inf로."""
 
@@ -326,7 +330,13 @@ class ClaudeService:
 
         return False
 
-    async def ensure_mode(self, requested_mode: Optional[str], chat: bool = True) -> str:
+    async def ensure_mode(
+        self,
+        requested_mode: Optional[str],
+        chat: bool = True,
+        allow_cloud_fallback: bool = False,
+        meta: Optional[dict] = None,
+    ) -> str:
         """Public 진입점. `chat()`과 `routers.warmup` 모두 이걸 통해 들어온다.
 
         `_ensure_mode`는 동기이고 안에서 `_initialize_mode` → `_init_local`이
@@ -337,7 +347,9 @@ class ClaudeService:
         fast-path를 만들어 to_thread 비용도 거의 없다.
         """
         async with self._init_lock:
-            return await asyncio.to_thread(self._ensure_mode, requested_mode, chat)
+            return await asyncio.to_thread(
+                self._ensure_mode, requested_mode, chat, allow_cloud_fallback, meta
+            )
 
     async def maybe_unload_idle_local(self) -> bool:
         """`GET /warmup`가 부르는 유휴 해제 훅. local만 계속 쓰는 사용자는
@@ -438,7 +450,17 @@ class ClaudeService:
         if self._last_init_error and self._last_init_error.get("mode") == mode:
             self._last_init_error = None
 
-    def _ensure_mode(self, requested_mode: Optional[str], chat: bool = True) -> str:
+    def _ensure_mode(
+        self,
+        requested_mode: Optional[str],
+        chat: bool = True,
+        allow_cloud_fallback: bool = False,
+        meta: Optional[dict] = None,
+    ) -> str:
+        """`meta`(호출자 dict)에는 클라우드→다른 클라우드 폴백일 때만 쓴다:
+        허락 없으면 `fallback_offer={from,to,to_label}`(넘어가지 않음), 허락했으면
+        넘어간 뒤 `fallback={from,to}`. 비채팅(chat=False) 자동 호출은 허락이
+        와도 넘어가지 않는다 — 보고 있는 사람이 없다."""
         normalized_mode = self._normalize_mode(requested_mode)
         requested_explicit_mode = normalized_mode if normalized_mode != "auto" else None
 
@@ -464,19 +486,33 @@ class ClaudeService:
         if self._initialize_mode(target_mode):
             return self.mode
 
-        fallback_mode = self._select_auto_mode(chat)
-        if (
-            requested_explicit_mode is not None
-            and fallback_mode not in ("fallback", target_mode)
-        ):
+        # 다음 후보 — 방금 실패한 provider는 뺀다(안 빼면 auto가 같은 걸 다시 골라
+        # 영영 두 번째 후보로 못 간다, astra 지적). auto·명시 모드 둘 다 같은 길.
+        remaining = [m for m in self._get_auto_candidates(chat) if m != target_mode]
+        fallback_mode = remaining[0] if remaining else "fallback"
+        if fallback_mode not in ("fallback", target_mode):
+            cloud_hop = target_mode not in _LOCAL_MODES and fallback_mode not in _LOCAL_MODES
+            if cloud_hop and not (chat and allow_cloud_fallback):
+                print(
+                    f"[AI] mode '{requested_explicit_mode or 'auto:' + target_mode}' unavailable; "
+                    f"not switching to cloud '{fallback_mode}' without consent"
+                )
+                if meta is not None and chat:
+                    meta["fallback_offer"] = {
+                        "from": target_mode,
+                        "to": fallback_mode,
+                        "to_label": _MODE_LABELS.get(fallback_mode, fallback_mode),
+                    }
+                self.mode = "fallback"
+                return self.mode
             print(
-                f"[AI] requested mode '{requested_explicit_mode}' unavailable; "
+                f"[AI] mode '{requested_explicit_mode or 'auto:' + target_mode}' unavailable; "
                 f"falling back to '{fallback_mode}'"
             )
-            if fallback_mode in self._initialized_modes:
+            if fallback_mode in self._initialized_modes or self._initialize_mode(fallback_mode):
                 self.mode = fallback_mode
-                return self.mode
-            if self._initialize_mode(fallback_mode):
+                if cloud_hop and meta is not None:
+                    meta["fallback"] = {"from": target_mode, "to": fallback_mode}
                 return self.mode
 
         self.mode = "fallback"
@@ -870,9 +906,11 @@ class ClaudeService:
         memory_turns: Optional[int] = None,
         memory_context: Optional[str] = None,
         context_blocks: Optional[dict] = None,
+        allow_cloud_fallback: bool = False,
+        meta: Optional[dict] = None,
     ) -> Tuple[str, str]:
         requested_mode = self._normalize_mode(ai_mode)
-        active_mode = await self.ensure_mode(ai_mode)
+        active_mode = await self.ensure_mode(ai_mode, True, allow_cloud_fallback, meta)
         blocks = self._coerce_context_blocks(context_blocks, memory_context)
 
         if active_mode == "local":
@@ -913,6 +951,7 @@ class ClaudeService:
         memory_context: Optional[str] = None,
         context_blocks: Optional[dict] = None,
         meta: Optional[dict] = None,
+        allow_cloud_fallback: bool = False,
     ) -> AsyncIterator[str]:
         """Yield reply text deltas (raw — the `[EMOTION:...]` marker is left in
         the stream; the caller strips it via `parse_emotion` on the full text).
@@ -922,9 +961,10 @@ class ClaudeService:
 
         `meta`(호출자가 넘긴 dict)에는 deepseek이 로컬로 폴백했을 때
         `fallback='local'`과 `fallback_reason`('budget'|'error')을 채운다.
+        클라우드→클라우드 폴백 메타는 `_ensure_mode` 참조.
         """
         requested_mode = self._normalize_mode(ai_mode)
-        active_mode = await self.ensure_mode(ai_mode)
+        active_mode = await self.ensure_mode(ai_mode, True, allow_cloud_fallback, meta)
         blocks = self._coerce_context_blocks(context_blocks, memory_context)
 
         if active_mode == "claude":

@@ -5,14 +5,14 @@ contextBridge.exposeInMainWorld('api', {
   setIgnoreMouse: (v) => ipcRenderer.send('set-ignore-mouse', v),
   checkBackend: () => ipcRenderer.invoke('check-backend'),
   sendMessage: (msg, hist, opts) => ipcRenderer.invoke('send-message', {
-    message: msg, history: hist, useWeb: opts?.useWeb
+    message: msg, history: hist, useWeb: opts?.useWeb, allowCloudFallback: opts?.allowCloudFallback === true
   }),
 
   // SSE 채팅 스트리밍. streamStart는 요청 ID를 반환하고, 델타/완료/에러는
   // 별도 채널로 밀린다. onX 구독자는 해제 함수를 반환(리스너 누수 방지) —
   // cursor 피드와 같은 계약. 렌더러는 requestId로 늦게 온 델타를 걸러낸다.
   chatStreamStart: (msg, hist, opts) => ipcRenderer.invoke('chat:streamStart', {
-    message: msg, history: hist, useWeb: opts?.useWeb
+    message: msg, history: hist, useWeb: opts?.useWeb, allowCloudFallback: opts?.allowCloudFallback === true
   }),
   onChatStreamDelta: (cb) => {
     const listener = (_e, payload) => cb(payload)

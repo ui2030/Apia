@@ -83,3 +83,24 @@ describe('care_topics', () => {
     expect(prep).toMatch(/attachCareTopics\([\s\S]*safeLedgerState\(\)\)/)
   })
 })
+
+// 발주서 23 — 다른 클라우드로 대신 답하기는 허락이 있을 때만 플래그를 싣는다.
+describe('attachCloudFallback / fallbackOfferFor', () => {
+  const { attachCloudFallback, fallbackOfferFor } = require('../electron/services/chatPolicy.js')
+  const body = { message: 'hi' }
+  it('ask(기본)면 body 그대로, always면 플래그', () => {
+    expect(attachCloudFallback(body, { cloudFallbackPolicy: 'ask' })).toBe(body)
+    expect(attachCloudFallback(body, {})).toBe(body)
+    expect(attachCloudFallback(body, { cloudFallbackPolicy: 'always' })).toEqual({ message: 'hi', allow_cloud_fallback: true })
+  })
+  it('[이번만] 다시 보내기는 정책과 무관하게 플래그', () => {
+    expect(attachCloudFallback(body, { cloudFallbackPolicy: 'ask' }, true).allow_cloud_fallback).toBe(true)
+    expect(attachCloudFallback(body, { cloudFallbackPolicy: 'never' }, true).allow_cloud_fallback).toBe(true)
+  })
+  it('never면 제안을 버리고 안내만', () => {
+    const offer = { from: 'claude', to: 'groq', to_label: 'Groq API' }
+    expect(fallbackOfferFor({ fallback_offer: offer }, { cloudFallbackPolicy: 'ask' })).toBe(offer)
+    expect(fallbackOfferFor({ fallback_offer: offer }, { cloudFallbackPolicy: 'never' })).toBe(null)
+    expect(fallbackOfferFor({ reply: 'x' }, { cloudFallbackPolicy: 'ask' })).toBe(null)
+  })
+})

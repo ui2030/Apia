@@ -118,3 +118,62 @@ export function pollWhileVisible(fn, intervalMs, doc = globalThis.document) {
   if (!doc?.hidden) start()
   return { stop, isRunning: () => id !== null }
 }
+
+// ── 다른 클라우드로 대신 답할지 묻기 (발주서 23) ─────────────────────────────
+// 고른 클라우드 모델이 안 켜졌을 때 백엔드가 넘어가지 않고 제안(fallback_offer)만
+// 돌려준다. 버튼 세 개로 한 번 묻고, [앞으로 항상]이면 설정에 기억한다.
+// 버튼 모양은 출처 칩(.citation-chip)을 그대로 쓴다 — 두 표면 모두 스타일이 있다.
+export const FALLBACK_CHOICES = Object.freeze([
+  ['once', '이번만'],
+  ['always', '앞으로 항상'],
+  ['no', '아니요']
+])
+export const FALLBACK_DECLINED_TEXT =
+  '알겠어요, 다른 클라우드 모델로는 넘어가지 않을게요. 고른 모델을 쓰려면 설정 → AI 설정에서 API 키를 확인한 뒤 [저장 및 적용]을 눌러 주세요.'
+
+export function fallbackOfferText(offer) {
+  const to = offer?.to_label || '다른 클라우드 모델'
+  return `대신 ${to}로 답할까요? 그쪽 키로 요금이 나갈 수 있어요.`
+}
+
+/** 버튼 선택 처리. 'always'는 설정을 먼저 저장하고 다시 보낸다. */
+export async function runFallbackChoice(choice, { resend, savePolicy, decline }) {
+  if (choice === 'always') await savePolicy('always')
+  if (choice === 'once' || choice === 'always') return resend()
+  return decline()
+}
+
+// 한 번 누르면 버튼 줄이 사라진다(두 번 보내기 방지).
+function choiceButtons(doc, choices, onPick) {
+  const wrap = doc.createElement('div')
+  wrap.className = 'msg-citations'
+  for (const [id, label] of choices) {
+    const btn = doc.createElement('button')
+    btn.type = 'button'
+    btn.className = 'citation-chip'
+    btn.textContent = label
+    btn.addEventListener('click', () => { wrap.remove(); onPick(id) })
+    wrap.appendChild(btn)
+  }
+  return wrap
+}
+
+// 말풍선 아래에 버튼 줄을 붙이고 보이게 스크롤한다(appendMessage의 스크롤은 버튼 전 시점).
+function attachButtons(row, buttons) {
+  row?.appendChild(buttons)
+  row?.scrollIntoView?.({ block: 'end' })
+}
+
+/** 제안 말풍선 + 버튼 3개. append(text)는 각 표면의 appendMessage('ai', …). */
+export function showFallbackOffer({ doc, append, offer, resend, savePolicy, openSettings }) {
+  const row = append(fallbackOfferText(offer))
+  attachButtons(row, choiceButtons(doc, FALLBACK_CHOICES, (id) => runFallbackChoice(id, {
+    resend,
+    savePolicy,
+    decline: () => attachButtons(
+      append(FALLBACK_DECLINED_TEXT),
+      choiceButtons(doc, [['settings', '설정 열기']], () => openSettings())
+    )
+  })))
+  return row
+}

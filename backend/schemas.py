@@ -59,6 +59,9 @@ class ChatRequest(BaseModel):
     # 없으면 프롬프트는 기존과 바이트 동일. spectate와 같은 이유로 느슨한 타입이고,
     # 화이트리스트·상한 검증은 라우터의 _care_block이 한다.
     care_topics: Any = None
+    # 발주서 23 — 고른 클라우드 모델이 안 켜질 때 다른 클라우드로 넘어가도 되는가.
+    # 기본 false면 넘어가지 않고 응답에 fallback_offer를 실어 사용자에게 묻는다.
+    allow_cloud_fallback: bool = False
 
 
 class DirectorRequest(BaseModel):
@@ -180,6 +183,10 @@ class ChatResponse(BaseModel):
     reply: str
     emotion: Optional[str] = "neutral"  # happy | sad | angry | surprised | neutral
     citations: List[ChatCitation] = Field(default_factory=list)
+    # 클라우드→클라우드 폴백(발주서 23): 넘어갔으면 fallback={from,to},
+    # 허락이 없어 안 넘어갔으면 fallback_offer={from,to,to_label}.
+    fallback: Optional[dict] = None
+    fallback_offer: Optional[dict] = None
 
 
 # ── /voices ────────────────────────────────────────────────────────────────

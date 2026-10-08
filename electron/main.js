@@ -64,7 +64,7 @@ const {
   getPackagedBackendExecutableCandidates: getPackagedBackendExecutableCandidatesRaw
 } = require('./services/backendDiscovery')
 const { BackendLifecycle } = require('./services/backendLifecycle')
-const { chatTimeoutFor, createFallbackNotice, attachCareTopics, careTopicLabels } = require('./services/chatPolicy')
+const { chatTimeoutFor, createFallbackNotice, attachCareTopics, careTopicLabels, attachCloudFallback, fallbackOfferFor } = require('./services/chatPolicy')
 const { SettingsRepository } = require('./services/settingsAggregate')
 const { saveWorldDocument } = require('./services/worldStore')
 const { BackendEnvRepository } = require('./services/backendEnvRepository')
@@ -597,6 +597,11 @@ async function fireOpener({ force = false } = {}) {
     const res = await requestBackendJson('/chat', {
       method: 'POST', timeout: chatTimeoutFor(settings.aiMode), body
     })
+    // 자동 호출이라 다른 클라우드로 넘어가자고 물을 사람이 없다 — 조용히 건너뛴다.
+    if (res?.fallback_offer) {
+      logWarn('[OPENER_SKIPPED_CLOUD_FALLBACK]', JSON.stringify(res.fallback_offer))
+      return { fired: false, reason: 'fallback-offer' }
+    }
     text = String(res?.reply || '').trim()
     if (res?.emotion) emotion = res.emotion
   } catch (error) {
@@ -1112,7 +1117,7 @@ const roleAiMode = (settings, key) => settings[key] || settings.aiMode
 // 기동 비용 때문에 그 안에 못 들어와서 별도 예산을 준다.
 const CLAUDE_CODE_AUX_TIMEOUT = 30000
 
-ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
+ipcMain.handle('send-message', async (e, { message, history, useWeb, allowCloudFallback }) => {
   ledgerTracker.noteUserMessage(message) // 계측 — 동기·비차단
   onUserChatActivity()                    // 선톡 응답 확정 + 대화 중 표시
   try {
@@ -1128,13 +1133,13 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
     // A-2: 교재에서 이 발화와 겹치는 카드를 찾아 body에 싣는다. 토글이 꺼져
     // 있거나 겹치는 게 없으면 키 자체가 안 붙는다(= 기존과 같은 요청).
     // A-4: 승격된 유형이면 로컬 학생이 먼저 답한다(폴백은 아래 /chat 그대로).
-    const { body, type, local } = await prepareExchange(message, {
+    const { body, type, local } = await prepareExchange(message, attachCloudFallback({
       message,
       history,
       ai_mode: settings.aiMode,
       memory_turns: settings.memoryTurns,
       use_web: resolvedUseWeb
-    }, settings)
+    }, settings, allowCloudFallback), settings)
     if (local) {
       ledgerTracker.noteReplyDone()
       // 로컬이 낸 답은 교재로도 그림자로도 되먹이지 않는다 — 자기 출력을 다시
@@ -1148,9 +1153,12 @@ ipcMain.handle('send-message', async (e, { message, history, useWeb }) => {
       body
     })
     const topicPromise = ledgerTracker.noteReplyDone()
-    recordCoursewareExchange(message, reply?.reply) // 교재 버퍼 — 비동기 큐, 비차단
-    recordShadow(message, reply?.reply, type, topicPromise) // 그림자 — 분류 뒤, 기다리지 않는다(지연 0)
-    return reply
+    const fallbackOffer = fallbackOfferFor(reply, settings)
+    if (!reply?.fallback_offer) { // 묻는 중인 안내문은 대화가 아니다 — 교재·그림자에 안 넣는다
+      recordCoursewareExchange(message, reply?.reply) // 교재 버퍼 — 비동기 큐, 비차단
+      recordShadow(message, reply?.reply, type, topicPromise) // 그림자 — 분류 뒤, 기다리지 않는다(지연 0)
+    }
+    return { ...reply, fallback_offer: fallbackOffer }
   } catch (e) {
     return { error: e.message }
   }
@@ -1190,7 +1198,7 @@ async function* parseSSEFrames(body) {
   }
 }
 
-ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) => {
+ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb, allowCloudFallback }) => {
   ledgerTracker.noteUserMessage(message) // 계측 — 동기·비차단
   onUserChatActivity()                    // 선톡 응답 확정 + 대화 중 표시
   const sender = event.sender
@@ -1221,13 +1229,13 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
       await backend.ensureAvailableForRequest()
       // A-2 참조 카드 + A-4 승격 서빙 — 비스트리밍 경로와 같은 규칙
       // (prepareExchange 단일 출처).
-      const { body, type, local } = await prepareExchange(message, {
+      const { body, type, local } = await prepareExchange(message, attachCloudFallback({
         message,
         history,
         ai_mode: settings.aiMode,
         memory_turns: settings.memoryTurns,
         use_web: resolvedUseWeb
-      }, settings)
+      }, settings, allowCloudFallback), settings)
       if (local) {
         // 로컬 서빙은 한 덩어리다(스트림이 없다). 델타 프레임 없이 완료만
         // 보낸다 — 렌더러는 델타 없이 done이 와도 그 본문으로 버블을 채운다.
@@ -1254,14 +1262,18 @@ ipcMain.handle('chat:streamStart', async (event, { message, history, useWeb }) =
           sender.send('chat-stream-delta', { requestId, text: frame.text || '' })
         } else if (frame.type === 'final') {
           const topicPromise = ledgerTracker.noteReplyDone() // 계측 — 응답이 화면에 다 뜬 시점
-          recordCoursewareExchange(message, frame.reply) // 교재 버퍼 — 비동기 큐, 비차단
-          recordShadow(message, frame.reply, type, topicPromise) // 그림자 — 분류 뒤, 기다리지 않는다(지연 0)
+          if (!frame.fallback_offer) { // 묻는 중인 안내문은 대화가 아니다 — 교재·그림자에 안 넣는다
+            recordCoursewareExchange(message, frame.reply) // 교재 버퍼 — 비동기 큐, 비차단
+            recordShadow(message, frame.reply, type, topicPromise) // 그림자 — 분류 뒤, 기다리지 않는다(지연 0)
+          }
           sender.send('chat-stream-done', {
             requestId,
             reply: frame.reply,
             emotion: frame.emotion,
             citations: Array.isArray(frame.citations) ? frame.citations : [],
-            notice: fallbackNotice(frame)
+            notice: fallbackNotice(frame),
+            // 다른 클라우드로 대신 답할지 묻는 제안(설정 'never'면 null)
+            fallbackOffer: fallbackOfferFor(frame, settings)
           })
         } else if (frame.type === 'error') {
           sender.send('chat-stream-error', { requestId, error: frame.message || 'stream error' })

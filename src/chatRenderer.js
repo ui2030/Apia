@@ -15,7 +15,7 @@
 //     it; reopen via tray click / Ctrl+Alt+A is instant.
 
 import { analyzeWav } from './lipsyncRuntime.js'
-import { toUserMessage, isActiveFrame, createSpeechQueue, pollWhileVisible } from './chatShared.js'
+import { toUserMessage, isActiveFrame, createSpeechQueue, pollWhileVisible, showFallbackOffer } from './chatShared.js'
 import { createMicController } from './micListener.js'
 
 const state = {
@@ -140,13 +140,13 @@ function setComposerBusy(busy) {
   if (input) input.disabled = busy
 }
 
-async function sendMessage(text) {
+async function sendMessage(text, { allowCloudFallback = false, resend = false } = {}) {
   if (!text?.trim() || state.isSending) return
   // 새 전송은 이전 TTS 재생을 즉시 끊는다(task 2 공유 abort).
   stopSpeakingNow()
   state.isSending = true
   setComposerBusy(true)
-  appendMessage('user', text)
+  if (!resend) appendMessage('user', text) // 다시 보내기는 사용자 말풍선이 이미 있다
   const input = document.getElementById('chat-input')
   if (input) input.value = ''
   const loadingRow = appendMessage('ai', '● ● ●', true)
@@ -166,7 +166,7 @@ async function sendMessage(text) {
     const toggle = document.getElementById('chat-web-toggle')
     const useWeb = toggle ? toggle.checked : state.useWebDefault
     const r = await window.api.chatStreamStart(
-      text, state.history.slice(-historyLimit), { useWeb }
+      text, state.history.slice(-historyLimit), { useWeb, allowCloudFallback }
     )
     state.activeRequestId = r?.requestId || null
     if (!state.activeRequestId) {
@@ -195,9 +195,26 @@ function onStreamDone(payload) {
   const reply = payload.reply || state.streamText || '...'
   const emotion = payload.emotion || 'neutral'
   const citations = Array.isArray(payload.citations) ? payload.citations : []
+  const text = state.pendingUserText
   finalizeStream(reply, emotion, citations, true)
   // 교사 대신 로컬이 답한 날의 첫 답에만 붙는 안내(main이 하루 1회로 거른다).
   if (payload.notice) appendMessage('ai', payload.notice)
+  if (payload.fallbackOffer) offerCloudFallback(payload.fallbackOffer, text)
+}
+
+// 발주서 23 — 고른 클라우드 모델이 안 켜져 다른 클라우드로 대신 답할지 묻는다.
+// 안내 답은 대화가 아니므로 기록에서 뺀다 — [이번만]/[앞으로 항상]이 같은 말을
+// 다시 보낼 때 기록에 두 번 들어가지 않게.
+function offerCloudFallback(offer, text) {
+  state.history.splice(-2)
+  showFallbackOffer({
+    doc: document,
+    append: (t) => appendMessage('ai', t),
+    offer,
+    resend: () => sendMessage(text, { allowCloudFallback: true, resend: true }),
+    savePolicy: (policy) => window.api?.saveSettings?.({ cloudFallbackPolicy: policy }),
+    openSettings: () => window.api?.openSettings?.()
+  })
 }
 
 function onStreamError(payload) {

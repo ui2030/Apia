@@ -278,3 +278,66 @@ describe('pollWhileVisible', () => {
     poll?.stop()
   })
 })
+
+// 발주서 23 — 다른 클라우드로 대신 답할지 묻는 버튼 3개.
+import { showFallbackOffer, fallbackOfferText, FALLBACK_DECLINED_TEXT } from '../src/chatShared.js'
+
+function fakeOfferDoc() {
+  const make = (tag) => {
+    const el = {
+      tag, children: [], listeners: {}, textContent: '', parent: null,
+      appendChild(c) { c.parent = el; el.children.push(c); return c },
+      remove() { if (el.parent) el.parent.children = el.parent.children.filter((c) => c !== el) },
+      addEventListener(t, fn) { el.listeners[t] = fn },
+      click() { el.listeners.click?.() }
+    }
+    return el
+  }
+  return { createElement: make }
+}
+
+function setup() {
+  const doc = fakeOfferDoc()
+  const rows = []
+  const calls = []
+  const append = (text) => { const r = doc.createElement('div'); r.textContent = text; rows.push(r); return r }
+  showFallbackOffer({
+    doc, append, offer: { from: 'claude', to: 'groq', to_label: 'Groq API' },
+    resend: () => calls.push('resend'),
+    savePolicy: async (p) => { calls.push('save:' + p) },
+    openSettings: () => calls.push('settings')
+  })
+  const buttons = () => rows[0].children[0]?.children || []
+  return { rows, calls, buttons }
+}
+const flush = () => new Promise((r) => setTimeout(r, 0))
+
+describe('showFallbackOffer — 한 번 묻고 기억', () => {
+  it('제안 말풍선에 대신 답할 모델과 버튼 3개', () => {
+    const { rows, buttons } = setup()
+    expect(rows[0].textContent).toBe(fallbackOfferText({ to_label: 'Groq API' }))
+    expect(rows[0].textContent).toContain('Groq API')
+    expect(buttons().map((b) => b.textContent)).toEqual(['이번만', '앞으로 항상', '아니요'])
+  })
+  it('[이번만]은 저장 없이 다시 보내고 버튼이 사라진다', async () => {
+    const { rows, calls, buttons } = setup()
+    buttons()[0].click(); await flush()
+    expect(calls).toEqual(['resend'])
+    expect(rows[0].children).toHaveLength(0)
+  })
+  it('[앞으로 항상]은 always 저장 후 다시 보낸다', async () => {
+    const { calls, buttons } = setup()
+    buttons()[1].click(); await flush()
+    expect(calls).toEqual(['save:always', 'resend'])
+  })
+  it('[아니요]는 보내지 않고 안내 + [설정 열기]', async () => {
+    const { rows, calls, buttons } = setup()
+    buttons()[2].click(); await flush()
+    expect(calls).toEqual([])
+    expect(rows[1].textContent).toBe(FALLBACK_DECLINED_TEXT)
+    const open = rows[1].children[0].children[0]
+    expect(open.textContent).toBe('설정 열기')
+    open.click()
+    expect(calls).toEqual(['settings'])
+  })
+})

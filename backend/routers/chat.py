@@ -319,16 +319,25 @@ async def _finalize_reply(
 async def chat(req: ChatRequest, request: Request):
     memory, web, context_blocks, web_results = await _gather_context(req, request)
 
+    meta: dict = {}
     reply, emotion = await claude.chat(
         req.message,
         req.history,
         ai_mode=req.ai_mode,
         memory_turns=req.memory_turns,
         context_blocks=context_blocks,
+        allow_cloud_fallback=req.allow_cloud_fallback,
+        meta=meta,
     )
 
-    citations_out = await _finalize_reply(req, reply, web_results, memory, web)
-    return ChatResponse(reply=reply, emotion=emotion, citations=citations_out)
+    # 묻는 중인 안내문은 대화가 아니다 — 기억에 남기지 않는다.
+    citations_out = [] if meta.get("fallback_offer") else await _finalize_reply(
+        req, reply, web_results, memory, web
+    )
+    return ChatResponse(
+        reply=reply, emotion=emotion, citations=citations_out,
+        fallback=meta.get("fallback"), fallback_offer=meta.get("fallback_offer"),
+    )
 
 
 def _sse(obj: dict) -> str:
@@ -339,7 +348,9 @@ def _sse(obj: dict) -> str:
 #   {"type":"delta","text":"..."}                     — 0..N token deltas
 #   {"type":"final","reply":str,"emotion":str,        — exactly 1, terminal
 #                   "citations":[ChatCitation,...],
-#                   "fallback"?:"local", "fallback_reason"?:"budget"|"error"}
+#                   "fallback"?:"local"|"partial"|{from,to},
+#                   "fallback_reason"?:"budget"|"error",
+#                   "fallback_offer"?:{from,to,to_label}}  — 발주서 23
 #   {"type":"error","message":str}                    — on unexpected failure
 # The final frame carries the authoritative reply (emotion marker stripped) +
 # all ChatResponse metadata; the client replaces the live bubble with it.
@@ -354,7 +365,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     async def event_gen():
         buf = ""
         emitted = 0
-        meta: dict = {}  # deepseek→로컬 폴백이면 fallback/fallback_reason이 채워진다
+        meta: dict = {}  # 폴백 메타(deepseek→로컬, 클라우드→클라우드 허락/제안)
         try:
             async for delta in claude.chat_stream(
                 req.message,
@@ -363,6 +374,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 memory_turns=req.memory_turns,
                 context_blocks=context_blocks,
                 meta=meta,
+                allow_cloud_fallback=req.allow_cloud_fallback,
             ):
                 if not delta:
                     continue
@@ -378,7 +390,9 @@ async def chat_stream(req: ChatRequest, request: Request):
             if len(reply) > emitted:
                 yield _sse({"type": "delta", "text": reply[emitted:]})
 
-            citations = await _finalize_reply(req, reply, web_results, memory, web)
+            citations = [] if meta.get("fallback_offer") else await _finalize_reply(
+                req, reply, web_results, memory, web
+            )
             yield _sse({
                 "type": "final",
                 "reply": reply,

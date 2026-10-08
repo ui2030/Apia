@@ -88,6 +88,9 @@ const SettingsSchema = z.object({
   proactiveOpenerFrequency: z.enum(['daily', 'biDaily']).optional(),
   // 음성 듣기(마이크 1단계). **기본 OFF** — 마이크는 사용자가 명시적으로 켠다.
   micEnabled: z.boolean().optional(),
+  // 고른 클라우드 모델이 안 켜질 때 다른 클라우드로 대신 답할지(발주서 23).
+  // optional: 구버전 settings.json은 'ask'로 하이드레이트.
+  cloudFallbackPolicy: z.enum(['ask', 'always', 'never']).optional(),
   // 참조 음성의 원본 파일명 — 표시 전용. 실제 wav는 backend-data/cosyvoice/
   // prompt.wav 한 곳에 있고(백엔드가 그 규약 경로를 읽는다) 경로를 설정에
   // 중복 저장하지 않는다.

@@ -54,7 +54,25 @@ function attachCareTopics(body, ledgerState) {
   return care.length ? { ...body, care_topics: care } : body
 }
 
+// ── 클라우드→클라우드 폴백 (발주서 23) ─────────────────────────────────────
+// 고른 클라우드 모델이 안 켜지면 백엔드는 허락 없이는 다른 클라우드로 넘어가지
+// 않고 fallback_offer를 돌려준다. 허락 = 설정 'always' 또는 이번 한 번([이번만]).
+// 플래그가 필요 없으면 body를 그대로 — 요청이 예전과 같다.
+function attachCloudFallback(body, settings, allowOnce = false) {
+  return allowOnce === true || settings?.cloudFallbackPolicy === 'always'
+    ? { ...body, allow_cloud_fallback: true }
+    : body
+}
+
+// 'never'면 묻지 않는다 — 안내 답만 남기고 제안은 버린다.
+function fallbackOfferFor(frame, settings) {
+  if (!frame?.fallback_offer || settings?.cloudFallbackPolicy === 'never') return null
+  return frame.fallback_offer
+}
+
 module.exports = {
+  attachCloudFallback,
+  fallbackOfferFor,
   chatTimeoutFor,
   createFallbackNotice,
   FALLBACK_NOTICES,

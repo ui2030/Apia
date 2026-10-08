@@ -139,6 +139,15 @@ describe('normalize', () => {
     expect(repo.normalize({ proactiveOpenerFrequency: 'biDaily' }).proactiveOpenerFrequency).toBe('biDaily')
   })
 
+  it('클라우드 대신 답하기 정책은 기본 ask, 구버전·모르는 값도 ask', () => {
+    const repo = createRepo()
+    expect(SETTINGS_DEFAULTS.cloudFallbackPolicy).toBe('ask')
+    expect(repo.normalize({}).cloudFallbackPolicy).toBe('ask') // 키 없는 구버전 settings.json
+    expect(repo.normalize({ cloudFallbackPolicy: 'sometimes' }).cloudFallbackPolicy).toBe('ask')
+    expect(repo.normalize({ cloudFallbackPolicy: 'always' }).cloudFallbackPolicy).toBe('always')
+    expect(repo.normalize({ cloudFallbackPolicy: 'never' }).cloudFallbackPolicy).toBe('never')
+  })
+
   it('rejects an unknown aiMode and falls back to default', () => {
     const repo = createRepo()
     expect(repo.normalize({ aiMode: 'gpt5' }).aiMode).toBe(SETTINGS_DEFAULTS.aiMode)

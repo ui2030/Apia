@@ -95,7 +95,10 @@ const SETTINGS_DEFAULTS = Object.freeze({
   proactiveOpenerEnabled: false,
   proactiveOpenerFrequency: 'daily', // 'daily'(하루 1회) | 'biDaily'(이틀 1회)
   // 음성 듣기(마이크). **기본 OFF** — 마이크는 사용자가 명시적으로 켜야 한다.
-  micEnabled: false
+  micEnabled: false,
+  // 고른 클라우드 모델이 안 켜질 때 다른 클라우드로 대신 답할지. 'ask'(기본,
+  // 그때 묻는다) | 'always' | 'never'. 다른 키의 요금이 나가므로 기본은 묻기.
+  cloudFallbackPolicy: 'ask'
 })
 
 const BACKEND_ENV_EXAMPLE_FILENAME = 'backend.env.example'
@@ -239,6 +242,9 @@ class SettingsRepository {
       settings.proactiveOpenerFrequency = SETTINGS_DEFAULTS.proactiveOpenerFrequency
     }
     settings.micEnabled = settings.micEnabled === true
+    if (!['ask', 'always', 'never'].includes(settings.cloudFallbackPolicy)) {
+      settings.cloudFallbackPolicy = SETTINGS_DEFAULTS.cloudFallbackPolicy
+    }
     settings.trainingPythonPath = typeof settings.trainingPythonPath === 'string'
       ? settings.trainingPythonPath
       : SETTINGS_DEFAULTS.trainingPythonPath
