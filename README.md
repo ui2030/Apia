@@ -1,5 +1,33 @@
 # Apia
 
-Deployment notes for the packaged desktop build live in [RELEASE_SETUP.md](RELEASE_SETUP.md).
-Current project state is summarized in [PROJECT_STATUS.md](PROJECT_STATUS.md).
-The file reading order for future work is listed in [AGENT_WORKING_SET.md](AGENT_WORKING_SET.md).
+바탕화면 위에서 함께 지내는 3D 캐릭터 AI 비서예요. 캐릭터 모델(VRM·PMX)을 넣으면 그 모습으로 방 안에서 생활하고, 말을 걸면 대답하고, 내 화면을 함께 보며 한마디 하고, 밤에는 내 PC 모델이 그날의 대화로 조금씩 배워요.
+
+> **현재 상태: 1.0 알파(클라우드 전용).** 설치본에는 로컬 모델·야간 학습·마이크 받아적기·캐릭터 목소리 만들기가 들어 있지 않아요. 대답을 받으려면 AI 서비스 API 키가 하나 필요해요. 코드 서명이 없어 Windows 보호 경고가 떠요(안내 문서에 넘기는 법이 있어요).
+
+## 시작하기 (사용자)
+
+- [설치하기](docs/user/설치하기.md) — 필요한 것, 설치, 처음 켜기
+- [첫 대화](docs/user/첫%20대화.md) — 캐릭터 넣기, 답변 모델·API 키, 첫 대화
+- [내 파일과 학습](docs/user/내%20파일과%20학습.md) — 개인 설정 폴더, 기억, 야간 학습, 지우기
+- [개인정보 안내](PRIVACY.md) — 무엇이 PC 밖으로 나가는지, 어디에 저장되는지, 지우는 법
+
+## 무엇을 하나요
+
+- **대화** — 로컬 모델(내 PC, NVIDIA GPU 필요) 또는 클라우드 모델(Groq·Claude·HuggingFace·Claude Code·DeepSeek)로 답해요.
+- **먼저 말 걸기 / 화면 함께 보기** — 자리를 비웠다 오면 먼저 말을 걸고, 내가 고른 창을 함께 보며 가끔 한마디 해요(둘 다 기본 꺼짐).
+- **대화 눈치 메모** — 내가 시큰둥한 화제를 숫자로만 기억해 먼저 꺼내지 않아요. 대화 내용은 저장하지 않아요.
+- **학습 노트와 야간 학습**(개발 환경) — 그날 대화를 이름 지운 노트로 바꾸고, 밤에 로컬 모델이 그 노트로 조금씩 배워요. 클라우드 모델이 가르치고, 품질이 떨어지면 자동으로 이전 결과로 돌아가요.
+- **캐릭터 목소리**(개발 환경) — 조용한 대사 25~30초로 캐릭터 목소리를 만들어요.
+- **개인 설정 폴더** — `%APPDATA%\apia\personal`에 성격 파일을 넣으면 그 성격으로 말해요. 업데이트해도 지워지지 않아요.
+
+## 요구 사양
+
+Windows 11 64비트. 설치본은 인터넷과 API 키가 필요해요. 로컬 모델·야간 학습·목소리 만들기는 NVIDIA GPU(VRAM 8GB 이상)와 개발 환경이 필요해요.
+
+## 개발자
+
+- [SETUP.md](SETUP.md) — 개발 환경 준비
+- [RELEASE_SETUP.md](RELEASE_SETUP.md) — 설치본 만들기
+- [ARCHITECTURE.md](ARCHITECTURE.md), [PROJECT_STATUS.md](PROJECT_STATUS.md), [AGENT_WORKING_SET.md](AGENT_WORKING_SET.md) — 구조·현황·작업 순서
+
+캐릭터 모델 파일과 음성은 각 제작자의 저작권을 따라요. 이 저장소에는 특정 캐릭터의 모델·대사·음성이 들어 있지 않아요.
