@@ -27,7 +27,7 @@ async function readPackageVersion() {
   if (!m) {
     throw new Error(`[VERIFY_EXE_BAD_PACKAGE_VERSION] expected X.Y.Z[-prerelease] semver, got "${version}"`)
   }
-  return m[1]
+  return { full: version, core: m[1] }
 }
 
 async function readExeFileVersion() {
@@ -58,14 +58,16 @@ async function main() {
 
   // rcedit writes FileVersion as a 4-part string (e.g. 1.0.0.0); accept it as
   // long as it starts with the package version.
-  if (actual !== expected && !actual.startsWith(`${expected}.`)) {
+  // afterPack는 전체 문자열(1.0.0-alpha.2)을 찍기도, rcedit는 4부(1.0.0.0)를 찍기도 한다.
+  const ok = actual === expected.full || actual === expected.core || actual.startsWith(`${expected.core}.`)
+  if (!ok) {
     throw new Error(
-      `[VERIFY_EXE_VERSION_MISMATCH] Apia.exe FileVersion="${actual}" != package.json version="${expected}". ` +
+      `[VERIFY_EXE_VERSION_MISMATCH] Apia.exe FileVersion="${actual}" != package.json version="${expected.full}". ` +
       'The afterPack icon/version stamp likely did not run.'
     )
   }
 
-  console.log(`[VERIFY_EXE_OK] Apia.exe FileVersion=${actual} matches package.json ${expected}`)
+  console.log(`[VERIFY_EXE_OK] Apia.exe FileVersion=${actual} matches package.json ${expected.full}`)
 }
 
 main().catch((error) => {
