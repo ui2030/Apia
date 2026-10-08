@@ -1,3 +1,5 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { access, mkdir, readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { resolve, join } from 'node:path'
@@ -8,8 +10,10 @@ const rootDir = process.cwd()
 const isWindows = process.platform === 'win32'
 const releaseDir = resolve(rootDir, isWindows ? 'release/win-unpacked' : 'release/linux-unpacked')
 const releaseExePath = resolve(releaseDir, isWindows ? 'Apia.exe' : 'apia')
-const appDataDir = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming')
-const runtimeRoot = join(appDataDir, 'apia')
+// 연기 테스트는 사용자 실제 데이터(%APPDATA%pia)를 쓰지 않는다 — 사용자 설정(벽지 모드
+// 꺼짐 등)에 따라 판정이 흔들리고, 사용자 데이터를 건드린다. Electron은 APPDATA 환경변수를
+// 무시하므로 앱의 시험용 틈 APIA_E2E_USER_DATA_DIR로 빈 임시 폴더를 지정한다(2026-10-09 실측).
+const runtimeRoot = process.env.APIA_SMOKE_USER_DATA || mkdtempSync(join(tmpdir(), 'apia-smoke-'))
 const runtimeLogPath = join(runtimeRoot, 'logs', 'main.log')
 const backendEnvExamplePath = join(runtimeRoot, 'backend-data', 'backend.env.example')
 const successMarkers = ['[APP_READY]', '[WINDOW_LOAD_FINISH] main', '[BACKEND_READY]']
@@ -78,7 +82,7 @@ async function assertExists(targetPath, errorCode) {
 }
 
 function createSpawnEnv() {
-  const env = { ...process.env }
+  const env = { ...process.env, APIA_E2E_USER_DATA_DIR: runtimeRoot }
   delete env.ELECTRON_RUN_AS_NODE
   return env
 }
