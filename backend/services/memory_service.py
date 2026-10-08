@@ -265,6 +265,22 @@ class MemoryService:
             )
             return int(summary_id)
 
+    async def clear_all(self) -> dict:
+        """사용자가 누른 "기억 모두 지우기". 대화 원문·요약(임베딩은 같은 행)을
+        한 트랜잭션으로 지운다 — 스키마는 그대로. citations는 chat_turns를 FK로
+        물고 있어 먼저 지운다. enabled와 무관하게 지운다(꺼 두기 전에 쌓인 것도
+        사용자 데이터다). 요약 락은 잡지 않는다 — 요약은 LLM을 기다리며 락을 쥐고
+        있어서 지우기가 수십 초 밀린다. 도중에 끝난 요약은 지워진 turn을 FK로
+        가리키므로 INSERT가 거부되고(요약 경로는 fail-soft) 되살아나지 않는다.
+        """
+        _, summaries, turns = await self._store.execute_script([
+            ("DELETE FROM citations", ()),
+            ("DELETE FROM conversation_summaries", ()),
+            ("DELETE FROM chat_turns", ()),
+        ])
+        self._last_error = None
+        return {"turns_deleted": turns, "summaries_deleted": summaries}
+
     async def stats(self) -> dict:
         if not self._enabled:
             return {

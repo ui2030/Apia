@@ -78,6 +78,18 @@ def kana_token_ids(tok) -> List[int]:
     return cached
 
 
+
+# 사용자에게 보이는 답변 모델 이름(설정 창 표시 사전과 같은 말).
+_MODE_LABELS = {
+    "groq": "Groq API",
+    "claude": "Claude API",
+    "claude_code": "Claude Code (구독)",
+    "deepseek": "클라우드 모델 (DeepSeek)",
+    "local": "로컬 모델",
+    "hf_api": "HuggingFace API",
+    "ollama_vlm": "Ollama (내 PC 그림 모델)",
+}
+
 class BanTokenIds:
     """generate()용 logits processor — 주어진 토큰 id의 logit을 -inf로."""
 
@@ -471,20 +483,23 @@ class ClaudeService:
         return self.mode
 
     def _build_unavailable_reply(self, requested_mode: Optional[str]) -> str:
-        available_modes = self._get_auto_candidates()
-        available_label = ", ".join(available_modes) if available_modes else "none"
-
+        # 채팅창에 그대로 뜨는 문장이라 사용자 말로 쓴다. 로컬 모델은 실행 부품
+        # (torch/transformers)이 없으면 준비할 방법이 없으니 권하지 않는다.
         if requested_mode and requested_mode != "auto":
-            prefix = f"The selected AI mode '{requested_mode}' is unavailable right now."
+            label = _MODE_LABELS.get(requested_mode, requested_mode)
+            prefix = f"고른 답변 모델({label})을 지금 쓸 수 없어요."
         else:
-            prefix = "No AI provider is available right now."
+            prefix = "쓸 수 있는 답변 모델이 없어요."
 
-        guidance = (
-            "Set APIA_GROQ_KEY, APIA_ANTHROPIC_KEY, or APIA_HF_TOKEN in environment variables or backend.env, "
-            "or run a full local build with torch and transformers."
-        )
+        if self._mode_has_prereqs("local"):
+            guidance = "설정 → AI 설정에서 API 키를 넣거나 로컬 모델을 준비한 뒤 [저장 및 적용]을 눌러 주세요."
+        else:
+            guidance = (
+                "설정 → AI 설정에서 API 키를 넣은 뒤 [저장 및 적용]을 눌러 주세요. "
+                "지금 설치된 Apia에는 로컬 모델이 들어 있지 않아요."
+            )
 
-        return f"{prefix} Available auto modes: {available_label}. {guidance} [EMOTION:sad]"
+        return f"{prefix} {guidance} [EMOTION:sad]"
 
     def _init_local(self):
         try:

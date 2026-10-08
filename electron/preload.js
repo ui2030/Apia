@@ -134,7 +134,9 @@ contextBridge.exposeInMainWorld('api', {
   // (원본 폐기는 변환 성공 뒤에만 일어나야 하고, 그 판단은 main이 단독 관할).
   courseware: {
     getState: () => ipcRenderer.invoke('courseware:getState'),
-    convertNow: () => ipcRenderer.invoke('courseware:convertNow')
+    convertNow: () => ipcRenderer.invoke('courseware:convertNow'),
+    setCollect: (on) => ipcRenderer.invoke('courseware:setCollect', { on }),
+    clearBuffers: () => ipcRenderer.invoke('courseware:clearBuffers')
   },
 
   // 야간 학습기(A-3). 읽기 + "지금 시작" 한 개. 시작도 트리거 조건을 그대로
@@ -189,6 +191,7 @@ contextBridge.exposeInMainWorld('api', {
     embeddingWarmup: () => ipcRenderer.invoke('store:embeddingWarmup'),
     memoryStats: () => ipcRenderer.invoke('store:memoryStats'),
     memorySummarize: () => ipcRenderer.invoke('store:memorySummarize'),
+    memoryClear: () => ipcRenderer.invoke('store:memoryClear'),
     filesListFolders: () => ipcRenderer.invoke('store:filesListFolders'),
     filesAddFolder: (path) => ipcRenderer.invoke('store:filesAddFolder', { path }),
     filesRemoveFolder: (path) => ipcRenderer.invoke('store:filesRemoveFolder', { path }),

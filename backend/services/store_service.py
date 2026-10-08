@@ -216,12 +216,13 @@ class StoreService:
 
     async def execute_script(
         self, statements: Iterable[tuple[str, Sequence[Any]]]
-    ) -> None:
+    ) -> list[int]:
         """Run multiple parameterized SQL statements atomically.
 
         Used by per-file reindex: DELETE stale chunks for a path, then INSERT
         the new chunks, all-or-nothing. If any statement raises, ROLLBACK is
-        attempted and the original error bubbles up.
+        attempted and the original error bubbles up. Returns each statement's
+        rowcount in order.
 
         Codex MUST-FIX (step 3 round 2): MUST run inside `_write_lock` so a
         concurrent caller can't slip an unrelated commit between our BEGIN and
@@ -234,16 +235,18 @@ class StoreService:
         await self.initialize()
         statements_list = list(statements)
         async with self._write_lock:
-            await asyncio.to_thread(self._execute_script_sync, statements_list)
+            return await asyncio.to_thread(self._execute_script_sync, statements_list)
 
     def _execute_script_sync(
         self, statements_list: list[tuple[str, Sequence[Any]]]
-    ) -> None:
+    ) -> list[int]:
         assert self._conn is not None
+        counts: list[int] = []
         self._conn.execute("BEGIN")
         try:
             for sql, params in statements_list:
                 cur = self._conn.execute(sql, params)
+                counts.append(cur.rowcount)
                 cur.close()
         except Exception:
             try:
@@ -253,6 +256,7 @@ class StoreService:
             raise
         else:
             self._conn.commit()
+            return counts
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 

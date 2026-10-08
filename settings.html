@@ -752,6 +752,7 @@
       <div style="display:flex;align-items:center;gap:6px;">
         <span class="row-sub" id="memory-stats-text" style="font-size:11px;">읽는 중…</span>
         <button type="button" class="btn btn-ghost" id="memory-summarize-btn">지금 요약</button>
+        <button type="button" class="btn btn-ghost" id="memory-clear-btn" style="white-space:nowrap;">기억 모두 지우기</button>
       </div>
     </div>
 
@@ -998,6 +999,17 @@
 
     <div class="row">
       <div>
+        <div class="row-label">대화를 학습 노트 재료로 모으기</div>
+        <div class="row-sub" id="courseware-collect-state">채팅할 때마다 대화 원문을 모아 둬요. 바꾸면 바로 적용돼요</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="courseware-collect-toggle">
+        <div class="t-track"></div>
+        <div class="t-thumb"></div>
+      </label>
+    </div>
+    <div class="row">
+      <div>
         <div class="row-label">학습 노트 참고</div>
         <div class="row-sub">지금 한 말과 관련된 학습 노트를 찾아 대화에 참고해요. 끄면 찾지도 않아요</div>
       </div>
@@ -1021,7 +1033,10 @@
     </div>
     <div class="row">
       <div class="row-label">아직 노트로 만들지 않은 대화</div>
-      <span class="row-sub" id="courseware-pending" style="font-size:11px;">—</span>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="row-sub" id="courseware-pending" style="font-size:11px;">—</span>
+        <button type="button" class="btn btn-ghost" id="courseware-clear-btn" style="white-space:nowrap;">모은 원문 지금 지우기</button>
+      </div>
     </div>
     <div class="row">
       <div class="row-label">최근 7일 클라우드 모델 사용료 (채팅 포함)</div>
@@ -1051,6 +1066,47 @@
 <div class="toast-container" id="toast-container"></div>
 
 <script>
+// <display-labels> 표시용 사전 — 내부 코드(모드 id·사유·상태)를 화면 말로 바꾼다.
+// 저장·IPC 값은 그대로 두고 **보여 줄 때만** 거친다. 사전에 없는 값은 숨기지 않고
+// 원문 그대로 보인다. 앞부분만 정해진 값(숫자·세부가 붙는 사유)은 PREFIX로 맞춘다.
+const DISPLAY_LABELS = {
+  // 답변 모델 id
+  auto: '자동 (권장)', groq: 'Groq API', claude: 'Claude API', claude_code: 'Claude Code (구독)',
+  deepseek: '클라우드 모델 (DeepSeek)', local: '로컬 모델', hf_api: 'HuggingFace API',
+  ollama_vlm: 'Ollama (내 PC 그림 모델)', fallback: '없음 (쓸 수 있는 모델이 없어요)',
+  // 상태
+  deferred: '미룸', failed: '실패', error: '오류', dormant: '쉬는 중', budget: '사용료 상한에 닿음',
+  // 화면 함께 보기
+  'no-observation': '본 것이 없음', 'low-interest': '흥미가 낮음', 'too-soon': '말한 지 얼마 안 됨',
+  duplicate: '같은 말 반복', late: '판단이 늦음', 'gold-sensitive': '직접 정한 조심하는 화제',
+  frozen: '조심하는 화제',
+  // 로컬 모델 · 답변 비교
+  'local path busy': '로컬 모델이 다른 일을 하는 중', 'no reply': '답이 없음', 'empty message': '빈 메시지',
+  'no adopted delta': '쓰는 학습 결과가 없음', 'local model not resident': '로컬 모델이 아직 준비되지 않음',
+  // 야간 학습
+  'user returned': '사용자가 돌아와서 멈춤', 'time limit': '시간 제한(2시간)에 닿음', 'parent gone': '앱이 꺼져서 멈춤',
+  'answer count mismatch': '클라우드 모델 답의 개수가 맞지 않음', 'empty answer': '클라우드 모델이 빈 답을 줌',
+  // 학습 노트 만들기
+  'no DEEPSEEK_API_KEY': 'DeepSeek 키가 없어서 미룸', 'teacher returned no cards': '클라우드 모델이 학습 노트를 주지 않음',
+  'fetch failed': 'AI 엔진에 연결하지 못함'
+}
+const DISPLAY_LABEL_PREFIXES = [
+  ['daily budget reached', '오늘 사용료 상한에 닿아서 미룸'],
+  ['usage ledger unavailable', '사용 금액 기록을 읽지 못해서 미룸'],
+  ['teacher returned non-', '클라우드 모델 답을 읽지 못함'],
+  ['HTTP ', '클라우드 모델이 오류로 답함'],
+  ['write failed:', '학습 노트 파일을 쓰지 못함'],
+  ['adopt failed:', '학습 결과를 적용하지 못함'],
+  ['Request timed out after', '응답 시간이 지남']
+]
+function displayLabel(value) {
+  const raw = String(value ?? '')
+  if (Object.prototype.hasOwnProperty.call(DISPLAY_LABELS, raw)) return DISPLAY_LABELS[raw]
+  const hit = DISPLAY_LABEL_PREFIXES.find(([prefix]) => raw.startsWith(prefix))
+  return hit ? hit[1] : raw
+}
+// </display-labels>
+
 let settings = {}
 let importedCharacters = []
 // 활성 캐릭터의 정본(단일 출처) — 메인 창도 이 레지스트리를 읽어 모델을
@@ -1093,7 +1149,7 @@ async function init() {
       }
       // 눈치 원장이 막은 마지막 코멘트 — 사유와 화제만(원문 없음).
       if (st?.lastVeto) {
-        spectateStatus.textContent += ' · 최근에 참은 말: ' + st.lastVeto.reason + '/' + (st.lastVeto.topicId || '?')
+        spectateStatus.textContent += ' · 최근에 참은 말: ' + displayLabel(st.lastVeto.reason) + ' · ' + (st.lastVeto.topicLabel || st.lastVeto.topicId || '화제 모름')
           + ' (' + new Date(st.lastVeto.at).toLocaleTimeString() + ')'
       }
       if (spectatePausedToggle) spectatePausedToggle.checked = st?.paused === true
@@ -1384,10 +1440,19 @@ function renderCourseware(state) {
   if (warnEl) {
     const parts = []
     for (const w of state.warnings || []) parts.push(`${w.day} 학습 노트 만들기가 ${w.streak}번 연속 실패했어요 (대화 원문은 그대로 있어요)`)
-    if (state.lastError) parts.push(`최근 오류: ${state.lastError.day} — ${state.lastError.message}`)
+    if (state.lastError) parts.push(`최근 오류: ${state.lastError.day} — ${displayLabel(state.lastError.message)}`)
     warnEl.textContent = parts.join(' · ')
     warnEl.style.display = parts.length ? '' : 'none'
   }
+}
+
+function renderCollectState(on) {
+  const el = document.getElementById('courseware-collect-state')
+  if (!el) return
+  el.textContent = on
+    ? '채팅할 때마다 대화 원문을 모아 둬요. 바꾸면 바로 적용돼요'
+    : '모으지 않는 중 — 야간 학습이 새 노트를 못 만들어요'
+  el.style.color = on ? '' : '#fbbf24'
 }
 
 function bindCoursewarePanel() {
@@ -1395,6 +1460,41 @@ function bindCoursewarePanel() {
     document.getElementById('courseware-section')?.remove()
     return
   }
+  // 모으기 스위치는 [저장 및 적용]을 기다리지 않는다 — 끄는 순간부터 멈춰야 한다.
+  const collectToggle = document.getElementById('courseware-collect-toggle')
+  collectToggle?.addEventListener('change', async () => {
+    const on = collectToggle.checked
+    collectToggle.disabled = true
+    try {
+      const res = await window.api.courseware.setCollect(on)
+      collectToggle.checked = res?.collecting !== false
+      settings.coursewareCollectEnabled = collectToggle.checked
+    } catch (err) {
+      collectToggle.checked = !on
+      showToast('바꾸지 못했어요: ' + friendlyError(err), 'error', 3500)
+    } finally {
+      collectToggle.disabled = false
+      renderCollectState(collectToggle.checked)
+    }
+  })
+  // 확인창은 main이 띄운다(렌더러 confirm은 IPC 직접 호출로 우회되는 장식).
+  const clearBtn = document.getElementById('courseware-clear-btn')
+  clearBtn?.addEventListener('click', async () => {
+    clearBtn.disabled = true
+    try {
+      const state = await window.api.courseware.clearBuffers()
+      if (state?.error) { showToast('지우지 못했어요: ' + friendlyError(state.error), 'error', 4000); return }
+      renderCourseware(state)
+      const r = state?.result
+      if (r?.cancelled) return
+      if (r?.ok) showToast(`모은 원문 ${r.removed}건을 지웠어요`, 'info', 2800)
+      else showToast(`원문 ${r?.removed || 0}건을 지웠지만 ${r?.failed || 0}일치는 지우지 못했어요`, 'error', 4000)
+    } catch (err) {
+      showToast('지우지 못했어요: ' + friendlyError(err), 'error', 4000)
+    } finally {
+      clearBtn.disabled = false
+    }
+  })
   const btn = document.getElementById('courseware-convert-btn')
   btn?.addEventListener('click', async () => {
     btn.disabled = true
@@ -1493,7 +1593,7 @@ function renderGrowthTypes(state) {
   const demoEl = document.getElementById('growth-demotions')
   if (demoEl) {
     const list = (state.demotions || []).slice(0, 3).map((d) =>
-      `${new Date(d.at).toLocaleDateString('ko-KR')} ${PROMOTION_TYPE_LABEL[d.type] || d.type} 맡기기 자동 해제 — ${d.reason}`)
+      `${new Date(d.at).toLocaleDateString('ko-KR')} ${PROMOTION_TYPE_LABEL[d.type] || d.type} 맡기기 자동 해제 — ${displayLabel(d.reason)}`)
     demoEl.textContent = list.join(' · ')
     demoEl.style.display = list.length ? '' : 'none'
   }
@@ -1508,7 +1608,7 @@ function renderGrowthServing(state) {
     : '아직 없음 (맡긴 종류가 없거나 그런 말이 없었어요)'
   const reasonsEl = document.getElementById('growth-serving-reasons')
   if (reasonsEl) {
-    const parts = (s.topReasons || []).map((r) => `${r.reason} ${r.count}회`)
+    const parts = (s.topReasons || []).map((r) => `${displayLabel(r.reason)} ${r.count}회`)
     reasonsEl.textContent = parts.length ? `클라우드 모델이 대신 답한 이유: ${parts.join(' · ')}` : ''
     reasonsEl.style.display = parts.length ? '' : 'none'
   }
@@ -1547,10 +1647,10 @@ function renderNightSchool(state) {
     return
   }
   const when = state.lastRunAt ? new Date(state.lastRunAt).toLocaleString('ko-KR') : null
-  const label = TRAINING_STATUS_LABEL[state.lastStatus] || state.lastStatus
+  const label = TRAINING_STATUS_LABEL[state.lastStatus] || displayLabel(state.lastStatus)
   lastEl.textContent = state.running
     ? '학습 중…'
-    : (when ? `${when} — ${label}${state.lastReason ? ` (${state.lastReason})` : ''}` : '아직 없음')
+    : (when ? `${when} — ${label}${state.lastReason ? ` (${displayLabel(state.lastReason)})` : ''}` : '아직 없음')
 
   const deltaEl = document.getElementById('training-delta')
   if (deltaEl) {
@@ -1566,13 +1666,13 @@ function renderNightSchool(state) {
       : '아직 없음 (다음 학습 때 나눠요)'
   }
   const nextEl = document.getElementById('training-next')
-  if (nextEl) nextEl.textContent = state.next?.reason || '—'
+  if (nextEl) nextEl.textContent = state.next?.reason ? displayLabel(state.next.reason) : '—'
   const shadowEl = document.getElementById('training-shadow')
   if (shadowEl) {
     const s = state.shadow || {}
     shadowEl.textContent = s.attempts7d
       ? `시도 ${s.attempts7d}회 · 평균 점수 ${(s.avgSimilarity * 100).toFixed(1)}%`
-      : `시도 없음${s.dormantReason ? ` (${s.dormantReason})` : ''}`
+      : `시도 없음${s.dormantReason ? ` (${displayLabel(s.dormantReason)})` : ''}`
   }
   renderGrowthAnchors(state)
   renderGrowthTypes(state)
@@ -1580,7 +1680,7 @@ function renderNightSchool(state) {
   const noteEl = document.getElementById('training-note')
   if (noteEl) {
     const parts = []
-    if (state.result?.reason) parts.push(state.result.reason)
+    if (state.result?.reason) parts.push(displayLabel(state.result.reason))
     if (state.signals && !state.signals.pythonOk) parts.push('학습 도구(파이썬)가 없어서 학습 기능이 꺼져 있어요')
     noteEl.textContent = parts.join(' · ')
     noteEl.style.display = parts.length ? '' : 'none'
@@ -2022,6 +2122,11 @@ function applyToUI() {
   document.getElementById('use-web-default-toggle').checked = settings.useWebDefault === true
   const refToggle = document.getElementById('courseware-reference-toggle')
   if (refToggle) refToggle.checked = settings.coursewareReferenceEnabled !== false
+  const collectToggle = document.getElementById('courseware-collect-toggle')
+  if (collectToggle) {
+    collectToggle.checked = settings.coursewareCollectEnabled !== false
+    renderCollectState(collectToggle.checked)
+  }
   document.getElementById('use-wallpaper-mode').checked = settings.useWallpaperMode !== false
   document.getElementById('proactive-opener-toggle').checked = settings.proactiveOpenerEnabled === true
   document.getElementById('proactive-opener-frequency').value =
@@ -2151,7 +2256,7 @@ function renderAutoTargetRow(status) {
   const target = status.auto_target
   setProviderStatusValue(
     'ps-auto-target',
-    target ? target : '(후보 없음)',
+    target ? displayLabel(target) : '(후보 없음)',
     target ? null : 'ps-state-fallback'
   )
 }
@@ -2199,10 +2304,10 @@ async function refreshProviderStatus() {
   const available = Array.isArray(status.available_modes) ? status.available_modes : []
   const initialized = Array.isArray(status.initialized_modes) ? status.initialized_modes : []
 
-  setProviderStatusValue('ps-active', activeMode, null)
+  setProviderStatusValue('ps-active', displayLabel(activeMode), null)
   setProviderStatusValue(
     'ps-available',
-    available.length ? available.join(', ') : '(없음)',
+    available.length ? available.map(displayLabel).join(', ') : '(없음)',
     null
   )
   renderAutoTargetRow(status)
@@ -3042,6 +3147,27 @@ function bindDataPanelControls() {
     } finally {
       summarize.disabled = false
       refreshDataPanelStats()
+    }
+  })
+
+  // 확인창(되돌릴 수 없음)은 main의 네이티브 대화상자가 띄운다.
+  const clearMemory = document.getElementById('memory-clear-btn')
+  if (clearMemory) clearMemory.addEventListener('click', async () => {
+    clearMemory.disabled = true
+    try {
+      const result = await window.api.store.memoryClear()
+      if (result?.cancelled) return
+      if (!result || result.error) {
+        showToast('기억을 지우지 못했어요: ' + friendlyError(result?.error, 'AI 엔진 응답 없음'), 'error', 4000)
+        return
+      }
+      const n = (result.turns_deleted || 0) + (result.summaries_deleted || 0)
+      showToast(`기억 ${n}건을 지웠어요`, 'info', 2800)
+    } catch (err) {
+      showToast('기억을 지우지 못했어요: ' + friendlyError(err), 'error', 4000)
+    } finally {
+      clearMemory.disabled = false
+      refreshMemoryPanel()
     }
   })
 

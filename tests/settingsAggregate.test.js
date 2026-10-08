@@ -108,6 +108,18 @@ describe('normalize', () => {
     expect(repo.normalize({ coursewareReferenceEnabled: 'no' }).coursewareReferenceEnabled).toBe(true)
   })
 
+  it('coursewareCollectEnabled defaults to true, 구버전 settings.json도 켜진 채로', async () => {
+    const repo = createRepo()
+    expect(SETTINGS_DEFAULTS.coursewareCollectEnabled).toBe(true)
+    expect(repo.normalize({ coursewareCollectEnabled: false }).coursewareCollectEnabled).toBe(false)
+    expect(repo.normalize({ coursewareCollectEnabled: 'off' }).coursewareCollectEnabled).toBe(true)
+    // 키가 없던 시절 파일 → 켜짐, 끈 값은 patch 왕복에도 유지
+    await writeFile(settingsPath, JSON.stringify({ aiMode: 'groq' }), 'utf-8')
+    expect(repo.load().coursewareCollectEnabled).toBe(true)
+    repo.patch({ coursewareCollectEnabled: false })
+    expect(repo.load()).toMatchObject({ aiMode: 'groq', coursewareCollectEnabled: false })
+  })
+
   it('먼저 말 걸기 · 마이크는 둘 다 기본 OFF (옵트인)', () => {
     // 부르지 않았는데 말 걸기, 말하지 않았는데 듣기 — 둘 다 사용자가 직접
     // 켜야 한다. 구버전 settings.json(키 없음)도 꺼진 채로 하이드레이트된다.

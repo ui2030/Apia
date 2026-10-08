@@ -4,13 +4,15 @@
 Now hosts two feature sub-trees:
   - /store/embedding/{status,warmup}: lifecycle for the embedding model.
   - /store/memory/{stats,summarize}: long-term memory diagnostics + manual
-    force-summarize. summarize returns 200 even when nothing happened — the
+    force-summarize. DELETE /store/memory wipes turns+summaries (schema kept). summarize returns 200 even when nothing happened — the
     `summary_id: null` + `stats.last_error` payload tells the renderer why.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from routers.training import require_token  # 되돌릴 수 없는 삭제는 학습 API와 같은 공유 비밀로 막는다
 
 from schemas import (
     ChatCitation,
@@ -24,6 +26,7 @@ from schemas import (
     FileIngestTextRequest,
     FileIngestTextResponse,
     FileStatsResponse,
+    MemoryClearResponse,
     MemoryStatsResponse,
     MemorySummarizeResponse,
     TurnCitationsResponse,
@@ -77,6 +80,15 @@ async def memory_summarize(request: Request) -> MemorySummarizeResponse:
         summary_id=summary_id,
         stats=MemoryStatsResponse(**stats),
     )
+
+
+@router.delete("/memory", response_model=MemoryClearResponse, dependencies=[Depends(require_token)])
+async def memory_clear(request: Request) -> MemoryClearResponse:
+    """장기 기억 모두 지우기. 확인은 electron main의 네이티브 대화상자가 받는다.
+    토큰은 Electron main만 안다 — 로컬의 다른 프로세스가 기억을 지우지 못하게."""
+    memory = request.app.state.memory
+    counts = await memory.clear_all()
+    return MemoryClearResponse(**counts, stats=MemoryStatsResponse(**await memory.stats()))
 
 
 # ── /store/files ───────────────────────────────────────────────────────────

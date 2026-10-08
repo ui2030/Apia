@@ -102,6 +102,23 @@ describe('폐기 규칙 — 원본 삭제는 변환 성공 확정 후에만', ()
     expect(store.getState().pendingDays).toBe(1)
   })
 
+  it('변환 도중 "모은 원문 지우기"가 끼어들면 결과를 버린다 — 지운 원문으로 노트를 만들지 않는다', async () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-02T09:00:00') })
+    await seedBuffer(store, '2026-09-01', [{ u: '안녕', a: '안녕하세요' }])
+    const job = createCoursewareJob({
+      store,
+      convert: async () => {
+        await store.clearBuffers()                 // 교사 응답을 기다리는 사이 사용자가 지움
+        return { status: 'ok', cards: [{ u: '안녕', a: '안녕하세요' }] }
+      }
+    })
+
+    const res = await job.runOnce({ force: true })
+    expect(res).toMatchObject({ skipped: 'cleared', day: '2026-09-01' })
+    expect(existsSync(store.paths.bufferPath('2026-09-01'))).toBe(false)   // 지우기는 반영
+    expect(store.getState().totalCards).toBe(0)                            // 노트는 안 생김
+  })
+
   it('백엔드 미가동(던지는 convert)은 조용한 연기 — 실패로 세지 않는다', async () => {
     const store = createCoursewareStore({ dir, now: () => at('2026-09-02T09:00:00') })
     await seedBuffer(store, '2026-09-01', [{ u: '안녕', a: '안녕하세요' }])
@@ -486,6 +503,36 @@ describe('버퍼 기록은 대화를 막지 않는다', () => {
     const rows = store.readBuffer('2026-09-02')
     expect(rows).toHaveLength(21)
     expect(rows.map((r) => r.u)).toEqual([...Array(20).keys()].map((i) => `u${i}`).concat('last'))
+  })
+})
+
+describe('모으기 스위치 · 모은 원문 지우기', () => {
+  it('스위치가 꺼져 있으면 채팅·혼잣말 어느 쪽도 버퍼에 적지 않고, 켜면 바로 다시 적는다', async () => {
+    let on = false
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-02T09:00:00'), isCollecting: () => on })
+    await store.appendExchange({ u: '채팅', a: '답' })
+    await store.appendExchange({ u: '혼잣말', a: '' }) // 마이크 경로와 같은 모양
+    expect(existsSync(store.paths.bufferPath('2026-09-02'))).toBe(false)
+    expect(store.isCollecting()).toBe(false)
+    on = true
+    await store.appendExchange({ u: '다시', a: '네' })
+    expect(store.readBuffer('2026-09-02').map((r) => r.u)).toEqual(['다시'])
+  })
+
+  it('clearBuffers는 버퍼만 지우고 학습 노트는 건드리지 않는다', async () => {
+    const store = createCoursewareStore({ dir, now: () => at('2026-09-02T09:00:00') })
+    await seedBuffer(store, '2026-08-31', [{ u: '어제', a: '네' }])
+    store.commitCourseware('2026-08-31', [{ u: '카드', a: '정답' }])
+    await seedBuffer(store, '2026-09-01', [{ u: 'a', a: 'b' }, { u: 'c', a: 'd' }])
+    store.noteFailure('2026-09-01', 'boom')
+    store.appendExchange({ u: '큐에만', a: '있음' }) // 기다리지 않는다 — clearBuffers가 큐를 비운다
+    const cardsBefore = await readFile(store.paths.cardsPath('2026-08-31'), 'utf-8')
+
+    const res = await store.clearBuffers()
+    expect(res).toMatchObject({ ok: true, removed: 3, days: 2, failed: 0 })
+    expect(await readdir(store.paths.buffersDir)).toEqual([])
+    expect(await readFile(store.paths.cardsPath('2026-08-31'), 'utf-8')).toBe(cardsBefore)
+    expect(store.getState()).toMatchObject({ pendingDays: 0, totalCards: 1, warnings: [] })
   })
 })
 

@@ -330,3 +330,51 @@ async def test_retrieve_prefers_summaries_over_turns(db_path: Path) -> None:
     assert recalls[0].content == "apple summary"
 
     await store.close()
+
+
+async def _seed_memory(svc: MemoryService, store: StoreService) -> None:
+    for i in range(3):
+        await svc.record_turn("user", f"apple{i}")
+    assert await svc.summarize_if_needed() is not None
+    await store.execute(
+        "INSERT INTO citations (turn_id, marker_number, source_kind, snippet) "
+        "VALUES (1, 1, 'web', 's')"
+    )
+
+
+@pytest.mark.asyncio
+async def test_clear_all_deletes_turns_summaries_citations_keeps_schema(db_path: Path) -> None:
+    async def fake_summarize(text: str) -> str:
+        return "요약"
+
+    svc, store, _ = await _make_service(db_path, summarize_fn=fake_summarize, summary_every=3)
+    await _seed_memory(svc, store)
+
+    counts = await svc.clear_all()
+    assert counts == {"turns_deleted": 3, "summaries_deleted": 1}
+    stats = await svc.stats()
+    assert (stats["turn_count"], stats["summary_count"]) == (0, 0)
+    assert (await store.fetchone("SELECT count(*) AS n FROM citations"))["n"] == 0
+    # 스키마는 그대로 — 지운 뒤에도 바로 다시 쌓인다.
+    assert await svc.record_turn("user", "again") is not None
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_clear_all_is_one_transaction(db_path: Path) -> None:
+    """마지막 DELETE가 실패하면 앞의 DELETE도 되돌아가야 한다(반쪽 삭제 금지)."""
+    async def fake_summarize(text: str) -> str:
+        return "요약"
+
+    svc, store, _ = await _make_service(db_path, summarize_fn=fake_summarize, summary_every=3)
+    await _seed_memory(svc, store)
+    await store.execute(
+        "CREATE TRIGGER block_turn_delete BEFORE DELETE ON chat_turns "
+        "BEGIN SELECT RAISE(ABORT, 'blocked'); END"
+    )
+    with pytest.raises(Exception):
+        await svc.clear_all()
+    stats = await svc.stats()
+    assert (stats["turn_count"], stats["summary_count"]) == (3, 1)
+    assert (await store.fetchone("SELECT count(*) AS n FROM citations"))["n"] == 1
+    await store.close()

@@ -11,7 +11,8 @@ const { execFile, spawn } = require('child_process')
 // 새 토큰을 만들어 백엔드와 학습 프로세스에 **env로만** 건넨다(명령줄은 프로세스
 // 목록에 노출된다). process.env에 넣어 두면 두 자식의 spawn env에 그대로 실린다.
 // 디스크·로그·상태 파일 어디에도 적지 않는다 — 프로세스가 죽으면 같이 사라진다.
-process.env.APIA_TRAINING_TOKEN = crypto.randomBytes(32).toString('hex')
+// E2E 하네스가 백엔드를 직접 띄우는 경우에만 같은 토큰을 주입한다(APIA_E2E_*와 같은 시험용 틈).
+process.env.APIA_TRAINING_TOKEN = process.env.APIA_E2E_TRAINING_TOKEN || crypto.randomBytes(32).toString('hex')
 
 // E2E seam: GUI tests pass an isolated tmp dir so they never touch the
 // user's real %APPDATA%\Apia. Must run BEFORE any other code reads
@@ -415,7 +416,12 @@ function stopLedgerDailyJob() {
 // 고른 카드만 채팅 요청 body에 실려 나간다. 이 교재를 실제로 모델에 새기는
 // 야간 학습(A-3)은 아래 nightSchool 블록이 맡는다.
 const COURSEWARE_DIR = path.join(app.getPath('userData'), 'courseware')
-const courseware = createCoursewareStore({ dir: COURSEWARE_DIR, log: { warn: logWarn } })
+// 모으기 스위치는 매 기록마다 디스크 설정을 읽는다 — 끄는 즉시 다음 한 줄부터 멈춘다.
+const courseware = createCoursewareStore({
+  dir: COURSEWARE_DIR,
+  log: { warn: logWarn },
+  isCollecting: () => loadSettings().coursewareCollectEnabled !== false
+})
 
 // 변환은 사용자가 자리를 비운 동안만 — 교사 왕복이 수십 초라 쓰는 중에 끼면
 // 백엔드 응답이 밀린다. presenceManager와 같은 5분 기준.
@@ -445,6 +451,31 @@ ipcMain.handle('courseware:getState', () => {
 ipcMain.handle('courseware:convertNow', async () => {
   try {
     const result = await coursewareJob.runOnce({ force: true })
+    return { ...courseware.getState(), result }
+  } catch (error) { return { error: error?.message || String(error) } }
+})
+
+// 모으기 스위치 — 저장 버튼을 기다리지 않고 바로 디스크에 반영한다(개인정보 스위치).
+ipcMain.handle('courseware:setCollect', (e, { on } = {}) => {
+  patchSettings({ coursewareCollectEnabled: on !== false })
+  return { collecting: courseware.isCollecting() }
+})
+
+// 모은 원문 지우기. 확인은 **여기서** — 렌더러 confirm은 IPC를 직접 부르면
+// 건너뛸 수 있는 장식이다(기본 버튼 = 취소). 학습 노트(cards)는 남는다.
+ipcMain.handle('courseware:clearBuffers', async (e) => {
+  try {
+    const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender) || undefined, {
+      type: 'warning',
+      buttons: ['취소', '지우기'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '모은 원문 지우기',
+      message: '아직 학습 노트로 만들지 않은 대화 원문을 지울까요?',
+      detail: '지운 원문은 되돌릴 수 없고, 그 대화로는 학습 노트를 만들지 않아요. 이미 만든 학습 노트는 그대로 남아요.'
+    })
+    if (response !== 1) return { ...courseware.getState(), result: { ok: false, cancelled: true } }
+    const result = await courseware.clearBuffers()
     return { ...courseware.getState(), result }
   } catch (error) { return { error: error?.message || String(error) } }
 })
@@ -701,6 +732,7 @@ ipcMain.handle('mic:ambient', (e, { text } = {}) => {
   if (!(Number.isFinite(lastIdleSec) && lastIdleSec < PRESENT_MAX_IDLE_SEC)) {
     return { stored: false, reason: 'away' }
   }
+  if (!courseware.isCollecting()) return { stored: false, reason: 'collect-off' }
   try { courseware.appendExchange({ u: t, a: '' }) } catch (error) {
     logWarn('[MIC_AMBIENT_APPEND_FAILED]', error?.message || error)
     return { stored: false, reason: 'error' }
@@ -1403,7 +1435,7 @@ ipcMain.handle('spectate:ledgerVeto', async (e, { comment, budgetMs } = {}) => {
   const verdict = ledgerVeto(row)
   const topicId = row === null ? null : cls.topic_id
   if (verdict.veto) {
-    spectate.lastVeto = { reason: verdict.reason, topicId, at: Date.now() }
+    spectate.lastVeto = { reason: verdict.reason, topicId, topicLabel: row?.label || null, at: Date.now() }
     broadcastSpectateState()
   } else if (verdict.reason === 'unclassified') {
     logInfo('[SPECTATE_VETO] unclassified (fail-open)')
@@ -1649,6 +1681,29 @@ ipcMain.handle('store:embeddingWarmup', makeStorePost('/store/embedding/warmup',
 
 ipcMain.handle('store:memoryStats', makeStoreGet('/store/memory/stats'))
 ipcMain.handle('store:memorySummarize', makeStorePost('/store/memory/summarize', { timeout: 60000 }))
+// 장기 기억 모두 지우기 — 되돌릴 수 없으니 네이티브 확인을 main에서 받는다.
+ipcMain.handle('store:memoryClear', async (e) => {
+  const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender) || undefined, {
+    type: 'warning',
+    buttons: ['취소', '모두 지우기'],
+    defaultId: 0,
+    cancelId: 0,
+    title: '장기 기억 모두 지우기',
+    message: '장기 기억을 모두 지울까요?',
+    detail: '저장된 대화 원문과 요약이 모두 지워지고, 되돌릴 수 없어요. 학습 노트와 대화 눈치 메모는 그대로 남아요.'
+  }).catch(() => ({ response: 0 }))
+  if (response !== 1) return { cancelled: true }
+  try {
+    await backend.ensureAvailableForRequest()
+    return await requestBackendJson('/store/memory', {
+      method: 'DELETE', timeout: 30000,
+      headers: { 'X-Apia-Training-Token': process.env.APIA_TRAINING_TOKEN || '' }
+    })
+  } catch (error) {
+    logWarn('[STORE_IPC_FAIL]', '/store/memory', error?.message || error)
+    return { error: error?.message || String(error) }
+  }
+})
 
 ipcMain.handle('store:filesListFolders', makeStoreGet('/store/files/folders'))
 ipcMain.handle('store:filesAddFolder', makeStorePost('/store/files/folders'))

@@ -380,3 +380,19 @@ def test_client_disconnect_cancels_worker_and_closes_source(_ledger):
             break
         time.sleep(0.02)
     assert closed, "source generator finally did not run after cancel"
+
+
+# ── 5. 답변 모델 없음 안내는 사용자 말로 ───────────────────────────────────────
+
+def test_unavailable_reply_is_korean_and_honest_about_local(monkeypatch):
+    service = _service()
+    monkeypatch.setattr(service, "_mode_has_prereqs", lambda mode: False)
+    reply = service._build_unavailable_reply("groq")
+    assert reply.startswith("고른 답변 모델(Groq API)을 지금 쓸 수 없어요.")
+    assert "로컬 모델이 들어 있지 않아요" in reply and "로컬 모델을 준비" not in reply
+    assert "unavailable" not in reply and "APIA_" not in reply
+
+    monkeypatch.setattr(service, "_mode_has_prereqs", lambda mode: mode == "local")
+    reply = service._build_unavailable_reply("auto")
+    assert reply.startswith("쓸 수 있는 답변 모델이 없어요.")
+    assert "로컬 모델을 준비한 뒤 [저장 및 적용]" in reply

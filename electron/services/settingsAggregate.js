@@ -82,6 +82,9 @@ const SETTINGS_DEFAULTS = Object.freeze({
   // 붙인다. 기본 ON: 교재가 없으면 검색이 0장을 돌려줘서 아무 일도 안 일어나고,
   // 쌓인 사용자는 "지난주에 말한 그거"가 통하는 쪽이 정상이다.
   coursewareReferenceEnabled: true,
+  // 대화 원문을 학습 노트 재료(courseware/buffers)로 모을지. 기본 ON — 끄면
+  // 채팅·혼잣말 모두 버퍼에 적지 않는다(이미 모인 원문은 사용자가 지울 때까지 그대로).
+  coursewareCollectEnabled: true,
   // A-3 야간 학습기가 쓸 파이썬. **백엔드 venv가 아니다** — 학습 스택(unsloth/trl)은
   // 검증 실험을 돌린 night-loop-lab venv에만 있고, 백엔드 venv에 또 깔면 torch가
   // 6.9GB 중복된다. 경로가 없으면 학습 기능 전체가 조용히 비활성.
@@ -228,6 +231,7 @@ class SettingsRepository {
     settings.useWebDefault = settings.useWebDefault === true
     // 기본 ON — 구버전 settings.json(키 없음)도 켜진 채로 하이드레이트된다.
     settings.coursewareReferenceEnabled = settings.coursewareReferenceEnabled !== false
+    settings.coursewareCollectEnabled = settings.coursewareCollectEnabled !== false
     // 선톡·마이크 둘 다 기본 OFF(먼저 말 걸기·듣기는 옵트인). 빈도는 모르는
     // 값이면 'daily'로 눕힌다.
     settings.proactiveOpenerEnabled = settings.proactiveOpenerEnabled === true

@@ -322,6 +322,12 @@ class MemorySummarizeResponse(BaseModel):
     stats: MemoryStatsResponse
 
 
+class MemoryClearResponse(BaseModel):
+    turns_deleted: int
+    summaries_deleted: int
+    stats: MemoryStatsResponse
+
+
 # ── /store/files ───────────────────────────────────────────────────────────
 #
 # File search surface (step 3). The renderer shows the folder allowlist + a

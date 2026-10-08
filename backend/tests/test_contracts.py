@@ -25,6 +25,7 @@ from schemas import (
     FileIngestTextResponse,
     FileStatsResponse,
     HealthResponse,
+    MemoryClearResponse,
     MemoryStatsResponse,
     MemorySummarizeResponse,
     STTResponse,
@@ -242,6 +243,21 @@ def test_memory_summarize_shape_below_threshold(client):
     MemorySummarizeResponse.model_validate(data)
     assert data["summary_id"] is None
     MemoryStatsResponse.model_validate(data["stats"])
+
+
+def test_memory_clear_requires_shared_token(client, monkeypatch):
+    """되돌릴 수 없는 삭제 — Electron main만 아는 공유 비밀 없이는 403(학습 API와 같은 가드)."""
+    monkeypatch.setenv("APIA_TRAINING_TOKEN", "t0ken-for-test")
+    assert client.delete("/store/memory").status_code == 403
+    assert client.delete("/store/memory", headers={"X-Apia-Training-Token": "wrong"}).status_code == 403
+
+
+def test_memory_clear_shape(client, monkeypatch):
+    monkeypatch.setenv("APIA_TRAINING_TOKEN", "t0ken-for-test")
+    response = client.delete("/store/memory", headers={"X-Apia-Training-Token": "t0ken-for-test"})
+    assert response.status_code == 200
+    data = MemoryClearResponse.model_validate(response.json())
+    assert data.stats.turn_count == 0 and data.stats.summary_count == 0
 
 
 def test_files_folders_list_shape(client):

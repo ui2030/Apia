@@ -9,9 +9,10 @@
  * 훅 지점만 공유하고 코드는 독립이다.
  *
  * 폐기 규칙(이 파일에서 가장 중요한 불변식):
- *   버퍼 파일을 지우는 경로는 commitCourseware() **하나뿐**이고, 그 안에서도
- *   교재 파일을 fsync→rename→되읽기 검증까지 마친 뒤에만 unlink한다. 검증
- *   단계 중 어디서든 던지면 버퍼는 그대로 남고 다음 기회에 재시도한다.
+ *   자동으로 버퍼 파일을 지우는 경로는 commitCourseware() **하나뿐**이고, 그
+ *   안에서도 교재 파일을 fsync→rename→되읽기 검증까지 마친 뒤에만 unlink한다.
+ *   검증 단계 중 어디서든 던지면 버퍼는 그대로 남고 다음 기회에 재시도한다.
+ *   예외는 사용자가 직접 누르는 clearBuffers() 하나 — 교재는 건드리지 않는다.
  *
  * 저장 위치는 userData 아래 courseware/ — apia-world.json·apia-settings.json과
  * 같은 규약(Windows: %APPDATA%\apia). OneDrive/Dropbox 같은 동기화 폴더가 아니다.
@@ -130,8 +131,9 @@ function emptyStatus() {
  * @param {string} deps.dir     courseware 루트 (userData 안)
  * @param {() => number} [deps.now]
  * @param {object} [deps.fsImpl] 테스트에서 쓰기/삭제 실패를 주입하기 위한 seam
+ * @param {() => boolean} [deps.isCollecting] false면 appendExchange가 아무것도 적지 않는다(사용자 스위치)
  */
-function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log = {} } = {}) {
+function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log = {}, isCollecting = () => true } = {}) {
   if (!dir) throw new Error('createCoursewareStore: dir required')
 
   const buffersDir = path.join(dir, 'buffers')
@@ -206,6 +208,7 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
     const user = String(u == null ? '' : u)
     const assistant = String(a == null ? '' : a)
     if (!user.trim() && !assistant.trim()) return appendChain
+    if (!isCollecting()) return appendChain
     const bucket = dayKeyOf(at)
     const file = bufferPath(bucket === heldDay ? dayKeyOf(now()) : bucket)
     const line = `${JSON.stringify({ t: at, u: user, a: assistant })}\n`
@@ -244,6 +247,39 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
     } catch {
       return []
     }
+  }
+
+  /**
+   * 사용자가 누른 "모은 원문 지우기". 버퍼(아직 노트로 만들지 않은 원문)만 지우고
+   * cards/는 건드리지 않는다. 큐에 남은 append를 먼저 비워야 지운 뒤에 한 줄이
+   * 도착해 파일을 되살리지 않는다. 지운 버퍼에 매달린 실패·경고도 같이 닫는다.
+   */
+  // 지우기 세대 — 변환 잡이 원문을 읽은 뒤 사용자가 지우기를 누르면, 잡은 이 번호가
+  // 바뀐 것을 보고 결과를 버린다(지운 원문으로 노트를 만들면 지우기 의도 위반).
+  let clearGeneration = 0
+
+  async function clearBuffers() {
+    clearGeneration += 1
+    await appendChain
+    let removed = 0
+    let days = 0
+    let failed = 0
+    for (const day of listDays(buffersDir)) {
+      const lines = readBuffer(day).length
+      try {
+        fsImpl.unlinkSync(bufferPath(day))
+        removed += lines
+        days += 1
+      } catch (error) {
+        failed += 1
+        log.warn?.('[COURSEWARE_BUFFER_CLEAR_FAILED]', day, error?.message || error)
+      }
+    }
+    const s = loadStatus()
+    s.failures = {}
+    s.warnings = []
+    saveStatus()
+    return { ok: failed === 0, removed, days, failed }
   }
 
   /** 오늘 이전의 미변환 버퍼 일자(오래된 순). 오늘 버퍼는 아직 열려 있으므로 제외. */
@@ -473,6 +509,9 @@ function createCoursewareStore({ dir, now = () => Date.now(), fsImpl = fs, log =
 
   return {
     appendExchange,
+    isCollecting,
+    clearBuffers,
+    clearGeneration: () => clearGeneration,
     holdDay,
     drainAppends,
     pendingDays,
@@ -530,6 +569,7 @@ function createCoursewareJob({ store, convert, isIdle = () => true } = {}) {
       const reconciled = store.reconcileExisting(day)
       if (reconciled) return reconciled
 
+      const clearGen = store.clearGeneration?.() ?? 0
       const exchanges = store.readBuffer(day)
       // 빈 버퍼는 교사를 부를 이유가 없다 — 같은 확정 경로로 닫는다.
       if (exchanges.length === 0) return store.commitCourseware(day, [])
@@ -543,6 +583,10 @@ function createCoursewareJob({ store, convert, isIdle = () => true } = {}) {
       }
 
       if (Number.isFinite(res?.spent_today)) store.noteSpend(res.spent_today)
+
+      // 변환 중 사용자가 "모은 원문 지우기"를 눌렀으면 이 결과는 버린다 — 이미 교사에게
+      // 간 것은 되돌릴 수 없지만, 지운 원문으로 노트를 남기지는 않는다.
+      if ((store.clearGeneration?.() ?? 0) !== clearGen) return { skipped: 'cleared', day }
 
       if (res?.status === 'ok' && Array.isArray(res.cards)) {
         return store.commitCourseware(day, res.cards)
