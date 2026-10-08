@@ -84,7 +84,8 @@ await step(`release/ 정리 (${installerName}만 남김)`, () => {
   const releaseDir = join(root, 'release')
   statSync(join(releaseDir, installerName)) // 없으면 throw → 실패
   for (const f of readdirSync(releaseDir)) {
-    if (f !== installerName) rmSync(join(releaseDir, f), { recursive: true, force: true })
+    // 연기 테스트가 막 닫은 앱의 파일 잠금이 풀리기까지 잠깐 걸린다 — 재시도(EPERM 실측).
+    if (f !== installerName) rmSync(join(releaseDir, f), { recursive: true, force: true, maxRetries: 20, retryDelay: 500 })
   }
 })
 
