@@ -26,13 +26,13 @@ Apia is a desktop AI character assistant:
 
 Key files:
 
-- [electron/main.js](C:/Users/ui2030/Documents/Apia/electron/main.js)
-- [backend/ai_config.py](C:/Users/ui2030/Documents/Apia/backend/ai_config.py)
-- [backend/main.py](C:/Users/ui2030/Documents/Apia/backend/main.py)
-- [scripts/build-backend.mjs](C:/Users/ui2030/Documents/Apia/scripts/build-backend.mjs)
-- [scripts/verify-release.mjs](C:/Users/ui2030/Documents/Apia/scripts/verify-release.mjs)
-- [scripts/smoke-release.mjs](C:/Users/ui2030/Documents/Apia/scripts/smoke-release.mjs)
-- [electron-builder.yml](C:/Users/ui2030/Documents/Apia/electron-builder.yml)
+- [electron/main.js](electron/main.js)
+- [backend/ai_config.py](backend/ai_config.py)
+- [backend/main.py](backend/main.py)
+- [scripts/build-backend.mjs](scripts/build-backend.mjs)
+- [scripts/verify-release.mjs](scripts/verify-release.mjs)
+- [scripts/smoke-release.mjs](scripts/smoke-release.mjs)
+- [electron-builder.yml](electron-builder.yml)
 
 ### 2. Diagnostics and release verification
 
@@ -45,9 +45,9 @@ Key files:
 
 Key files:
 
-- [electron/main.js](C:/Users/ui2030/Documents/Apia/electron/main.js)
-- [scripts/smoke-release.mjs](C:/Users/ui2030/Documents/Apia/scripts/smoke-release.mjs)
-- [REGRESSION_NOTES.md](C:/Users/ui2030/Documents/Apia/REGRESSION_NOTES.md)
+- [electron/main.js](electron/main.js)
+- [scripts/smoke-release.mjs](scripts/smoke-release.mjs)
+- [REGRESSION_NOTES.md](REGRESSION_NOTES.md)
 
 ### 3. Settings, AI mode, and runtime config
 
@@ -58,9 +58,9 @@ Key files:
 
 Key files:
 
-- [backend/ai_config.py](C:/Users/ui2030/Documents/Apia/backend/ai_config.py)
-- [backend/services/claude_service.py](C:/Users/ui2030/Documents/Apia/backend/services/claude_service.py)
-- [settings.html](C:/Users/ui2030/Documents/Apia/settings.html)
+- [backend/ai_config.py](backend/ai_config.py)
+- [backend/services/claude_service.py](backend/services/claude_service.py)
+- [settings.html](settings.html)
 
 ### 4. Character import and runtime behavior
 
@@ -75,15 +75,15 @@ Key files:
 
 Key files:
 
-- [electron/services/characterImportService.js](C:/Users/ui2030/Documents/Apia/electron/services/characterImportService.js)
-- [electron/ipc/registerCharacterIpc.js](C:/Users/ui2030/Documents/Apia/electron/ipc/registerCharacterIpc.js)
-- [backend/routers/voice.py](C:/Users/ui2030/Documents/Apia/backend/routers/voice.py)
-- [backend/services/tts_service.py](C:/Users/ui2030/Documents/Apia/backend/services/tts_service.py)
-- [src/main.js](C:/Users/ui2030/Documents/Apia/src/main.js)
-- [src/chat.js](C:/Users/ui2030/Documents/Apia/src/chat.js)
-- [src/world.js](C:/Users/ui2030/Documents/Apia/src/world.js)
-- [src/characterController.js](C:/Users/ui2030/Documents/Apia/src/characterController.js)
-- [src/motionManager.js](C:/Users/ui2030/Documents/Apia/src/motionManager.js)
+- [electron/services/characterImportService.js](electron/services/characterImportService.js)
+- [electron/ipc/registerCharacterIpc.js](electron/ipc/registerCharacterIpc.js)
+- [backend/routers/voice.py](backend/routers/voice.py)
+- [backend/services/tts_service.py](backend/services/tts_service.py)
+- [src/main.js](src/main.js)
+- [src/chat.js](src/chat.js)
+- [src/world.js](src/world.js)
+- [src/characterController.js](src/characterController.js)
+- [src/motionManager.js](src/motionManager.js)
 
 ### 5. Frontend bundle quality
 
@@ -94,8 +94,8 @@ Key files:
 
 Key files:
 
-- [vite.config.mjs](C:/Users/ui2030/Documents/Apia/vite.config.mjs)
-- [src/main.js](C:/Users/ui2030/Documents/Apia/src/main.js)
+- [vite.config.mjs](vite.config.mjs)
+- [src/main.js](src/main.js)
 
 ### 6. Backend AI provider lifecycle
 
@@ -108,14 +108,14 @@ Key files:
 
 Key files:
 
-- [backend/routers/warmup.py](C:/Users/ui2030/Documents/Apia/backend/routers/warmup.py)
-- [backend/routers/voice.py](C:/Users/ui2030/Documents/Apia/backend/routers/voice.py)
-- [backend/routers/tts.py](C:/Users/ui2030/Documents/Apia/backend/routers/tts.py) (uses `voice.get_tts()`)
-- [backend/routers/stt.py](C:/Users/ui2030/Documents/Apia/backend/routers/stt.py) (lazy WhisperService + `prime()`)
-- [backend/services/claude_service.py](C:/Users/ui2030/Documents/Apia/backend/services/claude_service.py)
-- [electron/main.js](C:/Users/ui2030/Documents/Apia/electron/main.js) (`warmup` IPC handler)
-- [electron/preload.js](C:/Users/ui2030/Documents/Apia/electron/preload.js) (`window.api.warmup`)
-- [src/main.js](C:/Users/ui2030/Documents/Apia/src/main.js) (renderer fires warmup after `scheduleAutoBehavior`)
+- [backend/routers/warmup.py](backend/routers/warmup.py)
+- [backend/routers/voice.py](backend/routers/voice.py)
+- [backend/routers/tts.py](backend/routers/tts.py) (uses `voice.get_tts()`)
+- [backend/routers/stt.py](backend/routers/stt.py) (lazy WhisperService + `prime()`)
+- [backend/services/claude_service.py](backend/services/claude_service.py)
+- [electron/main.js](electron/main.js) (`warmup` IPC handler)
+- [electron/preload.js](electron/preload.js) (`window.api.warmup`)
+- [src/main.js](src/main.js) (renderer fires warmup after `scheduleAutoBehavior`)
 
 ### 7. Motion clip pipeline
 
@@ -129,11 +129,11 @@ Key files:
 
 Key files:
 
-- [src/assets/motions/manifest.json](C:/Users/ui2030/Documents/Apia/src/assets/motions/manifest.json)
-- [src/assets/motions/vmd/manifest.json](C:/Users/ui2030/Documents/Apia/src/assets/motions/vmd/manifest.json)
-- [src/motionAssets.js](C:/Users/ui2030/Documents/Apia/src/motionAssets.js)
-- [src/characterController.js](C:/Users/ui2030/Documents/Apia/src/characterController.js)
-- [src/main.js](C:/Users/ui2030/Documents/Apia/src/main.js) (`playMotion` routing, `playVRMAnimation` cross-fade, `playMMDAnimation`)
+- [src/assets/motions/manifest.json](src/assets/motions/manifest.json)
+- [src/assets/motions/vmd/manifest.json](src/assets/motions/vmd/manifest.json)
+- [src/motionAssets.js](src/motionAssets.js)
+- [src/characterController.js](src/characterController.js)
+- [src/main.js](src/main.js) (`playMotion` routing, `playVRMAnimation` cross-fade, `playMMDAnimation`)
 
 ## Current Verification Baseline
 
@@ -608,8 +608,8 @@ Codex round 1에서 6 MUST-FIX (Mixamo prefix 정규화 / rest pose 축 보정 /
 
 Key files:
 
-- [src/modelRuntime.js](C:/Users/ui2030/Documents/Apia/src/modelRuntime.js)
-- [src/main.js](C:/Users/ui2030/Documents/Apia/src/main.js)
+- [src/modelRuntime.js](src/modelRuntime.js)
+- [src/main.js](src/main.js)
 
 ## Remaining Cleanup, Not Current Breakage
 
@@ -627,6 +627,6 @@ When there is a mismatch between older notes and runtime code, trust these in or
 
 1. runtime code under `electron/`, `backend/`, `src/`
 2. release scripts under `scripts/`
-3. [REGRESSION_NOTES.md](C:/Users/ui2030/Documents/Apia/REGRESSION_NOTES.md)
-4. [RELEASE_SETUP.md](C:/Users/ui2030/Documents/Apia/RELEASE_SETUP.md)
+3. [REGRESSION_NOTES.md](REGRESSION_NOTES.md)
+4. [RELEASE_SETUP.md](RELEASE_SETUP.md)
 5. planning/reference docs such as `435t2.txt` and older setup notes

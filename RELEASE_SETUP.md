@@ -6,7 +6,7 @@ This guide covers the packaged Windows build created by `npm run dist:dir` or `n
 
 1. 버전 올리기: `package.json`의 `version` 수정 → 의존성이 바뀌었으면 `npm run notices`로 `THIRD_PARTY_NOTICES.md` 재생성 → 커밋.
 2. 태그: `git tag v<version>` (예: `v1.0.0`, 프리릴리스는 `v1.0.0-alpha.2`) — release:check가 HEAD의 이 태그를 확인한다.
-3. 점검: `$env:APIA_PACKAGING_PYTHON="C:\Users\ui2030\anaconda3\python.exe"; npm run release:check` — verify → 고지 최신 → 깨끗한 작업트리 → 태그 → `dist:win` → `smoke:release` 순. 실패 시 실패 단계 한 줄이 찍히고(태그는 `git tag -d`로 지우고 고친 뒤 다시), 성공하면 `release/`에 `Apia-Setup-<version>.exe` 하나만 남는다.
+3. 점검: `$env:APIA_PACKAGING_PYTHON="<파이썬 3.11 실행 파일 경로, 예: C:\Python311\python.exe>"; npm run release:check` — verify → 고지 최신 → 깨끗한 작업트리 → 태그 → `dist:win` → `smoke:release` 순. 실패 시 실패 단계 한 줄이 찍히고(태그는 `git tag -d`로 지우고 고친 뒤 다시), 성공하면 `release/`에 `Apia-Setup-<version>.exe` 하나만 남는다.
 4. 배포: `git push --follow-tags` → GitHub Releases에 새 릴리스 만들고 `Apia-Setup-<version>.exe`와 `THIRD_PARTY_NOTICES.md`를 첨부.
 5. 메모: 릴리스 노트에 바뀐 점 + 아래 경고 문구를 붙인다.
    > 이 설치 파일은 코드 서명이 되어 있지 않습니다. 처음 실행하면 Windows SmartScreen이 "Windows의 PC 보호" 경고를 띄울 수 있습니다 — **추가 정보 → 실행**을 누르면 설치됩니다.

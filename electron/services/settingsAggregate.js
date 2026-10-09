@@ -88,7 +88,8 @@ const SETTINGS_DEFAULTS = Object.freeze({
   // A-3 야간 학습기가 쓸 파이썬. **백엔드 venv가 아니다** — 학습 스택(unsloth/trl)은
   // 검증 실험을 돌린 night-loop-lab venv에만 있고, 백엔드 venv에 또 깔면 torch가
   // 6.9GB 중복된다. 경로가 없으면 학습 기능 전체가 조용히 비활성.
-  trainingPythonPath: 'C:\\Users\\ui2030\\Documents\\night-loop-lab\\.venv\\Scripts\\python.exe',
+  // 빈 값 = 야간 학습 꺼짐. 개발 PC 경로를 기본값으로 두면 남의 PC에서 조용히 깨진다(2026-10-10).
+  trainingPythonPath: '',
   // 선톡(먼저 말 걸기). **기본 OFF** — 사용자가 먼저 부르지 않았는데 말을 거는
   // 기능이니 본인이 켜야 한다(우선순위 낮은 편의 기능). 켜면 하루 1회, 재석
   // 중이고 대화 중이 아닐 때만 한 줄 건다.
