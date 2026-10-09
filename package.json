@@ -1,6 +1,6 @@
 {
   "name": "apia",
-  "version": "1.0.0-alpha.2",
+  "version": "1.0.0-alpha.3",
   "description": "Apia - Desktop AI Assistant",
   "author": "ui2030",
   "main": "electron/main.js",
