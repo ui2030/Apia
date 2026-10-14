@@ -1840,6 +1840,10 @@ ipcMain.handle('open-settings', (e, section) => {
 
 ipcMain.handle('apply-settings', (e, s) => {
   // s는 설정 UI가 실제로 편집하는 필드만 담은 부분 payload다(settings.html save()).
+  // 저사양 모드를 설정 창에서 바꿨으면 그 뒤로 자동 전환은 손대지 않는다.
+  if (typeof s?.lowEndMode === 'boolean' && s.lowEndMode !== loadSettings().lowEndMode) {
+    s = { ...s, lowEndModeSource: 'user' }
+  }
   const settings = patchSettings(s)
   // Phase F Codex MUST-FIX: WindowManager.applySettings still calls
   // setAlwaysOnTop. In wallpaper mode that would yank the BrowserWindow
@@ -2059,7 +2063,7 @@ ipcMain.handle('settings:restartBackend', async () => {
 // ── 처음 켜기 · 정보·도움 · 문제 신고용 묶기 (발주서 24) ─────────────────────
 const os = require('os')
 const AdmZip = require('adm-zip')
-const { firstRunDecision, helpLinkUrl, buildReportEntries, reportStamp } = require('./services/appSupport')
+const { firstRunDecision, shouldAutoLowEnd, helpLinkUrl, buildReportEntries, reportStamp } = require('./services/appSupport')
 
 // 답변 모델 목록. 백엔드에 못 붙으면 null(모름) — []와 구분해야 카드가 오판하지 않는다.
 async function readAvailableModes() {
@@ -2076,8 +2080,15 @@ let firstRunHiddenThisRun = false
 ipcMain.handle('firstRun:state', async (event) => {
   const settings = loadSettings()
   if (settings.firstRunDone === true) return { show: false }
+  // 엔진이 아직이면 기동을 기다리지 않는다(느린 PC에선 몇 분) — 카드를 먼저 띄우고 단계만 알린다.
+  const healthy = await backend.isHealthy(1200).catch(() => false)
+  let engine = null
+  // 여기서 ensureRunning을 부르지 않는다 — 카드가 3초마다 묻는데, 실패한 PC에서
+  // 그때마다 다시 띄우면 발주서27 D1의 "죽이고 다시 띄우기"가 모양만 바꿔 돌아온다.
+  // 기동은 앱 시작과 채팅 요청(ensureAvailableForRequest)이 맡는다.
+  if (!healthy && !backend.isE2EDisabled()) engine = backend.startupPhase()
   const decision = firstRunDecision({
-    settings, availableModes: await readAvailableModes(), hiddenThisRun: firstRunHiddenThisRun
+    settings, availableModes: healthy ? await readAvailableModes() : null, hiddenThisRun: firstRunHiddenThisRun, engine
   })
   if (decision.markDone) patchSettings({ firstRunDone: true })
   // 벽지 모드의 메인 창은 바탕화면 뒤라 누를 수 없다 — 카드는 채팅 창에 띄운다.
@@ -2086,7 +2097,7 @@ ipcMain.handle('firstRun:state', async (event) => {
     const win = ensureChatWindow()
     if (!win.isVisible()) win.show()
   }
-  return { show: decision.show }
+  return { show: decision.show, engine: decision.engine || null }
 })
 ipcMain.handle('firstRun:dismiss', () => {
   firstRunHiddenThisRun = true
@@ -2115,6 +2126,14 @@ ipcMain.handle('app:openHelp', async (_event, kind) => {
   } catch (error) {
     return { ok: false, error: error?.message || String(error) }
   }
+})
+
+// 설치 폴더에 같이 들어간 문서(resources/docs) — 인터넷 없어도 볼 수 있게(발주서28 문서 8).
+ipcMain.handle('app:openDocsFolder', async () => {
+  const dir = app.isPackaged ? path.join(process.resourcesPath, 'docs') : path.join(__dirname, '..', 'docs', 'user')
+  if (APIA_E2E_NO_SHELL_OPEN) return { ok: true, path: dir, stubbed: true }
+  const errorMessage = await shell.openPath(dir)
+  return errorMessage ? { ok: false, error: errorMessage } : { ok: true, path: dir }
 })
 
 ipcMain.handle('app:openLogsFolder', async () => {
@@ -2170,9 +2189,26 @@ ipcMain.handle('app:bundleReport', async () => {
   }
 })
 
-// 그래픽 실패 카드의 [저사양 모드 켜고 다시 시작].
+ipcMain.handle('app:gpuSummary', () => gpuSummary())
+
+// 렌더러 사건 기록(발주서28 D3) — 태그 모양만 받아 main.log에 남긴다.
+ipcMain.on('renderer:log', (_event, { tag, detail } = {}) => {
+  if (!/^\[[A-Z_]{3,40}\]$/.test(String(tag))) return
+  logInfo(tag, typeof detail === 'object' ? detail : String(detail ?? '').slice(0, 300))
+})
+
+// 발주서28 D2 — 렌더러가 소프트웨어 렌더링을 감지하면(GPU 이름·WebGL 문자열·프레임 간격)
+// 저사양 모드를 스스로 켜고 저장한다. 사용자가 한 번이라도 직접 정했으면 손대지 않는다.
+ipcMain.handle('gfx:autoLowEnd', (_event, reason) => {
+  const applied = shouldAutoLowEnd(loadSettings())
+  if (applied) patchSettings({ lowEndMode: true, lowEndModeSource: 'auto' })
+  logInfo('[SOFTWARE_RENDER]', { reason: String(reason || ''), autoLowEnd: applied })
+  return { applied }
+})
+
+// 그래픽 실패 카드의 [저사양 모드 켜고 다시 시작] — 사용자가 고른 것.
 ipcMain.handle('app:relaunchLowEnd', () => {
-  patchSettings({ lowEndMode: true })
+  patchSettings({ lowEndMode: true, lowEndModeSource: 'user' })
   app.relaunch()
   quitApia()
   return { ok: true }

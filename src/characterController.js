@@ -407,6 +407,12 @@ export function getCurrentMotion() {
 }
 
 export function updateCharacter(mesh, t, dt) {
+  // 새 모델은 원점(z=0 = 뒷벽 선, 걷기 범위 minZ 밖)에서 시작한다 — 거기 서면 발이
+  // 노트북 윗선과 겹쳐 물건 위에 선 것처럼 보였다(발주서28 D8). 처음 한 번 범위 안으로.
+  if (mesh !== mesh3D && mesh) {
+    mesh.position.x = Math.max(BOUNDS.minX, Math.min(BOUNDS.maxX, mesh.position.x))
+    mesh.position.z = Math.max(BOUNDS.minZ, Math.min(BOUNDS.maxZ, mesh.position.z))
+  }
   mesh3D = mesh
 
   // 커서가 한참 안 움직이면 시선을 서서히 중앙으로 — 사용자를 빤히

@@ -76,6 +76,7 @@ export function initChat({
   // 발주서 24 — 연결 띠(채팅 패널 상단)와 시작 안내 카드(캐릭터 옆).
   _backendBanner = createBackendBanner({ doc: document, api: window.api, anchor: document.querySelector('#chat-panel .panel-header') })
   _firstRunCard = createFirstRunCard({ doc: document, api: window.api, host: document.body, floating: true })
+  _firstRunCard.refresh() // 엔진 연결 전에도 바로 — "켜는 중" 줄과 함께 뜬다
   window.api?.onSettingsApplied?.(() => _firstRunCard.refresh())
   // 벽지로 붙고 나면 이 창은 누를 수 없다 — 다시 물으면 main이 채팅 창에 띄운다.
   window.api?.onWallpaperOpaque?.((on) => { if (on) _firstRunCard.refresh() })

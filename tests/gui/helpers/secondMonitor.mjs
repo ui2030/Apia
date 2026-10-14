@@ -9,6 +9,7 @@
 
 // electron 없이 화면 목록을 못 읽으므로 좌표는 빌드 머신 기준 고정값이다.
 // 다른 장비에서 돌릴 땐 아래 한 줄만 고치면 된다(없으면 주 모니터로 폴백).
-export const SECOND_MONITOR_ANCHOR = { x: -3700, y: -400 }
+// Electron 좌표(DIP) 기준 — 보조 모니터가 175% 배율이라 물리 -3840이 DIP로는 약 -2195에서 시작한다.
+export const SECOND_MONITOR_ANCHOR = { x: -2000, y: 0 }
 
 export const SECOND_MONITOR_SEED = { windowAnchor: SECOND_MONITOR_ANCHOR }

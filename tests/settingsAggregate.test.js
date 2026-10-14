@@ -120,6 +120,21 @@ describe('normalize', () => {
     expect(repo.load()).toMatchObject({ aiMode: 'groq', coursewareCollectEnabled: false })
   })
 
+  it('파일 앞에 BOM이 붙어 있어도 값을 그대로 읽는다(기본값으로 초기화 금지)', async () => {
+    const repo = createRepo()
+    await writeFile(settingsPath, '﻿' + JSON.stringify({ aiMode: 'groq', lowEndMode: true, charScale: 137 }), 'utf-8')
+    expect(repo.load()).toMatchObject({ aiMode: 'groq', lowEndMode: true, charScale: 137 })
+    expect(log.warn).not.toHaveBeenCalled()
+  })
+
+  it('lowEndModeSource는 auto/user만, 그 밖은 null(아무도 안 정함)', () => {
+    const repo = createRepo()
+    expect(repo.normalize().lowEndModeSource).toBe(null)
+    expect(repo.normalize({ lowEndModeSource: 'user' }).lowEndModeSource).toBe('user')
+    expect(repo.normalize({ lowEndModeSource: 'auto' }).lowEndModeSource).toBe('auto')
+    expect(repo.normalize({ lowEndModeSource: 'x' }).lowEndModeSource).toBe(null)
+  })
+
   it('먼저 말 걸기 · 마이크는 둘 다 기본 OFF (옵트인)', () => {
     // 부르지 않았는데 말 걸기, 말하지 않았는데 듣기 — 둘 다 사용자가 직접
     // 켜야 한다. 구버전 settings.json(키 없음)도 꺼진 채로 하이드레이트된다.

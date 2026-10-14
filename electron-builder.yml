@@ -25,8 +25,9 @@ files:
   - node_modules/electron-as-wallpaper/**/*
 
 extraResources:
-  - from: backend-dist/ApiaBackend.exe
-    to: backend/ApiaBackend.exe
+  # PyInstaller --onedir 폴더 통째로 — resources/backend/ApiaBackend.exe + _internal/
+  - from: backend-dist/ApiaBackend
+    to: backend
   # Win11 "behind icons" wallpaper helper (Progman-child reparent). Shipped
   # unpacked under resources/scripts so it can be spawned — an .exe can't run
   # from inside the .asar. wallpaperMode.js resolves resourcesPath/scripts first.
@@ -66,3 +67,5 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Apia
+  # 제거 때 apia-updater 설치 파일 사본·빈 설치 폴더 정리(발주서28 D7)
+  include: build/installer.nsh

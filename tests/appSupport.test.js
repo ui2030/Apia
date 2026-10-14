@@ -3,12 +3,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
-import { lowEndLevers, backendBannerStage } from '../src/supportUi.js'
+import { lowEndLevers, backendBannerStage, softwareRenderReason, SLOW_FRAME_MS } from '../src/supportUi.js'
 import { needsSetupReply } from '../src/chatShared.js'
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const {
-  firstRunDecision, FIRST_RUN_MAX_DISMISS, helpLinkUrl, isAllowedHelpUrl,
+  firstRunDecision, shouldAutoLowEnd, FIRST_RUN_MAX_DISMISS, helpLinkUrl, isAllowedHelpUrl,
   scrubText, sanitizeSettings, buildReportEntries
 } = require('../electron/services/appSupport')
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -26,6 +26,12 @@ describe('firstRunDecision — 시작 안내 카드', () => {
   })
   it('백엔드를 몰라(null)서는 띄우지도 끝내지도 않는다', () => {
     expect(firstRunDecision({ settings: {}, availableModes: null })).toEqual({ show: false, markDone: false })
+  })
+  it('엔진이 아직 켜지는 중이면 연결 전에도 카드를 띄우고 단계를 넘긴다', () => {
+    expect(firstRunDecision({ settings: {}, availableModes: null, engine: 'starting' }))
+      .toEqual({ show: true, markDone: false, engine: 'starting' })
+    expect(firstRunDecision({ settings: {}, availableModes: null, engine: 'failed', hiddenThisRun: true }).show).toBe(false)
+    expect(firstRunDecision({ settings: { firstRunDone: true }, availableModes: null, engine: 'slow' }).show).toBe(false)
   })
   it('[나중에]는 이번 실행만 숨기고, 3회 뒤엔 안 보인다', () => {
     expect(firstRunDecision({ settings: {}, availableModes: [], hiddenThisRun: true }).show).toBe(false)
@@ -133,15 +139,37 @@ describe('문제 신고용 묶기 — 넣는 것과 빼는 것', () => {
 })
 
 describe('저사양 모드 레버', () => {
-  it('켜면 후처리 끔·배율 1·물리 완화·관전 간격 2배', () => {
+  it('켜면 후처리 끔·배율 0.5·20fps·물리 완화·관전 간격 2배', () => {
     expect(lowEndLevers(true)).toEqual({
-      postFx: false, pixelRatioCap: 1, physics: { unitStep: 1 / 60, maxStepNum: 2 }, spectateIntervalScale: 2
+      postFx: false, pixelRatioCap: 0.5, targetFps: 20, shadows: false, outline: false, physics: { unitStep: 1 / 60, maxStepNum: 3 }, spectateIntervalScale: 2
+    })
+    // 20fps 프레임(50ms)을 물리가 정속으로 소화한다 — 느려지면 옷·머리가 슬로모션.
+    const lv = lowEndLevers(true)
+    expect(lv.physics.unitStep * lv.physics.maxStepNum).toBeGreaterThanOrEqual(1 / lv.targetFps - 1e-9)
+  })
+  it('끄면 기존 값 그대로(배율 상한 2·60fps·물리 1/120·4스텝)', () => {
+    expect(lowEndLevers(false)).toEqual({
+      postFx: true, pixelRatioCap: 2, targetFps: 60, shadows: true, outline: true, physics: { unitStep: 1 / 120, maxStepNum: 4 }, spectateIntervalScale: 1
     })
   })
-  it('끄면 기존 값 그대로(배율 상한 2·물리 1/120·4스텝)', () => {
-    expect(lowEndLevers(false)).toEqual({
-      postFx: true, pixelRatioCap: 2, physics: { unitStep: 1 / 120, maxStepNum: 4 }, spectateIntervalScale: 1
-    })
+})
+
+describe('소프트웨어 렌더링 자동 감지', () => {
+  it('GPU 이름·WebGL 문자열·프레임 간격 중 하나라도 걸리면 이유를 돌려준다', () => {
+    expect(softwareRenderReason({ gpu: 'Microsoft Basic Render Driver' })).toBe('gpu-info')
+    // 그래픽 카드 있는 PC에도 Basic Render Driver가 둘째 장치로 붙는다(실측) — 오판 금지.
+    expect(softwareRenderReason({ gpu: 'NVIDIA GeForce RTX 3060 / Microsoft Basic Render Driver' })).toBeNull()
+    expect(softwareRenderReason({ webglRenderer: 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)' })).toBe('webgl-renderer')
+    expect(softwareRenderReason({ webglRenderer: 'llvmpipe (LLVM 15.0.7, 256 bits)' })).toBe('webgl-renderer')
+    expect(softwareRenderReason({ avgFrameMs: SLOW_FRAME_MS + 1 })).toBe('frame-time')
+    expect(softwareRenderReason({ gpu: 'NVIDIA GeForce RTX 4070', webglRenderer: 'ANGLE (NVIDIA, ...)', avgFrameMs: 16 })).toBeNull()
+  })
+  it('사용자가 정했거나 이미 켜져 있으면 자동으로 손대지 않는다', () => {
+    expect(shouldAutoLowEnd({})).toBe(true)
+    expect(shouldAutoLowEnd({ lowEndModeSource: null, lowEndMode: false })).toBe(true)
+    expect(shouldAutoLowEnd({ lowEndModeSource: 'user', lowEndMode: false })).toBe(false)
+    expect(shouldAutoLowEnd({ lowEndModeSource: 'auto', lowEndMode: true })).toBe(false)
+    expect(shouldAutoLowEnd({ lowEndMode: true })).toBe(false)
   })
 })
 

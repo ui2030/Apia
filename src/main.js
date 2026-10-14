@@ -17,7 +17,7 @@ import {
   Vector3
 } from 'three'
 import { createSceneRuntime } from './sceneRuntime.js'
-import { lowEndLevers, showGraphicsFailCard } from './supportUi.js'
+import { lowEndLevers, showGraphicsFailCard, softwareRenderReason, showNoticeCard } from './supportUi.js'
 import { updateCharacter, onMouseMove, setLookTarget, walkTo, walkToRandomSpot, requestFaceCamera, setEmotion, applyMotion, getState, setState, getLookTarget, getCurrentMotion, getBlinkValue, setDummyBlinkTarget, clearDummyBlinkTarget, setPersonalityVector, setSeatedHipHeight, releaseSit, getWalkSpeed, setStageNavigation } from './characterController.js'
 import { applyInertialization, recordDisplayedPose, setInertializationEnabled } from './inertialization.js'
 import { parseSpectate, createCommentGate, isSpectateSkip, spectateRawOf } from './spectateDriver.js'
@@ -248,16 +248,83 @@ const _sceneRuntime = (() => {
     throw error
   }
 })()
-document.getElementById('vrm-canvas')?.addEventListener('webglcontextlost', () => {
-  showGraphicsFailCard({ doc: document, api: window.api })
+// 문맥 유실은 소프트웨어 렌더러가 과부하일 때 잠깐 생겼다 돌아오기도 한다 — 그때
+// 카드를 바로 띄우면 방이 멀쩡히 그려진 채 "못 그렸어요"가 남는다(발주서28 D3).
+// preventDefault로 복구를 허용하고, 3초 안에 안 돌아오면 그때 카드.
+const CONTEXT_RESTORE_GRACE_MS = 3000
+let _contextLostTimer = null
+document.getElementById('vrm-canvas')?.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault()
+  window.api?.logEvent?.('[WEBGL_CONTEXT_LOST]')
+  clearTimeout(_contextLostTimer)
+  _contextLostTimer = setTimeout(() => {
+    window.api?.logEvent?.('[WEBGL_CONTEXT_NOT_RESTORED]')
+    showGraphicsFailCard({ doc: document, api: window.api })
+  }, CONTEXT_RESTORE_GRACE_MS)
 })
+document.getElementById('vrm-canvas')?.addEventListener('webglcontextrestored', () => {
+  clearTimeout(_contextLostTimer)
+  window.api?.logEvent?.('[WEBGL_CONTEXT_RESTORED]')
+  document.getElementById('gfx-fail-card')?.remove()
+})
+
+// 소프트웨어 렌더링 감지(발주서28 D2) — GPU 이름·WebGL 문자열은 부팅 때 한 번,
+// 실측 프레임 간격은 첫 5초 평균(animate가 모은다). 걸리면 main이 저사양 모드를 켠다.
+function webglRendererString() {
+  try {
+    const gl = _sceneRuntime.renderer.getContext()
+    const ext = gl.getExtension('WEBGL_debug_renderer_info')
+    return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '')
+  } catch {
+    return ''
+  }
+}
+let _softwareChecked = false
+async function reportSoftwareRender(input) {
+  if (_softwareChecked || !window.api?.autoLowEnd) return
+  const reason = softwareRenderReason(input)
+  if (!reason) return
+  _softwareChecked = true
+  const { applied } = await window.api.autoLowEnd(reason).catch(() => ({ applied: false }))
+  if (!applied) return
+  applyLowEndMode(true).catch(() => {})
+  showNoticeCard({
+    doc: document,
+    text: reason === 'frame-time'
+      ? '화면 그리기가 너무 느려 저사양 모드로 켰어요'
+      : '그래픽 카드를 찾지 못해 저사양 모드로 켰어요'
+  })
+}
+const FRAME_PROBE_MS = 5000
+const _frameProbe = { start: 0, last: 0, sum: 0, n: 0, done: false }
+function probeFrameTime() {
+  const now = performance.now()
+  const p = _frameProbe
+  if (!p.start) { p.start = p.last = now; return }
+  const dt = now - p.last
+  p.last = now
+  // 1초 넘는 간격은 가려진 창의 rAF 스로틀·일시정지 — 느린 렌더로 세지 않는다.
+  if (dt < 1000) { p.sum += dt; p.n += 1 }
+  if (now - p.start < FRAME_PROBE_MS) return
+  p.done = true
+  // 5초에 5프레임도 못 그렸으면(보이는 창인데 1초 넘는 간격뿐) 그 자체가 가장 느린 경우다.
+  const avgFrameMs = p.n >= 5 ? p.sum / p.n : (document.visibilityState === 'visible' ? FRAME_PROBE_MS : 0)
+  window.api?.logEvent?.('[FRAME_PROBE]', { avgFrameMs: Math.round(avgFrameMs), frames: p.n })
+  if (!_lowEndOn) reportSoftwareRender({ avgFrameMs })
+}
 
 // 저사양 모드(발주서 24) — 이미 있는 손잡이만 돌린다: 후처리·화면 배율·물리 스텝·관전 간격.
 let _lowEnd = lowEndLevers(false)
+let _lowEndOn = false
+// 프레임 상한(초) — 레버의 targetFps에서. 1/fps보다 살짝 낮게 — 정확히 1/60이면 60Hz 화면 미세 지터에 30fps로 반토막(animate 주석).
+let _frameMinDelta = 1 / (_lowEnd.targetFps * 1.05)
 async function applyLowEndMode(on) {
-  _lowEnd = lowEndLevers(on === true)
+  _lowEndOn = on === true
+  _lowEnd = lowEndLevers(_lowEndOn)
+  _frameMinDelta = 1 / (_lowEnd.targetFps * 1.05)
   _sceneRuntime.postFx?.setEnabled(_lowEnd.postFx)
   _sceneRuntime.setPixelRatioCap?.(_lowEnd.pixelRatioCap)
+  _sceneRuntime.renderer.shadowMap.enabled = _lowEnd.shadows
   if (currentModel?.type === 'mmd') {
     const { helper } = await getMmdRuntime()
     const physics = helper?.objects?.get(currentModel.obj)?.physics
@@ -1804,6 +1871,11 @@ function updateBubblePosition() {
   const sx = (headPos.x * 0.5 + 0.5) * window.innerWidth
   const sy = (-headPos.y * 0.5 + 0.5) * window.innerHeight
 
+  // CSS 기본 자리(right·bottom)를 풀어야 한다 — left·top만 얹으면 네 변이 다 고정돼
+  // 상자가 창 크기만큼 늘어난다(발주서28 D5: 1280×752에서 230×400 빈 상자, 좁은
+  // 창에선 폭이 줄어 글자가 세로로 접힘).
+  b.style.right = 'auto'
+  b.style.bottom = 'auto'
   b.style.left = Math.max(10, Math.min(window.innerWidth - 250, sx - b.offsetWidth / 2)) + 'px'
   b.style.top = Math.max(10, sy - b.offsetHeight - 10) + 'px'
 }
@@ -2165,7 +2237,7 @@ let _renderPaused = false
 // 60fps 상한. 144Hz 화면에서 2.4배 프레임을 공짜로 그리던 걸 막는다. 임계는
 // 1/60보다 살짝 낮게 둔다 — 정확히 1/60이면 60Hz 화면의 미세 지터에 매 프레임이
 // 걸려 30fps로 반토막 난다.
-const FRAME_MIN_DELTA = 1 / 63
+// 저사양 모드는 20fps — 실제 값은 _frameMinDelta(applyLowEndMode가 레버에서 바꾼다).
 // 재개 첫 프레임 델타 상한. 멈춰 있던 시간이 통째로 들어오면 물리/믹서가 튄다
 // (MMD는 unitStep 1/120·maxStepNum 4 = 33ms까지만 정속 소화).
 const FRAME_MAX_DELTA = 1 / 20
@@ -2188,17 +2260,21 @@ function syncRenderPause() {
   else if (!paused && _renderPaused) { _renderPaused = false; startRenderLoop() }
 }
 
+// 가구·모델 로딩 중의 끊김을 느린 렌더로 오판하지 않게 — 가구가 다 들어온 뒤부터 잰다.
+let _frameProbeArmed = false
+;(_sceneRuntime.furnitureReady ?? Promise.resolve()).then(() => { _frameProbeArmed = true })
 function animate() {
   _rafId = requestAnimationFrame(animate)
+  if (_frameProbeArmed && !_frameProbe.done) probeFrameTime()
 
   // 프레임 상한 — 모자란 프레임은 델타만 모으고 그리지 않는다. 잔여분은
   // 다음 프레임으로 넘겨 144Hz에서도 평균이 60fps에 붙게 한다(0으로 리셋하면
   // 3프레임에 한 번=48fps로 떨어진다). 델타는 잔여분을 뺀 소비분만 먹인다 —
   // 잔여분까지 먹이면 같은 시간이 두 번 계상돼 애니메이션이 실시간보다 빨라진다.
   _frameAcc += clock.getDelta()
-  if (_frameAcc < FRAME_MIN_DELTA) return
-  const delta = Math.min(_frameAcc - (_frameAcc % FRAME_MIN_DELTA), FRAME_MAX_DELTA)
-  _frameAcc %= FRAME_MIN_DELTA
+  if (_frameAcc < _frameMinDelta) return
+  const delta = Math.min(_frameAcc - (_frameAcc % _frameMinDelta), FRAME_MAX_DELTA)
+  _frameAcc %= _frameMinDelta
   const t = clock.getElapsedTime()
 
   if (currentModel) {
@@ -2283,7 +2359,8 @@ function animate() {
 
   updateBubblePosition()
   updateWorldLabels(camera)
-  outlineRender(scene, camera)
+  if (_lowEnd.outline) outlineRender(scene, camera)
+  else renderer.render(scene, camera) // 저사양: 외곽선 패스(장면 두 번 그리기) 생략
 }
 
 // 조명 패스 — 실시간 시계 연동(분 포함). 리그는 타깃만 갱신하고 tick이
@@ -2453,6 +2530,11 @@ window.api?.onWallpaperOpaque?.((on) => {
 if (window.api) {
   window.api.getSettings().then(async (s) => {
     applyLowEndMode(s.lowEndMode).catch(() => {})
+    if (s.lowEndMode !== true) {
+      window.api.gpuSummary?.()
+        .then((gpu) => reportSoftwareRender({ gpu, webglRenderer: webglRendererString() }))
+        .catch(() => {})
+    }
     currentUserScale = (s.charScale || 100) / 100
     autoBehaviorEnabled = s.autoBehavior !== false
     scheduleAutoBehavior()

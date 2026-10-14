@@ -67,6 +67,7 @@ function startBackendPolling() {
   const banner = createBackendBanner({ doc: document, api: window.api, anchor: document.querySelector('.panel-header') })
   const firstRun = createFirstRunCard({ doc: document, api: window.api, anchor: document.querySelector('.panel-header') })
   window.addEventListener('focus', () => firstRun.refresh())
+  firstRun.refresh()
   let wasOk = false
   const tick = async () => {
     let ok = false

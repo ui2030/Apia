@@ -12,15 +12,22 @@ const path = require('path')
 
 const FIRST_RUN_MAX_DISMISS = 3
 
-function firstRunDecision({ settings = {}, availableModes, hiddenThisRun = false }) {
+// engine: 엔진이 아직 안 붙었으면 그 단계('starting'|'slow'|'failed') — 카드는 연결 전에도
+// 바로 뜨고 맨 위 한 줄로 알린다(발주서28 D1: 느린 PC에선 엔진이 붙기까지 몇 분).
+function firstRunDecision({ settings = {}, availableModes, hiddenThisRun = false, engine = null }) {
   if (settings.firstRunDone === true) return { show: false, markDone: false }
-  // 백엔드에 못 붙으면 모델이 있는지 모른다 — 연결 안내 띠가 따로 맡는다.
-  if (!Array.isArray(availableModes)) return { show: false, markDone: false }
-  if (availableModes.length > 0) return { show: false, markDone: true }
+  // 연결됐는데 모델 목록을 못 읽으면 모른다 — 연결 안내 띠가 따로 맡는다.
+  if (!Array.isArray(availableModes) && !engine) return { show: false, markDone: false }
+  if (Array.isArray(availableModes) && availableModes.length > 0) return { show: false, markDone: true }
   if (hiddenThisRun || (settings.firstRunDismissCount || 0) >= FIRST_RUN_MAX_DISMISS) {
     return { show: false, markDone: false }
   }
-  return { show: true, markDone: false }
+  return engine ? { show: true, markDone: false, engine } : { show: true, markDone: false }
+}
+
+/** 자동으로 저사양 모드를 켜도 되나 — 누가 이미 정했으면(source) 또는 이미 켜졌으면 아니다(발주서28 D2). */
+function shouldAutoLowEnd(settings = {}) {
+  return !settings.lowEndModeSource && settings.lowEndMode !== true
 }
 
 const REPO_URL = 'https://github.com/ui2030/Apia'
@@ -106,6 +113,7 @@ function reportStamp(date = new Date()) {
 module.exports = {
   FIRST_RUN_MAX_DISMISS,
   firstRunDecision,
+  shouldAutoLowEnd,
   HELP_LINKS,
   isAllowedHelpUrl,
   helpLinkUrl,

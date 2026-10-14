@@ -1082,6 +1082,7 @@
     <div style="display:flex;flex-wrap:wrap;gap:6px;padding:10px 0 4px;">
       <button type="button" class="btn btn-ghost" id="about-guide">사용 설명서</button>
       <button type="button" class="btn btn-ghost" id="about-privacy">개인정보 안내</button>
+      <button type="button" class="btn btn-ghost" id="about-docs">설치 폴더 문서 열기</button>
       <button type="button" class="btn btn-ghost" id="about-logs">로그 폴더 열기</button>
       <button type="button" class="btn btn-purple" id="about-report">문제 신고용 묶기</button>
       <button type="button" class="btn btn-ghost" id="about-personal">내 파일 폴더 열기</button>
@@ -2955,6 +2956,7 @@ function bindAboutPanel() {
   })
   bind('about-guide', () => window.api.openHelp('guide'))
   bind('about-privacy', () => window.api.openHelp('privacy'))
+  bind('about-docs', () => window.api.openDocsFolder())
   bind('about-logs', () => window.api.openLogsFolder())
   bind('about-personal', () => window.api.openPersonalFolder())
   document.getElementById('about-report')?.addEventListener('click', async () => {

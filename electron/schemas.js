@@ -93,6 +93,7 @@ const SettingsSchema = z.object({
   cloudFallbackPolicy: z.enum(['ask', 'always', 'never']).optional(),
   // 발주서 24 — 저사양 모드·시작 안내 카드 상태. optional: 구버전은 기본값으로.
   lowEndMode: z.boolean().optional(),
+  lowEndModeSource: z.enum(['auto', 'user']).nullable().optional(),
   firstRunDone: z.boolean().optional(),
   firstRunDismissCount: z.number().int().min(0).optional(),
   // 참조 음성의 원본 파일명 — 표시 전용. 실제 wav는 backend-data/cosyvoice/

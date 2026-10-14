@@ -76,8 +76,13 @@ contextBridge.exposeInMainWorld('api', {
   appInfo: () => ipcRenderer.invoke('app:info'),
   openHelp: (kind) => ipcRenderer.invoke('app:openHelp', kind),
   openLogsFolder: () => ipcRenderer.invoke('app:openLogsFolder'),
+  openDocsFolder: () => ipcRenderer.invoke('app:openDocsFolder'),
   bundleReport: () => ipcRenderer.invoke('app:bundleReport'),
   relaunchLowEnd: () => ipcRenderer.invoke('app:relaunchLowEnd'),
+  gpuSummary: () => ipcRenderer.invoke('app:gpuSummary'),
+  autoLowEnd: (reason) => ipcRenderer.invoke('gfx:autoLowEnd', reason),
+  // 렌더러 사건을 main.log에 남긴다(WebGL 문맥 유실 등 — 발주서28 D3).
+  logEvent: (tag, detail) => ipcRenderer.send('renderer:log', { tag, detail }),
 
   // citation chip click — main process enforces http/https only.
   openExternal: (url) => ipcRenderer.invoke('open-external', url),

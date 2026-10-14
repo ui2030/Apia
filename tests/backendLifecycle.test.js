@@ -997,3 +997,130 @@ describe('adoption (고아 백엔드 되찾기)', () => {
     expect(backend.isStartedByApp()).toBe(false)
   })
 })
+
+// ── 느린 PC 기동 대기 (발주서28 D1) ─────────────────────────────────────────
+// 20초 고정 시한이 기동 중인 엔진을 죽이고 다시 띄우기를 반복했다. 이제 자식이
+// 살아 있는 동안 최대 180초 기다리고, 먼저 죽거나 포트 점유면 즉시 실패한다.
+describe('ready wait on slow PCs', () => {
+  // 가짜 시계: setTimeout·Date만 가짜, 가짜 http의 setImmediate는 진짜로 둔다.
+  function clockHttp(readyAt) {
+    const requestImpl = (_url, _opts, cb) => {
+      const request = new EventEmitter()
+      request.destroy = vi.fn()
+      request.end = () => setImmediate(() => {
+        if (Date.now() < readyAt) { request.emit('error', new Error('not yet')); return }
+        const response = new EventEmitter()
+        response.statusCode = 200
+        response.resume = vi.fn()
+        cb(response)
+      })
+      return request
+    }
+    return { http: { request: requestImpl }, https: { request: requestImpl } }
+  }
+
+  async function drive(promise, maxMs) {
+    let done = false
+    promise.finally(() => { done = true })
+    for (let t = 0; t < maxMs && !done; t += 250) {
+      for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r))
+      vi.advanceTimersByTime(250)
+    }
+    return promise
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    return () => vi.useRealTimers()
+  })
+
+  it('60초 뒤에야 /health가 응답해도 성공한다', async () => {
+    const t0 = Date.now()
+    const deps = createBaseDeps(clockHttp(t0 + 60_000))
+    deps.spawn.mockReturnValue(createFakeChild())
+    const backend = new BackendLifecycle(deps)
+
+    expect(backend.startupPhase()).toBe('starting')
+    const result = drive(backend.ensureRunning(), 200_000)
+    await expect(result).resolves.toBe(true)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(60_000)
+    expect(deps.log.warn).not.toHaveBeenCalledWith(expect.stringMatching(/READY_TIMEOUT/), expect.anything())
+  })
+
+  it('자식이 10초에 죽으면 180초를 기다리지 않고 10초에 실패한다', async () => {
+    const t0 = Date.now()
+    const deps = createBaseDeps(clockHttp(Infinity))
+    const child = createFakeChild()
+    deps.spawn.mockReturnValue(child)
+    setTimeout(() => child.emit('exit', 1, null), 10_000)
+    const backend = new BackendLifecycle(deps)
+
+    await expect(drive(backend.ensureRunning(), 200_000)).resolves.toBe(false)
+    const elapsed = Date.now() - t0
+    expect(elapsed).toBeGreaterThanOrEqual(10_000)
+    expect(elapsed).toBeLessThan(12_000)
+    expect(deps.log.warn).toHaveBeenCalledWith('[BACKEND_EXITED_BEFORE_READY] py:test', expect.anything())
+    expect(backend.startupPhase()).toBe('failed')
+  })
+
+  it('포트 점유 오류가 stderr에 보이면 즉시 실패하고 [BACKEND_PORT_BUSY]를 남긴다', async () => {
+    const t0 = Date.now()
+    const deps = createBaseDeps(clockHttp(Infinity))
+    const child = createFakeChild()
+    deps.spawn.mockReturnValue(child)
+    setTimeout(() => child.stderr.emit('data', Buffer.from('[Errno 10048] error while attempting to bind')), 2_000)
+    const backend = new BackendLifecycle(deps)
+
+    await expect(drive(backend.ensureRunning(), 200_000)).resolves.toBe(false)
+    expect(Date.now() - t0).toBeLessThan(4_000)
+    expect(deps.log.warn).toHaveBeenCalledWith('[BACKEND_PORT_BUSY] py:test', expect.anything())
+  })
+
+  it('살아 있지만 끝내 안 뜨면 180초에 시한 초과, 60초부터는 slow 단계', async () => {
+    const t0 = Date.now()
+    const deps = createBaseDeps(clockHttp(Infinity))
+    deps.spawn.mockReturnValue(createFakeChild())
+    const backend = new BackendLifecycle(deps)
+
+    const result = drive(backend.ensureRunning(), 200_000)
+    await result
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(180_000)
+    expect(deps.log.warn).toHaveBeenCalledWith('[BACKEND_READY_TIMEOUT] py:test', expect.anything())
+    expect(backend.startupPhase()).toBe('failed')
+  })
+
+  it('startupPhase: 시도 시작 60초 전엔 starting, 이후엔 slow', () => {
+    const backend = new BackendLifecycle(createBaseDeps())
+    expect(backend.startupPhase(Date.now() + 59_000)).toBe('starting')
+    expect(backend.startupPhase(Date.now() + 61_000)).toBe('slow')
+  })
+})
+
+// onedir 전환 뒤에도 설치본 exe 경로(resources/backend/ApiaBackend.exe)는 같다 —
+// pidfile에 그 경로가 남고, 다음 실행이 같은 경로로 채택한다.
+describe('packaged onedir backend adoption', () => {
+  it('설치본 후보 경로로 띄운 백엔드를 다음 실행이 되찾는다', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getPackagedBackendExecutableCandidates } = require('../electron/services/backendDiscovery')
+    const exe = getPackagedBackendExecutableCandidates(path.join('/opt', 'Apia', 'resources'))[0]
+    expect(exe).toMatch(/[/\\]resources[/\\]backend[/\\](ApiaBackend\.exe|apia-backend)$/)
+
+    const fs = createFakeFs()
+    const first = createBaseDeps({ ...createFakeHttp([{ error: new Error('down') }, { status: 200 }]), fs })
+    first.discovery.getBackendLaunchCandidates = vi.fn(() => [
+      { label: path.basename(exe), command: exe, args: [], cwd: path.dirname(exe) }
+    ])
+    first.spawn.mockReturnValue(createFakeChild({ pid: 5151 }))
+    await new BackendLifecycle(first).ensureRunning()
+    expect(JSON.parse(fs.files.get(PID_FILE)).backendPath).toBe(exe)
+
+    const second = createBaseDeps({
+      ...createFakeHttp([{ status: 200 }]),
+      fs,
+      queryCommandLine: vi.fn(() => `"${exe}"`)
+    })
+    const backend = new BackendLifecycle(second)
+    expect(await backend.ensureRunning()).toBe(true)
+    expect(backend.isStartedByApp()).toBe(true)
+  })
+})

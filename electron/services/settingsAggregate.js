@@ -102,6 +102,9 @@ const SETTINGS_DEFAULTS = Object.freeze({
   cloudFallbackPolicy: 'ask',
   // 저사양 모드 — 후처리 끔·화면 배율 1.0·물리 스텝 완화·화면 함께 보기 간격 2배.
   lowEndMode: false,
+  // 저사양 모드를 누가 정했나 — null(아무도) | 'auto'(소프트웨어 렌더링 감지) | 'user'(설정 창).
+  // null일 때만 자동으로 켠다. 사용자가 한 번 바꾸면 다시 건드리지 않는다.
+  lowEndModeSource: null,
   // 시작 안내 카드(발주서 24). 답변 모델이 생기면 true로 영구 종료,
   // [나중에]는 횟수만 센다(3회 넘으면 다시 안 띄움).
   firstRunDone: false,
@@ -250,6 +253,7 @@ class SettingsRepository {
     }
     settings.micEnabled = settings.micEnabled === true
     settings.lowEndMode = settings.lowEndMode === true
+    if (!['auto', 'user'].includes(settings.lowEndModeSource)) settings.lowEndModeSource = null
     settings.firstRunDone = settings.firstRunDone === true
     settings.firstRunDismissCount = Number.isInteger(settings.firstRunDismissCount)
       ? Math.max(0, Math.min(99, settings.firstRunDismissCount))
@@ -319,7 +323,8 @@ class SettingsRepository {
   load() {
     try {
       if (fs.existsSync(this.#settingsPath)) {
-        return this.normalize(JSON.parse(fs.readFileSync(this.#settingsPath, 'utf-8')))
+        // 선두 BOM 하나에 JSON.parse가 죽어 설정 전체가 기본값으로 덮이던 것(메모장 등이 붙인다).
+        return this.normalize(JSON.parse(fs.readFileSync(this.#settingsPath, 'utf-8').replace(/^\uFEFF/, '')))
       }
     } catch (error) {
       this.#log.warn('[SETTINGS_LOAD_ERROR]', error)

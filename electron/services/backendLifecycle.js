@@ -37,7 +37,13 @@ const {
 } = discoveryModule
 
 const DEFAULT_COOLDOWN_MS = 15000
-const DEFAULT_READY_TIMEOUT_MS = 20000
+// 상한일 뿐 — 자식이 살아 있는 동안만 기다리고, 먼저 죽으면 즉시 실패한다.
+// 20초 고정이던 시절 2코어·GPU 없는 PC에서 기동 중인 엔진을 죽이고 다시 띄우기를
+// 반복했다(발주서27 D1).
+const DEFAULT_READY_TIMEOUT_MS = 180000
+// 포트 점유(Windows WSAEADDRINUSE=10048) — 기다려도 안 뜬다, 즉시 실패.
+const PORT_BUSY_PATTERN = /10048|address already in use/i
+const SLOW_START_MS = 60000
 const DEFAULT_READY_INTERVAL_MS = 500
 const DEFAULT_PROBE_TIMEOUT_MS = 8000
 
@@ -94,6 +100,9 @@ class BackendLifecycle {
   #lastLaunchAt = 0
   #discovery
   #e2eDisable
+  // 첫 안내 카드의 "켜는 중" 줄용 — 지금 시도가 언제 시작됐는지, 준비 이후 실패가 있었는지.
+  #attemptStartedAt = Date.now()
+  #failedSinceReady = false
 
   constructor({
     configuredUrl,
@@ -189,6 +198,12 @@ class BackendLifecycle {
   // process.env (the source of truth lives in the lifecycle constructor).
   isE2EDisabled() {
     return this.#e2eDisable
+  }
+
+  /** 엔진이 아직 안 붙었을 때 카드가 보여 줄 단계: 'starting' | 'slow'(60초+) | 'failed'. */
+  startupPhase(now = Date.now()) {
+    if (this.#failedSinceReady) return 'failed'
+    return now - this.#attemptStartedAt >= SLOW_START_MS ? 'slow' : 'starting'
   }
 
   // ── Pidfile + 고아 백엔드 채택 ──────────────────────────────────────────
@@ -425,17 +440,21 @@ class BackendLifecycle {
     })
   }
 
+  // @returns true(준비됨) | 실패 사유 문자열('exit' | 'port-busy' | 'timeout')
   async #waitForReady(
+    failure,
     timeoutMs = DEFAULT_READY_TIMEOUT_MS,
     intervalMs = DEFAULT_READY_INTERVAL_MS,
     probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS
   ) {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
+      if (failure.reason) return failure.reason
       if (await this.isHealthy(probeTimeoutMs)) return true
+      if (failure.reason) return failure.reason
       await new Promise((r) => setTimeout(r, intervalMs))
     }
-    return false
+    return 'timeout'
   }
 
   async #trySpawnCandidate(candidate) {
@@ -470,16 +489,30 @@ class BackendLifecycle {
     this.#startedByApp = true
     this.#attachChild(child, candidate.label)
 
-    const ready = await this.#waitForReady()
-    if (ready) {
+    this.#attemptStartedAt = Date.now()
+    const failure = { reason: null }
+    child.once?.('exit', () => { failure.reason ||= 'exit' })
+    child.stderr?.on('data', (chunk) => {
+      if (PORT_BUSY_PATTERN.test(String(chunk))) failure.reason ||= 'port-busy'
+    })
+
+    const ready = await this.#waitForReady(failure)
+    if (ready === true) {
       // 준비된 뒤에만 기록한다 — 뜨다 만 프로세스의 pid를 남기면 다음 실행이
       // 엉뚱한 것을 채택한다.
       this.#writePidFile(child.pid, candidate)
+      this.#failedSinceReady = false
       this.#log.info(`[BACKEND_READY] ${candidate.label}`, { url: this.#url })
       return true
     }
 
-    this.#log.warn(`[BACKEND_READY_TIMEOUT] ${candidate.label}`, { url: this.#url })
+    if (ready === 'port-busy') {
+      this.#log.warn(`[BACKEND_PORT_BUSY] ${candidate.label}`, { url: this.#url })
+    } else if (ready === 'exit') {
+      this.#log.warn(`[BACKEND_EXITED_BEFORE_READY] ${candidate.label}`, { url: this.#url })
+    } else {
+      this.#log.warn(`[BACKEND_READY_TIMEOUT] ${candidate.label}`, { url: this.#url })
+    }
     if (this.#process === child) {
       this.stop()
     }
@@ -538,11 +571,13 @@ class BackendLifecycle {
       return false
     }
 
+    // 후보 하나가 실패해도 다음 후보를 시도한다 — '실패'는 전부 떨어진 뒤에만.
+    this.#failedSinceReady = false
     for (const candidate of candidates) {
       const started = await this.#trySpawnCandidate(candidate)
       if (started) return true
     }
-
+    this.#failedSinceReady = true
     return false
   }
 

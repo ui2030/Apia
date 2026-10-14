@@ -7,7 +7,7 @@ const requiredPaths = [
   'electron/main.js',
   'electron/preload.js',
   'backend/main.py',
-  'backend-dist/ApiaBackend.exe',
+  'backend-dist/ApiaBackend/ApiaBackend.exe',
   'electron-builder.yml',
   'build/icon.ico',
   'scripts/afterPack.cjs',
@@ -26,7 +26,7 @@ async function assertExists(relativePath) {
 
 async function assertFileIncludes(relativePath, requiredText, errorCode) {
   const target = resolve(process.cwd(), relativePath)
-  const content = await readFile(target, 'utf8')
+  const content = (await readFile(target, 'utf8')).replace(/\r\n/g, '\n')
   if (!content.includes(requiredText)) {
     throw new Error(`[${errorCode}] ${relativePath}`)
   }
@@ -43,8 +43,8 @@ async function main() {
   // against the file that actually builds the resources/backend path.
   await assertFileIncludes('electron/services/backendDiscovery.js', "resourcesPath, 'backend'", 'VERIFY_RELEASE_BACKEND_LOOKUP_MISSING')
   await assertFileIncludes('electron-builder.yml', 'extraResources:', 'VERIFY_RELEASE_EXTRA_RESOURCES_MISSING')
-  await assertFileIncludes('electron-builder.yml', 'from: backend-dist/ApiaBackend.exe', 'VERIFY_RELEASE_BACKEND_EXE_SOURCE_MISSING')
-  await assertFileIncludes('electron-builder.yml', 'to: backend/ApiaBackend.exe', 'VERIFY_RELEASE_BACKEND_COPY_MISSING')
+  // --onedir 폴더 통째 복사(resources/backend/ApiaBackend.exe + _internal/)
+  await assertFileIncludes('electron-builder.yml', 'from: backend-dist/ApiaBackend\n    to: backend\n', 'VERIFY_RELEASE_BACKEND_DIR_COPY_MISSING')
   await assertFileIncludes('scripts/build-backend.mjs', "resolve(backendDir, 'defaults')", 'VERIFY_RELEASE_BACKEND_DEFAULTS_MISSING')
 
   // Icon wiring — without these the installer/exe ships the default Electron

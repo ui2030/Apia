@@ -37,7 +37,7 @@ const DEFAULT_WORLD_OBJECTS = FURNITURE_DEFAULT.map((f) => {
 
 const TYPE_DEFAULTS = {
   chair: {
-    label: 'Chair',
+    label: '의자',
     badge: 'CHAIR',
     anchorHeight: 0.82,
     screenOffsetY: 34,
@@ -45,10 +45,10 @@ const TYPE_DEFAULTS = {
     sitRotY: 0, // 카메라 기준 상대각(0=마주봄) — yaw 규약 교정
     autoBehavior: true,
     clickable: true,
-    bubbleText: 'I will sit for a moment.'
+    bubbleText: '잠깐 앉아 있을게요.'
   },
   point: {
-    label: 'Spot',
+    label: '저기',
     badge: 'POINT',
     anchorHeight: 0.16,
     screenOffsetY: 24,
@@ -56,10 +56,10 @@ const TYPE_DEFAULTS = {
     sitRotY: 0, // 카메라 기준 상대각(0=마주봄) — yaw 규약 교정
     autoBehavior: true,
     clickable: true,
-    bubbleText: 'I will head over there.'
+    bubbleText: '저기 가 볼게요.'
   },
   decoration: {
-    label: 'Decor',
+    label: '장식',
     badge: 'DECOR',
     anchorHeight: 0.34,
     screenOffsetY: 22,
@@ -499,7 +499,7 @@ export class WorldManager {
     if (typeof this.onWalkTo !== 'function') return false
 
     const label = object.label || object.name || object.type
-    const startText = object.bubbleText || `I will head to ${label}.`
+    const startText = object.bubbleText || `${label}에 가 볼게요.`
 
     safeCall(this.showBubble, startText, source === 'auto' ? 2400 : 3200)
 
@@ -508,9 +508,9 @@ export class WorldManager {
       z: object.z,
       onArrive: () => {
         if (source === 'auto') {
-          safeCall(this.showBubble, `Made it to ${label}.`, 2200)
+          safeCall(this.showBubble, `${label}에 왔어요.`, 2200)
         } else if (object.sitOffset) {
-          safeCall(this.showBubble, `Settling into ${label}.`, 2600)
+          safeCall(this.showBubble, `${label}에 앉을게요.`, 2600)
         }
       }
     }

@@ -82,15 +82,17 @@ function assertDistFresh() {
  *   caller can inspect the post-close state.
  * @param {object=} options.extraEnv
  *   Extra env vars merged into the launch (e.g. APIA_BACKEND_URL).
+ * @param {string[]=} options.extraArgs
+ *   Extra Chromium/Electron switches (e.g. --force-device-scale-factor=1.25).
  */
-export async function launchApia({ existingUserData, extraEnv = {} } = {}) {
+export async function launchApia({ existingUserData, extraEnv = {}, extraArgs = [] } = {}) {
   assertDistFresh()
 
   const userData = existingUserData || await mkdtemp(join(tmpdir(), 'apia-e2e-'))
   const ownsUserData = !existingUserData
 
   const app = await electron.launch({
-    args: [projectRoot],
+    args: [projectRoot, ...extraArgs],
     cwd: projectRoot,
     env: {
       ...process.env,

@@ -6,9 +6,39 @@
 /** 저사양 모드가 움직이는 레버. 새 렌더 경로 없이 이미 있는 손잡이만 돌린다. */
 export function lowEndLevers(on) {
   return on
-    // 물리 1/60·최대 2스텝 = 33ms 프레임까지 정속(기본 1/120·4스텝의 절반 비용).
-    ? { postFx: false, pixelRatioCap: 1, physics: { unitStep: 1 / 60, maxStepNum: 2 }, spectateIntervalScale: 2 }
-    : { postFx: true, pixelRatioCap: 2, physics: { unitStep: 1 / 120, maxStepNum: 4 }, spectateIntervalScale: 1 }
+    // 20fps(50ms 프레임) — 물리 1/60·최대 3스텝 = 50ms까지 정속. 렌더 해상도 절반
+    // (pixelRatio 0.5) — 소프트웨어 렌더링에선 픽셀 수가 곧 CPU다(발주서28 D2).
+    ? { postFx: false, pixelRatioCap: 0.5, targetFps: 20, shadows: false, outline: false, physics: { unitStep: 1 / 60, maxStepNum: 3 }, spectateIntervalScale: 2 }
+    : { postFx: true, pixelRatioCap: 2, targetFps: 60, shadows: true, outline: true, physics: { unitStep: 1 / 120, maxStepNum: 4 }, spectateIntervalScale: 1 }
+}
+
+/** 첫 5초 평균 프레임 간격이 이보다 길면 소프트웨어 렌더링급으로 본다. */
+export const SLOW_FRAME_MS = 80
+const SOFTWARE_RENDERER_RE = /SwiftShader|llvmpipe|Basic Render Driver/i
+
+/**
+ * 그래픽 카드 없이 그리는 중인가 — 이유 문자열 또는 null. 3중 판정:
+ * 메인의 GPU 장치 이름 · WebGL 렌더러 문자열 · 실측 프레임 간격(가장 믿을 만함).
+ */
+export function softwareRenderReason({ gpu = '', webglRenderer = '', avgFrameMs = 0 } = {}) {
+  // gpu는 main의 gpuSummary(장치 이름을 ' / '로 이음). 그래픽 카드 있는 PC에도 Basic Render
+  // Driver가 둘째 장치로 늘 끼어 있다(실측: 'NVIDIA … / Microsoft Basic Render Driver') —
+  // 장치가 그것뿐일 때만 그래픽 카드 없음.
+  const devices = String(gpu).split(' / ').filter(Boolean)
+  if (devices.length && devices.every((d) => /Basic Render Driver/i.test(d))) return 'gpu-info'
+  if (SOFTWARE_RENDERER_RE.test(webglRenderer)) return 'webgl-renderer'
+  if (avgFrameMs > SLOW_FRAME_MS) return 'frame-time'
+  return null
+}
+
+/** 버튼 없는 한 줄 안내(몇 초 뒤 사라짐). */
+export function showNoticeCard({ doc, text, ms = 12000 }) {
+  doc.getElementById('apia-notice-card')?.remove()
+  const c = el(doc, 'div', CARD_CSS + 'position:fixed;right:24px;bottom:60px;width:300px;z-index:100;pointer-events:none;', text)
+  c.id = 'apia-notice-card'
+  doc.body.appendChild(c)
+  setTimeout(() => c.remove(), ms)
+  return c
 }
 
 export const BANNER_CONNECTING_MS = 10000
@@ -56,14 +86,35 @@ function captureMouseOnHover(node, api) {
  * false면 host 맨 위(anchor 뒤)에 끼우는 블록(채팅 창). refresh()가 main에 다시
  * 물어 보이거나 사라진다 — 키가 들어와 답변 모델이 생기면 main이 영구 종료한다.
  */
+export const ENGINE_LINES = Object.freeze({
+  starting: 'AI 엔진을 켜는 중이에요… (느린 PC에서는 1분쯤 걸릴 수 있어요)',
+  slow: '오래 걸리네요… 계속 기다리는 중이에요',
+  failed: 'AI 엔진이 켜지지 않았어요. 설정 → 정보·도움 → 문제 신고용 묶기로 알려 주세요'
+})
+const ENGINE_POLL_MS = 3000
+
 export function createFirstRunCard({ doc, api, host, anchor = null, floating = false }) {
   let card = null
+  let engineLine = null
   let busy = false
+  let pollTimer = null
 
   function remove() {
     if (card && floating) api?.setIgnoreMouse?.(true)
     card?.remove()
     card = null
+    engineLine = null
+    clearTimeout(pollTimer)
+  }
+
+  // 엔진 단계 줄 — 연결되면(engine=null) 그 줄만 사라진다.
+  function setEngine(engine) {
+    const text = engine ? ENGINE_LINES[engine] || ENGINE_LINES.starting : ''
+    engineLine.textContent = text
+    engineLine.style.display = text ? 'block' : 'none'
+    engineLine.style.color = engine === 'failed' ? '#fca5a5' : '#fde68a'
+    clearTimeout(pollTimer)
+    pollTimer = engine ? setTimeout(refresh, ENGINE_POLL_MS) : null
   }
 
   function build() {
@@ -72,6 +123,9 @@ export function createFirstRunCard({ doc, api, host, anchor = null, floating = f
       : 'margin:8px 10px 0;'))
     c.className = 'apia-card'
     c.id = 'first-run-card'
+    engineLine = el(doc, 'div', 'display:none;font-size:11px;margin-bottom:8px;')
+    engineLine.id = 'first-run-engine'
+    c.appendChild(engineLine)
     c.appendChild(el(doc, 'div', 'font-weight:600;margin-bottom:8px;', '환영해요. 대화하려면 두 가지만 하면 돼요.'))
     const step = (num, label, note, onClick) => {
       const row = el(doc, 'div', 'display:flex;align-items:center;gap:8px;margin:4px 0;')
@@ -99,10 +153,12 @@ export function createFirstRunCard({ doc, api, host, anchor = null, floating = f
     try {
       const state = await api.firstRun.state()
       if (!state?.show) { remove(); return }
-      if (card) return
-      card = build()
-      if (anchor) anchor.after(card)
-      else host.appendChild(card)
+      if (!card) {
+        card = build()
+        if (anchor) anchor.after(card)
+        else host.appendChild(card)
+      }
+      setEngine(state.engine || null)
     } catch {
       // main에 못 물으면 카드는 그대로 둔다(다음 refresh에서 다시 판단).
     } finally {

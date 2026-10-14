@@ -19,8 +19,11 @@ const packagingVenvPython = resolve(
   packagingVenvDir,
   process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'
 )
+// --onedir: 산출물은 backend-dist/ApiaBackend/ 폴더. --onefile은 실행마다 수백 MB를
+// %TEMP%에 풀어 느린 PC에서 기동이 수 분 걸렸다(발주서27 D1).
+const backendBundleDir = resolve(backendDistDir, 'ApiaBackend')
 const backendExePath = resolve(
-  backendDistDir,
+  backendBundleDir,
   process.platform === 'win32' ? 'ApiaBackend.exe' : 'ApiaBackend'
 )
 
@@ -270,7 +273,7 @@ async function buildBackendExe(runPython) {
     'PyInstaller',
     '--noconfirm',
     '--clean',
-    '--onefile',
+    '--onedir',
     '--name',
     'ApiaBackend',
     '--distpath',
@@ -379,7 +382,7 @@ async function smokeTestBackendExe() {
   await mkdir(smokeDataDir, { recursive: true })
 
   const child = spawn(backendExePath, [], {
-    cwd: backendDistDir,
+    cwd: backendBundleDir,
     env: {
       ...process.env,
       // 빌드용으로 앞에 붙인 conda DLL 경로를 뺀 원래 PATH — 번들이 스스로 서는지 본다.
