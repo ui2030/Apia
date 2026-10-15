@@ -462,6 +462,9 @@ describe('ensureRunning dedup and cooldown', () => {
     await expect(backend.ensureRunning()).resolves.toBe(true)
     expect(deps.spawn).toHaveBeenCalledTimes(1)
 
+    // "backend not running again" = 자식이 죽은 상태. 살아 있는데 /health만 안 되는
+    // 경우는 N1 테스트가 따로 다룬다(그땐 죽이고 다시 띄우는 게 맞다).
+    child.emit('exit', 1, null)
     await expect(backend.ensureRunning()).resolves.toBe(false)
     expect(deps.spawn).toHaveBeenCalledTimes(1) // still one
     // Discovery ran on BOTH attempts — proves the second call passed the
@@ -482,10 +485,12 @@ describe('ensureRunning dedup and cooldown', () => {
       https,
       cooldownMs: 60_000
     })
-    deps.spawn.mockReturnValue(createFakeChild({ pid: 1 }))
+    const first = createFakeChild({ pid: 1 })
+    deps.spawn.mockReturnValue(first)
     const backend = new BackendLifecycle(deps)
 
     await expect(backend.ensureRunning()).resolves.toBe(true)
+    first.emit('exit', 1, null) // 죽은 자식 — 살아 있으면 N1 경로(재확인→정지)가 먼저 돈다
     // Second call would normally hit cooldown — force flag overrides.
     deps.spawn.mockReturnValueOnce(createFakeChild({ pid: 2 }))
     await expect(backend.ensureRunning({ force: true })).resolves.toBe(true)
@@ -1122,5 +1127,50 @@ describe('packaged onedir backend adoption', () => {
     const backend = new BackendLifecycle(second)
     expect(await backend.ensureRunning()).toBe(true)
     expect(backend.isStartedByApp()).toBe(true)
+  })
+})
+
+// ── 발주서29 N1: 살아 있는 자식이 /health만 놓치면 포트를 바꿔 하나 더 띄우지 않는다 ──
+
+describe('unresponsive-but-alive child (N1)', () => {
+  it('re-probes with a long timeout and returns true if the child answers', async () => {
+    const { http, https } = createFakeHttp([
+      { error: new Error('not yet') },   // 1st ensure's isHealthy
+      { status: 200 },                   // #waitForReady
+      { timeout: true },                 // 2nd ensure's quick isHealthy — 과부하로 한 번 놓침
+      { status: 200 }                    // 넉넉한 재확인 → 살아 있음
+    ])
+    const deps = createBaseDeps({ http, https })
+    const child = createFakeChild()
+    deps.spawn.mockReturnValue(child)
+    const backend = new BackendLifecycle(deps)
+
+    await expect(backend.ensureRunning()).resolves.toBe(true)
+    await expect(backend.ensureRunning()).resolves.toBe(true)
+    expect(deps.spawn).toHaveBeenCalledTimes(1)
+    expect(child.kill).not.toHaveBeenCalled()
+    // 포트 탐색(여기서 8001로 새던 곳)은 첫 기동 때 한 번뿐
+    expect(deps.discovery.pickAvailableBackendUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops the dead-silent child before respawning (never two engines)', async () => {
+    const { http, https } = createFakeHttp([
+      { error: new Error('not yet') },   // 1st ensure's isHealthy
+      { status: 200 },                   // #waitForReady
+      { timeout: true },                 // 2nd ensure's quick isHealthy
+      { timeout: true },                 // 넉넉한 재확인도 실패
+      { status: 200 }                    // 새 자식의 #waitForReady
+    ])
+    const deps = createBaseDeps({ http, https, cooldownMs: 60_000 })
+    const first = createFakeChild({ pid: 1 })
+    const second = createFakeChild({ pid: 2 })
+    deps.spawn.mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const backend = new BackendLifecycle(deps)
+
+    await expect(backend.ensureRunning()).resolves.toBe(true)
+    await expect(backend.ensureRunning()).resolves.toBe(true)
+    expect(first.kill).toHaveBeenCalled()
+    expect(deps.spawn).toHaveBeenCalledTimes(2)
+    expect(deps.log.warn).toHaveBeenCalledWith('[BACKEND_UNRESPONSIVE_CHILD] stopping before respawn')
   })
 })

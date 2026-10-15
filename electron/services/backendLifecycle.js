@@ -549,7 +549,21 @@ class BackendLifecycle {
       this.#tryAdoptExisting()
       return true
     }
+    // 우리가 띄운 자식이 아직 살아 있는데 /health만 한 번 시간 초과한 경우(느린 PC
+    // 과부하) — 그대로 #runEnsure로 가면 포트 탐색이 "8000 점유"를 보고 8001에 하나 더
+    // 띄운다(발주서29 N1: 엔진 2개 동시 실행). 넉넉히 다시 묻고, 그래도 안 되면 먼저 죽인다.
+    if (!skipHealthCheck && this.#isChildAlive()) {
+      if (await this.isHealthy(DEFAULT_PROBE_TIMEOUT_MS)) return true
+      this.#log.warn('[BACKEND_UNRESPONSIVE_CHILD] stopping before respawn')
+      this.stop()
+      force = true
+    }
     return this.#runEnsure({ force })
+  }
+
+  #isChildAlive() {
+    const child = this.#process
+    return Boolean(child && !child.killed && (child.exitCode === null || child.exitCode === undefined))
   }
 
   async #runEnsure({ force }) {

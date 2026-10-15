@@ -498,11 +498,11 @@ async function pickImportSource(browserWindow) {
   // zip/모델 파일을 고를 수 없게 된다(Electron 제약). 파일 선택기로 고정하고
   // 폴더 import는 드래그앤드롭 경로가 담당한다.
   const result = await dialog.showOpenDialog(browserWindow, {
-    title: 'Import character source',
+    title: '캐릭터 파일 고르기',
     properties: ['openFile'],
     filters: [
-      { name: 'Character Sources', extensions: ['zip', 'vrm', 'pmx', 'pmd'] },
-      { name: 'All Files', extensions: ['*'] }
+      { name: '캐릭터 파일 (zip·vrm·pmx·pmd)', extensions: ['zip', 'vrm', 'pmx', 'pmd'] },
+      { name: '모든 파일', extensions: ['*'] }
     ]
   })
 

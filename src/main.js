@@ -892,7 +892,7 @@ const presence = createPresenceMonitor({ onTransition: handlePresenceTransition 
 // 잠금 화면 뒤에서 행동이 돌고 욕구 보정 구간도 끊긴다.
 let pauseLocked = false
 let pauseSuspended = false
-let pauseAway = false // 5분 무입력 — 렌더만 멈춘다(자율 행동은 그대로)
+let pauseAway = false // 5분 무입력 — 5fps로만 낮춘다(끊으면 걷기가 안 끝나 state가 굳음, 발주서29 N3)
 let powerPausedAt = 0 // 정지 시작 시각(0=정상). 두 플래그가 다 풀려야 끝난다.
 let pauseResumeTimer = null
 const RESUME_GRACE_MS = 8000 // 재개 유예 — 복귀 확정(유휴 폴링)·인사 기회 먼저
@@ -2228,10 +2228,10 @@ function lipsyncMMD(delta) {
 }
 
 // Codex MUST-FIX(perf): 세션 잠금/절전 중엔 렌더+6패스 포스트프로세싱을 멈춘다.
-// paused는 pauseLocked||pauseSuspended||pauseAway 파생값(해제 순서가 꼬여도
-// 조기 재개 방지). 스킵-but-rAF유지가 아니라 rAF 자체를 끊어야 렌더러가 깨어나지
-// 않아 전력이 준다. pauseAway=5분 무입력(presenceManager 'away') — 아무도 안 보는
-// 동안 빈 방을 계속 그리느라 코어 하나를 태우던 걸 멈춘다.
+// paused는 pauseLocked||pauseSuspended 파생값(해제 순서가 꼬여도 조기 재개 방지).
+// 스킵-but-rAF유지가 아니라 rAF 자체를 끊어야 렌더러가 깨어나지 않아 전력이 준다.
+// pauseAway(5분 무입력)는 끊지 않고 5fps로 낮춘다 — 끊으면 걷던 캐릭터의 state가
+// 'walk'에 굳어 자율 행동이 영영 멈춘다(발주서29 N3). 입력 없이 보고만 있는 사용자도 있다.
 let _rafId = null
 let _renderPaused = false
 // 60fps 상한. 144Hz 화면에서 2.4배 프레임을 공짜로 그리던 걸 막는다. 임계는
@@ -2254,8 +2254,9 @@ function stopRenderLoop() {
   if (_rafId != null) { cancelAnimationFrame(_rafId); _rafId = null }
 }
 
+const AWAY_FRAME_MIN_DELTA = 1 / 5
 function syncRenderPause() {
-  const paused = pauseLocked || pauseSuspended || pauseAway
+  const paused = pauseLocked || pauseSuspended
   if (paused && !_renderPaused) { _renderPaused = true; stopRenderLoop() }
   else if (!paused && _renderPaused) { _renderPaused = false; startRenderLoop() }
 }
@@ -2272,9 +2273,10 @@ function animate() {
   // 3프레임에 한 번=48fps로 떨어진다). 델타는 잔여분을 뺀 소비분만 먹인다 —
   // 잔여분까지 먹이면 같은 시간이 두 번 계상돼 애니메이션이 실시간보다 빨라진다.
   _frameAcc += clock.getDelta()
-  if (_frameAcc < _frameMinDelta) return
-  const delta = Math.min(_frameAcc - (_frameAcc % _frameMinDelta), FRAME_MAX_DELTA)
-  _frameAcc %= _frameMinDelta
+  const frameMinDelta = pauseAway ? Math.max(_frameMinDelta, AWAY_FRAME_MIN_DELTA) : _frameMinDelta
+  if (_frameAcc < frameMinDelta) return
+  const delta = Math.min(_frameAcc - (_frameAcc % frameMinDelta), FRAME_MAX_DELTA)
+  _frameAcc %= frameMinDelta
   const t = clock.getElapsedTime()
 
   if (currentModel) {

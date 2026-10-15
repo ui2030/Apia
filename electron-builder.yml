@@ -22,6 +22,9 @@ files:
   - dist/**/*
   - electron/**/*
   - package.json
+  # 트레이 아이콘(electron/main.js setupTrayAndShortcuts가 읽는다) — 빠지면 빈칸(발주서29 N7)
+  - build/icon.ico
+  - build/icon.png
   - node_modules/electron-as-wallpaper/**/*
 
 extraResources:
